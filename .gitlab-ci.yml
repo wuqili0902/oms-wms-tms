@@ -1,0 +1,37 @@
+image: python:3.12-slim
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  POSTGRES_DB: oms_wms_tms
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  DATABASE_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/oms_wms_tms"
+  REDIS_URL: "redis://redis:6379/0"
+
+cache:
+  paths:
+    - .cache/pip
+
+stages:
+  - lint
+  - test
+
+lint:
+  stage: lint
+  script:
+    - pip install --upgrade pip
+    - pip install ruff black mypy
+    - ruff check src/
+    - black --check src/
+    - mypy src/
+
+test:
+  stage: test
+  services:
+    - postgres:16-alpine
+    - redis:7-alpine
+  script:
+    - pip install --upgrade pip
+    - pip install .
+    - pip install pytest pytest-asyncio pytest-cov httpx
+    - pytest --cov=src --cov-report=term --cov-fail-under=30 -v
