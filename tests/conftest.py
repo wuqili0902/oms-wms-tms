@@ -1,3 +1,5 @@
+"""Test configuration and fixtures."""
+
 import asyncio
 from typing import AsyncGenerator
 
@@ -10,7 +12,6 @@ from src.main import app
 from src.config import settings
 from src.core.database import get_db
 
-# Use test database
 TEST_DATABASE_URL = settings.database_url
 
 

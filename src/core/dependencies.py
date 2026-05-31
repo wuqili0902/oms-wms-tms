@@ -1,21 +1,28 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from src.core.security import decode_token
+
 security = HTTPBearer()
 
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ):
-    """Validate JWT token and return current user.
-    Placeholder - will be fully implemented in Task 3 (Auth)."""
+    """Validate JWT token and return current user."""
     token = credentials.credentials
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
         )
-    return {"sub": "placeholder"}
+    payload = decode_token(token)
+    if not payload or "sub" not in payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+    return payload
 
 
 async def require_permission(*permissions: str):
