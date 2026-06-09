@@ -1,6 +1,7 @@
 """Test configuration and fixtures."""
 
 import asyncio
+import gc
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -37,6 +38,9 @@ async def sqlite_engine():
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     await engine.dispose()
+    # Force GC to clean up remaining aiosqlite connections before the event
+    # loop shuts down, preventing ResourceWarning about unclosed databases.
+    gc.collect()
 
 
 @pytest_asyncio.fixture
@@ -54,6 +58,7 @@ async def db_session(sqlite_engine) -> AsyncGenerator[AsyncSession]:
     try:
         yield session
     finally:
+        await session.close()
         await transaction.rollback()
         await connection.close()
 
@@ -74,6 +79,8 @@ class _SharedSession:
         await self.session.begin_nested()
 
     async def teardown(self):
+        if self.session:
+            await self.session.close()
         if self.transaction:
             await self.transaction.rollback()
         if self.connection:

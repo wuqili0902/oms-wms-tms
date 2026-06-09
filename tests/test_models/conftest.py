@@ -11,6 +11,7 @@ Design notes:
 """
 
 import asyncio
+import gc
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -44,6 +45,7 @@ async def async_engine():
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     await engine.dispose()
+    gc.collect()
 
 
 @pytest_asyncio.fixture
@@ -64,5 +66,6 @@ async def db_session(async_engine) -> AsyncGenerator[AsyncSession]:
     try:
         yield session
     finally:
+        await session.close()
         await transaction.rollback()
         await connection.close()
