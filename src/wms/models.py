@@ -119,7 +119,9 @@ class Warehouse(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
 
     locations: list = relationship("Location", back_populates="warehouse")
     inventory: list = relationship("Inventory", back_populates="warehouse")
-    stock_movements: list = relationship("StockMovement", foreign_keys="StockMovement.source_warehouse_id", back_populates="source_warehouse")
+    stock_movements: list = relationship(
+        "StockMovement", foreign_keys="StockMovement.source_warehouse_id", back_populates="source_warehouse"
+    )
     picking_waves: list = relationship("PickingWave", back_populates="warehouse")
 
     __table_args__ = (

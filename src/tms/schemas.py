@@ -1,9 +1,6 @@
 """TMS schemas — device registration, sessions, and sync logs."""
-from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
-
 
 # ── Device ──────────────────────────────────────────────────────────────────
 
@@ -14,19 +11,19 @@ class DeviceRegister(BaseModel):
     platform: str = Field(default="android", pattern=r"^(android|ios|desktop)$")
     os_version: str = Field(default="", max_length=50)
     app_version: str = Field(default="", max_length=20)
-    warehouse_id: Optional[str] = None
-    config: Optional[dict] = None
-    push_token: Optional[str] = None
+    warehouse_id: str | None = None
+    config: dict | None = None
+    push_token: str | None = None
 
 
 class DeviceUpdate(BaseModel):
-    name: Optional[str] = None
-    os_version: Optional[str] = None
-    app_version: Optional[str] = None
-    warehouse_id: Optional[str] = None
-    config: Optional[dict] = None
-    push_token: Optional[str] = None
-    status: Optional[str] = None
+    name: str | None = None
+    os_version: str | None = None
+    app_version: str | None = None
+    warehouse_id: str | None = None
+    config: dict | None = None
+    push_token: str | None = None
+    status: str | None = None
 
 
 class DeviceResponse(BaseModel):
@@ -38,11 +35,11 @@ class DeviceResponse(BaseModel):
     os_version: str
     app_version: str
     status: str
-    warehouse_id: Optional[str] = None
-    last_sync_at: Optional[str] = None
-    last_heartbeat_at: Optional[str] = None
-    config: Optional[dict] = None
-    push_token: Optional[str] = None
+    warehouse_id: str | None = None
+    last_sync_at: str | None = None
+    last_heartbeat_at: str | None = None
+    config: dict | None = None
+    push_token: str | None = None
     created_at: str
     updated_at: str
 
@@ -64,7 +61,7 @@ class SyncLogCreate(BaseModel):
     sync_type: str = Field(default="download", pattern=r"^(upload|download)$")
     status: str = Field(default="pending", pattern=r"^(pending|running|completed|failed|partial)$")
     records_count: int = Field(default=0, ge=0, alias="data_count")
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -75,9 +72,9 @@ class SyncLogResponse(BaseModel):
     sync_type: str
     status: str
     records_count: int
-    error_message: Optional[str] = None
+    error_message: str | None = None
     started_at: str
-    completed_at: Optional[str] = None
+    completed_at: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -87,9 +84,9 @@ class SyncLogResponse(BaseModel):
 class SessionResponse(BaseModel):
     id: str
     device_id: str
-    ip_address: Optional[str] = None
-    user_agent: Optional[str] = None
+    ip_address: str | None = None
+    user_agent: str | None = None
     login_at: str
-    logout_at: Optional[str] = None
+    logout_at: str | None = None
 
     model_config = {"from_attributes": True}

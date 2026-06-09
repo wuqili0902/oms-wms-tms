@@ -4,18 +4,15 @@ All CRUD functions are async and require an ``AsyncSession``.
 Maps ORM model fields to Pydantic schema field names.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.exceptions import ValidationException, NotFoundException
-from src.models.base import model_to_dict
+from src.core.exceptions import NotFoundException, ValidationException
 from src.oms.models import Customer, Order, OrderItem, OrderPriority, OrderStatus, OrderStatusLog
 from src.wms.models import SKU
-
 
 # ── State machine ──────────────────────────────────────────────────────────
 
@@ -54,16 +51,17 @@ PRIORITY_REVERSE: dict[OrderPriority, str] = {v: k for k, v in PRIORITY_MAP.item
 def validate_transition(current: str, target: str) -> None:
     allowed = ORDER_STATES.get(current, set())
     if target not in allowed:
+        transitions = ", ".join(sorted(allowed)) if allowed else "none (terminal state)"
         raise ValidationException(
             message=f"Cannot transition from '{current}' to '{target}'",
-            detail=f"Allowed transitions from '{current}': {', '.join(sorted(allowed)) if allowed else 'none (terminal state)'}",
+            detail=f"Allowed transitions from '{current}': {transitions}",
         )
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _to_uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
@@ -208,7 +206,7 @@ async def create_order(db: AsyncSession, data: dict) -> dict:
 async def get_order(db: AsyncSession, order_id: str) -> dict:
     """Get an order by ID (excludes soft-deleted)."""
     result = await db.execute(
-        select(Order).where(Order.id == _to_uuid(order_id), Order.is_deleted == False)
+        select(Order).where(Order.id == _to_uuid(order_id), ~Order.is_deleted)
     )
     order = result.scalar_one_or_none()
     if not order:
@@ -220,8 +218,8 @@ async def list_orders(
     db: AsyncSession,
     page: int = 1,
     page_size: int = 20,
-    status: Optional[str] = None,
-    customer_id: Optional[str] = None,
+    status: str | None = None,
+    customer_id: str | None = None,
 ) -> tuple[list[dict], int]:
     """List orders with pagination and optional filters."""
     stmt = select(Order)

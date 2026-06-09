@@ -1,6 +1,5 @@
 """WMS schemas."""
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -31,7 +30,7 @@ class LocationCreate(BaseModel):
     shelf: str = Field(..., min_length=1, max_length=50)
     bin: str = Field(..., min_length=1, max_length=50)
     type: str = Field(default="storage", pattern=r"^(storage|picking|receiving|shipping|damage)$")
-    max_weight_kg: Optional[Decimal] = None
+    max_weight_kg: Decimal | None = None
 
 
 class LocationResponse(BaseModel):
@@ -74,8 +73,8 @@ class InventoryAdjust(BaseModel):
 class StockMovementResponse(BaseModel):
     id: str
     warehouse_id: str
-    from_location_id: Optional[str] = None
-    to_location_id: Optional[str] = None
+    from_location_id: str | None = None
+    to_location_id: str | None = None
     sku: str
     quantity: float
     type: str

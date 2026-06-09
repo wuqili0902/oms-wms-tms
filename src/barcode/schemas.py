@@ -1,5 +1,4 @@
 """Barcode schemas."""
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,8 +16,8 @@ class BarcodeValidateRequest(BaseModel):
 
 class BarcodeScanRequest(BaseModel):
     raw_data: str = Field(..., min_length=1)
-    scanner_id: Optional[str] = None
-    location_id: Optional[str] = None
+    scanner_id: str | None = None
+    location_id: str | None = None
 
 
 class BarcodeResponse(BaseModel):

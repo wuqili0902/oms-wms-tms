@@ -3,7 +3,7 @@
 All CRUD functions are async and require an ``AsyncSession``.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,19 +13,18 @@ from src.models.base import model_to_dict
 from src.tms.models import (
     DeviceSession,
     DeviceStatus,
+    PlatformType,
     SyncLog,
     SyncLogStatus,
     SyncLogType,
     TerminalDevice,
     TerminalDeviceType,
-    PlatformType,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _to_uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
@@ -181,7 +180,7 @@ async def list_sync_logs(db: AsyncSession, dev_id: str) -> list[dict]:
         .where(SyncLog.device_id == uuid.UUID(dev_id))
         .order_by(SyncLog.started_at.desc())
     )
-    return [model_to_dict(l) for l in logs_result.scalars().all()]
+    return [model_to_dict(entry) for entry in logs_result.scalars().all()]
 
 
 # ── Sessions ─────────────────────────────────────────────────────────────────

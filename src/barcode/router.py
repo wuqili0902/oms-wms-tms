@@ -5,6 +5,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.barcode import service as barcode_service
 from src.barcode.schemas import (
     BarcodeGenerateRequest,
     BarcodeResponse,
@@ -13,7 +14,6 @@ from src.barcode.schemas import (
     LabelTemplateCreate,
     LabelTemplateResponse,
 )
-from src.barcode import service as barcode_service
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.exceptions import ValidationException

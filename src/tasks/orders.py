@@ -4,14 +4,13 @@ These tasks handle asynchronous order state transitions, notifications,
 and batch operations that should not block the HTTP request cycle.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from src.celery_app import app
 from src.config import settings
-from src.models.base import model_to_dict
 from src.oms.models import Order, OrderStatus, OrderStatusLog
 from src.tasks.base import BaseTask
 
@@ -33,7 +32,7 @@ async def process_stale_orders(self):
     """
     session = _get_async_session()
     try:
-        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         result = await session.execute(
             select(Order).where(
                 Order.status.in_([OrderStatus.PROCESSING, OrderStatus.PICKING]),
@@ -75,7 +74,7 @@ async def auto_complete_picked_orders(self):
     try:
         from datetime import timedelta
 
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+        cutoff = datetime.now(UTC) - timedelta(hours=48)
         result = await session.execute(
             select(Order).where(
                 Order.status == OrderStatus.PICKING,
@@ -87,7 +86,7 @@ async def auto_complete_picked_orders(self):
         completed = 0
         for order in orders:
             order.status = OrderStatus.COMPLETED
-            order.updated_at = datetime.now(timezone.utc)
+            order.updated_at = datetime.now(UTC)
             log = OrderStatusLog(
                 order_id=order.id,
                 from_status="picking",
@@ -115,7 +114,7 @@ async def cancel_abandoned_drafts(self):
     try:
         from datetime import timedelta
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        cutoff = datetime.now(UTC) - timedelta(days=7)
         result = await session.execute(
             select(Order).where(
                 Order.status == OrderStatus.PENDING,
@@ -127,7 +126,7 @@ async def cancel_abandoned_drafts(self):
         cancelled = 0
         for order in orders:
             order.status = OrderStatus.CANCELLED
-            order.updated_at = datetime.now(timezone.utc)
+            order.updated_at = datetime.now(UTC)
             log = OrderStatusLog(
                 order_id=order.id,
                 from_status="pending",

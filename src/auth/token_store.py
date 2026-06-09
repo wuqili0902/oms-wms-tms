@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Coroutine
 from typing import Any
 
 logger = logging.getLogger(__name__)

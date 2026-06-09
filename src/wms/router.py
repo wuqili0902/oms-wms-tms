@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.exceptions import NotFoundException, ValidationException
+from src.wms import service as wms_service
 from src.wms.schemas import (
     InventoryAdjust,
     InventoryResponse,
@@ -20,7 +21,6 @@ from src.wms.schemas import (
     WarehouseCreate,
     WarehouseResponse,
 )
-from src.wms import service as wms_service
 
 router = APIRouter(prefix="/warehouses", tags=["wms"])
 

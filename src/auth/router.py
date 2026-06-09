@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.auth import service as auth_service
 from src.auth.schemas import (
     PermissionResponse,
     RefreshRequest,
@@ -13,7 +14,6 @@ from src.auth.schemas import (
     UserLogin,
     UserResponse,
 )
-from src.auth import service as auth_service
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.exceptions import ValidationException

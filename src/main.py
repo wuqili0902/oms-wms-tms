@@ -5,13 +5,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
+from src.admin.router import router as admin_router
 from src.api.v1.health import router as health_router
 from src.auth import auth_router as auth_router
-from src.oms.router import router as oms_router
-from src.wms.router import router as wms_router
 from src.barcode.router import router as barcode_router
-from src.tms.router import router as tms_router
-from src.admin.router import router as admin_router
 from src.config import settings
 from src.core.database import engine
 from src.core.exceptions import (
@@ -25,6 +22,9 @@ from src.core.exceptions import (
 from src.core.middleware import AuditLogMiddleware, RequestIDMiddleware, RequestLoggingMiddleware
 from src.core.rate_limiter import rate_limiter
 from src.core.response import error_response
+from src.oms.router import router as oms_router
+from src.tms.router import router as tms_router
+from src.wms.router import router as wms_router
 
 # Configure logging
 log_level = getattr(logging, settings.log_level.upper(), logging.INFO)

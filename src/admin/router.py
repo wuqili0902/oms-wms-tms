@@ -3,9 +3,8 @@
 Jinja2-based admin panel for team operations.
 All routes require authentication.
 """
-from datetime import datetime, timezone
-
 import csv
+from datetime import UTC, datetime
 from io import StringIO
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -66,7 +65,7 @@ async def dashboard(
         {
             "active": "dashboard",
             "flashes": _get_flashes(request),
-            "now": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "now": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
             "stats": stats,
             "recent_orders": all_orders,
         },

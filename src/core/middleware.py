@@ -59,31 +59,14 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         start_time = datetime.now()
         request = Request(scope, receive)
         request_id = scope.get("request_id", "unknown")
-        client_ip = request.client.host if request.client else "unknown"
 
         async def wrapped_send(message: dict) -> None:
             if message["type"] == "http.response.start":
                 status_code = message.get("status", 500)
                 duration_ms = (datetime.now() - start_time).total_seconds() * 1000
-                log_data = {
-                    "level": "info"
-                    if status_code < 400
-                    else "warning"
-                    if status_code < 500
-                    else "error",
-                    "method": request.method,
-                    "path": scope.get("path", "/"),
-                    "status_code": status_code,
-                    "duration_ms": duration_ms,
-                    "request_id": request_id,
-                    "client_ip": client_ip,
-                }
                 logger.info(
-                    "%s %s -> %d (%.2fms)",
-                    request.method,
-                    scope.get("path", "/"),
-                    status_code,
-                    duration_ms,
+                    "%s %s -> %d (%.2fms) [%s]",
+                    request.method, scope.get("path", "/"), status_code, duration_ms, request_id,
                 )
             await send(message)
 
@@ -111,11 +94,8 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
             resource = scope.get("path", "/")
 
             logger.info(
-                "Audit: %s %s by user %s from IP %s",
-                request.method,
-                resource,
-                user_id,
-                client_ip,
+                "Audit: %s %s by user %s from IP %s [req:%s]",
+                request.method, resource, user_id, client_ip, request_id,
             )
 
         await self.app(scope, receive, send)

@@ -4,7 +4,7 @@ All CRUD functions are async and require an ``AsyncSession``.
 Maps ORM model fields to schema/Pydantic response field names.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.exceptions import NotFoundException, ValidationException
 from src.models.base import model_to_dict
 from src.wms.models import (
+    SKU,
     Inventory,
     Location,
     LocationStatus,
@@ -20,7 +21,6 @@ from src.wms.models import (
     PickingWave,
     PickingWavePriority,
     PickingWaveType,
-    SKU,
     StockMovement,
     StockMovementType,
     Warehouse,
@@ -30,7 +30,7 @@ from src.wms.models import (
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _to_uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:

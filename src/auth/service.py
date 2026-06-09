@@ -3,7 +3,6 @@
 All CRUD functions are async and require an ``AsyncSession``.
 """
 import uuid
-from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +18,6 @@ from src.core.security import (
     verify_password,
 )
 from src.models.base import model_to_dict
-
 
 # ── Users ────────────────────────────────────────────────────────────────────
 

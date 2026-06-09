@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.exceptions import NotFoundException, ValidationException
+from src.tms import service as tms_service
 from src.tms.schemas import (
     DeviceRegister,
     DeviceResponse,
@@ -17,7 +18,6 @@ from src.tms.schemas import (
     SyncLogCreate,
     SyncLogResponse,
 )
-from src.tms import service as tms_service
 
 router = APIRouter(prefix="/devices", tags=["tms"])
 
@@ -125,7 +125,7 @@ async def list_sync_logs(
 ):
     try:
         logs = await tms_service.list_sync_logs(db, dev_id)
-        return [SyncLogResponse(**l) for l in logs]
+        return [SyncLogResponse(**entry) for entry in logs]
     except NotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
 

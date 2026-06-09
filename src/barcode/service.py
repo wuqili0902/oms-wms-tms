@@ -4,15 +4,14 @@ All CRUD functions are async and require an ``AsyncSession``.
 Pure helpers (GTIN) remain synchronous.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.barcode.models import BarcodeRecord, LabelTemplate
-from src.core.exceptions import NotFoundException, ValidationException
+from src.core.exceptions import ValidationException
 from src.models.base import model_to_dict
-
 
 # ── GTIN helpers (pure, no DB) ──────────────────────────────────────────────
 
@@ -54,7 +53,7 @@ def validate_gtin(gtin: str) -> dict:
 async def generate_barcode(db: AsyncSession, data: dict) -> dict:
     """Generate a GTIN and persist the barcode record."""
     gtin = generate_gtin(data["gtin_prefix"])
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rec = BarcodeRecord(
         id=uuid.uuid4(),
         gtin=gtin,
@@ -74,7 +73,7 @@ async def generate_barcode(db: AsyncSession, data: dict) -> dict:
 async def record_scan(db: AsyncSession, data: dict) -> dict:
     """Record a barcode scan event."""
     raw = data["raw_data"]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rec = BarcodeRecord(
         id=uuid.uuid4(),
         gtin=raw.strip(),
@@ -105,7 +104,7 @@ async def create_template(db: AsyncSession, data: dict) -> dict:
     if existing.scalar_one_or_none():
         raise ValidationException(message=f"Template code '{data['code']}' already exists")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tpl = LabelTemplate(
         id=uuid.uuid4(),
         name=data["name"],

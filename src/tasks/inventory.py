@@ -10,9 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from src.celery_app import app
 from src.config import settings
+from src.oms.models import Order, OrderStatus
 from src.tasks.base import BaseTask
 from src.wms.models import Inventory, StockMovement, StockMovementType
-from src.oms.models import Order, OrderStatus
 
 logger = logging.getLogger(__name__)
 

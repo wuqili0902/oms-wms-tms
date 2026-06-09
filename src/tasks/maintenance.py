@@ -4,7 +4,7 @@ Handles periodic cleanup, health checks, and data pruning operations
 that keep the system running smoothly.
 """
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -13,7 +13,6 @@ from src.celery_app import app
 from src.config import settings
 from src.tasks.base import BaseTask
 from src.tms.models import SyncLog
-from src.auth.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ async def cleanup_old_sync_logs(self):
     """
     session = _get_async_session()
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        cutoff = datetime.now(UTC) - timedelta(days=30)
         result = await session.execute(
             delete(SyncLog).where(SyncLog.started_at < cutoff)
         )
@@ -81,7 +80,7 @@ async def health_check(self):
     Runs every 5 minutes. Results should be monitored by an external
     system (Prometheus, Datadog, etc.).
     """
-    results = {"database": False, "redis": False, "timestamp": datetime.now(timezone.utc).isoformat()}
+    results = {"database": False, "redis": False, "timestamp": datetime.now(UTC).isoformat()}
 
     # Check database
     session = _get_async_session()
@@ -120,12 +119,12 @@ async def daily_aggregation(self):
     """
     session = _get_async_session()
     try:
-        today = datetime.now(timezone.utc).date()
-        start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+        today = datetime.now(UTC).date()
+        start = datetime(today.year, today.month, today.day, tzinfo=UTC)
 
         from sqlalchemy import func
 
-        from src.oms.models import Order, OrderStatus
+        from src.oms.models import Order
 
         total_result = await session.execute(
             select(func.count()).select_from(Order)
