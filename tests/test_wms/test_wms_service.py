@@ -106,3 +106,99 @@ class TestSKUHelper:
         s1 = await wms_service._get_or_create_sku(db_session, "SKU-EXIST")
         s2 = await wms_service._get_or_create_sku(db_session, "SKU-EXIST")
         assert s1.id == s2.id
+
+
+class TestInventoryAdjust:
+    """Inventory adjustments — in, out, errors."""
+
+    @pytest.mark.asyncio
+    async def test_adjust_positive_adds_stock(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-INV", "name": "Inv"})
+        loc = await wms_service.create_location(db_session, wh["id"], {"zone": "Z1"})
+        result = await wms_service.adjust_inventory(db_session, {
+            "warehouse_id": wh["id"], "location_id": loc["id"], "sku": "SKU-ADD", "quantity": "100",
+        })
+        assert float(result["quantity"]) == 100
+
+    @pytest.mark.asyncio
+    async def test_adjust_positive_adds_to_existing(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-ADD2", "name": "Add2"})
+        loc = await wms_service.create_location(db_session, wh["id"], {"zone": "Z2"})
+        await wms_service.adjust_inventory(db_session, {
+            "warehouse_id": wh["id"], "location_id": loc["id"], "sku": "SKU-CUM", "quantity": "50",
+        })
+        result = await wms_service.adjust_inventory(db_session, {
+            "warehouse_id": wh["id"], "location_id": loc["id"], "sku": "SKU-CUM", "quantity": "30",
+        })
+        assert float(result["quantity"]) == 80
+
+    @pytest.mark.asyncio
+    async def test_adjust_negative_reduces_stock(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-SUB", "name": "Sub"})
+        loc = await wms_service.create_location(db_session, wh["id"], {"zone": "Z3"})
+        await wms_service.adjust_inventory(db_session, {
+            "warehouse_id": wh["id"], "location_id": loc["id"], "sku": "SKU-SUB", "quantity": "100",
+        })
+        result = await wms_service.adjust_inventory(db_session, {
+            "warehouse_id": wh["id"], "location_id": loc["id"], "sku": "SKU-SUB", "quantity": "-30",
+        })
+        assert float(result["quantity"]) == 70
+
+    @pytest.mark.asyncio
+    async def test_adjust_insufficient_raises(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-NEG", "name": "Neg"})
+        loc = await wms_service.create_location(db_session, wh["id"], {"zone": "Z4"})
+        with pytest.raises(ValidationException, match="Insufficient"):
+            await wms_service.adjust_inventory(db_session, {
+                "warehouse_id": wh["id"], "location_id": loc["id"], "sku": "SKU-NOEXIST", "quantity": "-10",
+            })
+
+    @pytest.mark.asyncio
+    async def test_adjust_invalid_warehouse(self, db_session):
+        with pytest.raises(NotFoundException):
+            await wms_service.adjust_inventory(db_session, {
+                "warehouse_id": str(uuid.uuid4()), "location_id": str(uuid.uuid4()), "sku": "SKU", "quantity": "10",
+            })
+
+    @pytest.mark.asyncio
+    async def test_adjust_invalid_location(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-LERR", "name": "LocErr"})
+        with pytest.raises(NotFoundException):
+            await wms_service.adjust_inventory(db_session, {
+                "warehouse_id": wh["id"], "location_id": str(uuid.uuid4()), "sku": "SKU", "quantity": "10",
+            })
+
+
+class TestPickingWave:
+    """Picking wave creation and listing."""
+
+    @pytest.mark.asyncio
+    async def test_create_picking_wave(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-PW", "name": "Wave"})
+        wave = await wms_service.create_picking_wave(db_session, {
+            "warehouse_id": wh["id"], "order_ids": ["order-1"],
+        })
+        assert "wave_no" in wave
+
+    @pytest.mark.asyncio
+    async def test_create_picking_wave_invalid_warehouse(self, db_session):
+        with pytest.raises(NotFoundException):
+            await wms_service.create_picking_wave(db_session, {
+                "warehouse_id": str(uuid.uuid4()), "order_ids": ["order-1"],
+            })
+
+    @pytest.mark.asyncio
+    async def test_create_picking_wave_no_orders(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-PWO", "name": "NoOrders"})
+        with pytest.raises(ValidationException, match="At least one order"):
+            await wms_service.create_picking_wave(db_session, {
+                "warehouse_id": wh["id"], "order_ids": [],
+            })
+
+    @pytest.mark.asyncio
+    async def test_list_picking_waves(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-PL", "name": "WaveList"})
+        await wms_service.create_picking_wave(db_session, {"warehouse_id": wh["id"], "order_ids": ["o1"]})
+        await wms_service.create_picking_wave(db_session, {"warehouse_id": wh["id"], "order_ids": ["o2"]})
+        waves = await wms_service.list_picking_waves(db_session)
+        assert len(waves) >= 2
