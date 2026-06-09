@@ -1,11 +1,11 @@
 import uuid
+
 from pydantic import BaseModel, Field
-from typing import Optional, List
 
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=100)
-    email: str = Field(..., max_length=255, pattern=r'^[^@]+@[^@]+\.[^@]+$')
+    email: str = Field(..., max_length=255, pattern=r"^[^@]+@[^@]+\.[^@]+$")
     password: str = Field(..., min_length=6, max_length=128)
 
 
@@ -36,19 +36,19 @@ class UserResponse(BaseModel):
 class RoleCreate(BaseModel):
     name: str = Field(..., max_length=100)
     code: str = Field(..., max_length=50)
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class RoleUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: str | None = None
+    description: str | None = None
 
 
 class RoleResponse(BaseModel):
     id: uuid.UUID
     name: str
     code: str
-    description: Optional[str] = None
+    description: str | None = None
     is_system: bool
 
     model_config = {"from_attributes": True}
@@ -59,7 +59,7 @@ class PermissionCreate(BaseModel):
     code: str
     resource: str
     action: str
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class PermissionResponse(BaseModel):
@@ -68,6 +68,6 @@ class PermissionResponse(BaseModel):
     code: str
     resource: str
     action: str
-    description: Optional[str] = None
+    description: str | None = None
 
     model_config = {"from_attributes": True}

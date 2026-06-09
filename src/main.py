@@ -1,26 +1,30 @@
-from contextlib import asynccontextmanager
 import logging
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from src.api.v1.health import router as health_router
 from src.auth import auth_router as auth_router
+from src.oms.router import router as oms_router
+from src.wms.router import router as wms_router
+from src.barcode.router import router as barcode_router
+from src.tms.router import router as tms_router
+from src.admin.router import router as admin_router
 from src.config import settings
 from src.core.database import engine
 from src.core.exceptions import (
     AppException,
-    NotFoundException,
-    ValidationException,
     AuthException,
+    NotFoundException,
     PermissionDeniedException,
     RateLimitException,
+    ValidationException,
 )
-from src.core.middleware import RequestIDMiddleware, RequestLoggingMiddleware, AuditLogMiddleware
+from src.core.middleware import AuditLogMiddleware, RequestIDMiddleware, RequestLoggingMiddleware
 from src.core.rate_limiter import rate_limiter
 from src.core.response import error_response
-
 
 # Configure logging
 log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
@@ -41,13 +45,13 @@ async def lifespan(app: FastAPI):
     # Startup - connect to Redis for rate limiting
     if settings.redis_url:
         await rate_limiter.connect()
-    
+
     yield
-    
+
     # Shutdown - disconnect from Redis
     if settings.redis_url:
         await rate_limiter.disconnect()
-    
+
     await engine.dispose()
 
 
@@ -80,6 +84,11 @@ app.add_middleware(AuditLogMiddleware)
 # Routers
 app.include_router(health_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(oms_router, prefix="/api/v1")
+app.include_router(wms_router, prefix="/api/v1")
+app.include_router(barcode_router, prefix="/api/v1")
+app.include_router(tms_router, prefix="/api/v1")
+app.include_router(admin_router)  # no /api/v1 prefix — these are HTML pages, not REST
 
 # Prometheus metrics
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
@@ -95,7 +104,7 @@ async def handle_app_exception(request: Request, exc: AppException):
         exc.message,
         extra={"request_id": request.headers.get("x-request-id")},
     )
-    
+
     return error_response(
         status_code=exc.status_code,
         code=exc.code,
@@ -108,7 +117,7 @@ async def handle_app_exception(request: Request, exc: AppException):
 async def handle_not_found(request: Request, exc: NotFoundException):
     """Handle 404 Not Found exceptions."""
     logger.warning("Not found: %s", request.path)
-    
+
     return error_response(
         status_code=exc.status_code,
         code=exc.code,
@@ -121,7 +130,7 @@ async def handle_not_found(request: Request, exc: NotFoundException):
 async def handle_validation_error(request: Request, exc: ValidationException):
     """Handle 422 Unvalid Request exceptions."""
     logger.warning("Validation error: %s", request.path)
-    
+
     return error_response(
         status_code=exc.status_code,
         code=exc.code,
@@ -134,7 +143,7 @@ async def handle_validation_error(request: Request, exc: ValidationException):
 async def handle_auth_error(request: Request, exc: AuthException):
     """Handle 401 Unauthorized exceptions."""
     logger.warning("Authentication error: %s", request.path)
-    
+
     return error_response(
         status_code=exc.status_code,
         code=exc.code,
@@ -147,7 +156,7 @@ async def handle_auth_error(request: Request, exc: AuthException):
 async def handle_permission_denied(request: Request, exc: PermissionDeniedException):
     """Handle 403 Forbidden exceptions."""
     logger.warning("Permission denied: %s", request.path)
-    
+
     return error_response(
         status_code=exc.status_code,
         code=exc.code,
@@ -160,7 +169,7 @@ async def handle_permission_denied(request: Request, exc: PermissionDeniedExcept
 async def handle_rate_limit_exceeded(request: Request, exc: RateLimitException):
     """Handle 429 Too Many Requests exceptions."""
     logger.warning("Rate limit exceeded: %s", request.path)
-    
+
     return error_response(
         status_code=exc.status_code,
         code=exc.code,
@@ -178,7 +187,7 @@ async def handle_http_exception(request: Request, exc: HTTPException):
         exc.detail,
         extra={"request_id": request.headers.get("x-request-id")},
     )
-    
+
     return error_response(
         status_code=exc.status_code,
         code="HTTP_ERROR",
@@ -195,10 +204,9 @@ async def handle_generic_exception(request: Request, exc: Exception):
         exc_info=True,
         extra={"request_id": request.headers.get("x-request-id")},
     )
-    
+
     return error_response(
         status_code=500,
         code="INTERNAL_ERROR",
         message="An unexpected error occurred",
     )
-
