@@ -6,6 +6,8 @@ import LoginScreen from "../screens/LoginScreen";
 import OrderListScreen from "../screens/OrderListScreen";
 import OrderDetailScreen from "../screens/OrderDetailScreen";
 import ScannerScreen from "../screens/ScannerScreen";
+import PickingScreen from "../screens/PickingScreen";
+import InventoryScreen from "../screens/InventoryScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -39,6 +41,16 @@ export default function AppNavigator({ isLoggedIn, onLogin }) {
               name="Scanner"
               component={ScannerScreen}
               options={{ title: "Scan Barcode" }}
+            />
+            <Stack.Screen
+              name="Picking"
+              component={PickingScreen}
+              options={{ title: "Picking Waves" }}
+            />
+            <Stack.Screen
+              name="Inventory"
+              component={InventoryScreen}
+              options={{ title: "Inventory" }}
             />
           </>
         )}

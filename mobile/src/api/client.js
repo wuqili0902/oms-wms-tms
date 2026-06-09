@@ -77,6 +77,10 @@ export const api = {
   adjustInventory: (data) =>
     request("POST", "/warehouses/inventory/adjust", data),
 
+  // ── Picking ──────────────────────────────────────────────────────────────
+  listPickingWaves: () =>
+    request("GET", "/warehouses/picking-waves"),
+
   // ── Barcode ──────────────────────────────────────────────────────────────
   generateBarcode: (data) =>
     request("POST", "/barcode/generate", data),
