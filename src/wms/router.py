@@ -101,6 +101,90 @@ async def create_warehouse(
         raise HTTPException(status_code=422, detail=str(e))
 
 
+# ═══ Picking Wave Execution ═══════════════════════════════════════════════════
+
+@router.post("/picking-waves/{wave_id}/start")
+async def start_picking_wave(
+    wave_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.start_picking(db, wave_id, current_user.get("sub", ""))
+    except (NotFoundException, ValidationException) as e:
+        code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=code, detail=str(e))
+
+
+@router.post("/picking-waves/{wave_id}/complete")
+async def complete_picking_wave(
+    wave_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.complete_picking(db, wave_id)
+    except (NotFoundException, ValidationException) as e:
+        code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=code, detail=str(e))
+
+
+# ═══ Packing ═══════════════════════════════════════════════════════════════════
+
+@router.post("/packing", status_code=status.HTTP_201_CREATED)
+async def create_packing(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.create_packing(db, data)
+    except (NotFoundException, ValidationException) as e:
+        code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=code, detail=str(e))
+
+
+# ═══ Shipping ══════════════════════════════════════════════════════════════════
+
+@router.post("/shipments", status_code=status.HTTP_201_CREATED)
+async def create_shipment(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.create_shipment(db, data)
+    except (NotFoundException, ValidationException) as e:
+        code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=code, detail=str(e))
+
+
+@router.post("/shipments/{shipment_id}/ship")
+async def ship_package(
+    shipment_id: str,
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.mark_shipped(
+            db, shipment_id,
+            tracking_number=data.get("tracking_number", ""),
+            carrier=data.get("carrier", ""),
+        )
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/shipments")
+async def list_shipments(
+    warehouse_id: str = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return await wms_service.list_shipments(db, warehouse_id=warehouse_id)
+
+
 @router.get("", response_model=list[WarehouseResponse])
 async def list_warehouses(
     db: AsyncSession = Depends(get_db),

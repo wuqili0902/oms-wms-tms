@@ -353,3 +353,52 @@ class PickingWave(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
 
     def __repr__(self):
         return f"<PickingWave {self.code}: status={self.status}, items={self.total_items}>"
+
+
+class ShipmentStatus(str, Enum):
+    """Shipment lifecycle states."""
+
+    PENDING = "pending"
+    PICKED = "picked"
+    PACKED = "packed"
+    SHIPPED = "shipped"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
+
+
+class PackingRecord(Base, UUIDMixin, TimestampMixin):
+    """Record of which items were packed for a picking wave."""
+
+    __tablename__ = "packing_records"
+
+    picking_wave_id: UUID = Column(UUID(as_uuid=True), ForeignKey("picking_waves.id"), nullable=False)
+    packed_by: str = Column(String(100), default="")
+    box_count: int = Column(Integer, default=1)
+    notes: str = Column(Text, default="")
+
+    picking_wave: PickingWave = relationship("PickingWave")
+
+    def __repr__(self):
+        return f"<PackingRecord wave={self.picking_wave_id} boxes={self.box_count}>"
+
+
+class Shipment(Base, UUIDMixin, TimestampMixin):
+    """Outbound shipment tracking."""
+
+    __tablename__ = "shipments"
+
+    order_id: UUID = Column(UUID(as_uuid=True), ForeignKey("orders.id"), nullable=False)
+    warehouse_id: UUID = Column(UUID(as_uuid=True), ForeignKey("warehouses.id"), nullable=False)
+    packing_record_id: UUID | None = Column(UUID(as_uuid=True), ForeignKey("packing_records.id"), nullable=True)
+    tracking_number: str = Column(String(100), default="")
+    carrier: str = Column(String(50), default="")
+    status: ShipmentStatus = Column(SAEnum(ShipmentStatus), default=ShipmentStatus.PENDING)
+    shipped_at: str | None = Column(String(30), nullable=True)
+    delivered_at: str | None = Column(String(30), nullable=True)
+    notes: str = Column(Text, default="")
+
+    warehouse: Warehouse = relationship("Warehouse")
+    packing_record: PackingRecord | None = relationship("PackingRecord")
+
+    def __repr__(self):
+        return f"<Shipment tracking={self.tracking_number} status={self.status}>"

@@ -84,12 +84,14 @@ class TestMetadata:
             "terminal_devices",
             "device_sessions",
             "sync_logs",
+            "packing_records",
+            "shipments",
         }
         missing = expected - tables
         extra = tables - expected
         assert not missing, f"Missing tables: {missing}"
         assert not extra, f"Unexpected tables: {extra}"
-        assert len(tables) >= 22, f"Expected >=22 tables, got {len(tables)}"
+        assert len(tables) >= 24, f"Expected >=24 tables, got {len(tables)}"
 
     def test_primary_keys(self, engine):
         """Every entity table has a PK column named 'id'. Junction tables

@@ -202,3 +202,119 @@ class TestPickingWave:
         await wms_service.create_picking_wave(db_session, {"warehouse_id": wh["id"], "order_ids": ["o2"]})
         waves = await wms_service.list_picking_waves(db_session)
         assert len(waves) >= 2
+
+
+class TestPickingExecution:
+    """Picking wave execution: start → complete."""
+
+    @pytest.mark.asyncio
+    async def test_start_picking(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-SP", "name": "StartPick"})
+        wave = await wms_service.create_picking_wave(db_session, {"warehouse_id": wh["id"], "order_ids": ["o1"]})
+        result = await wms_service.start_picking(db_session, wave["id"])
+        assert result["status"] == "in_progress"
+
+    @pytest.mark.asyncio
+    async def test_start_already_in_progress(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-SP2", "name": "StartPick2"})
+        wave = await wms_service.create_picking_wave(db_session, {"warehouse_id": wh["id"], "order_ids": ["o1"]})
+        await wms_service.start_picking(db_session, wave["id"])
+        with pytest.raises(ValidationException):
+            await wms_service.start_picking(db_session, wave["id"])
+
+    @pytest.mark.asyncio
+    async def test_complete_picking(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-CP", "name": "CompPick"})
+        wave = await wms_service.create_picking_wave(db_session, {"warehouse_id": wh["id"], "order_ids": ["o1"]})
+        await wms_service.start_picking(db_session, wave["id"])
+        result = await wms_service.complete_picking(db_session, wave["id"])
+        assert result["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_complete_without_start(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-CP2", "name": "CompPick2"})
+        wave = await wms_service.create_picking_wave(db_session, {"warehouse_id": wh["id"], "order_ids": ["o1"]})
+        with pytest.raises(ValidationException):
+            await wms_service.complete_picking(db_session, wave["id"])
+
+
+class TestPacking:
+    """Packing after completed picking."""
+
+    @pytest.mark.asyncio
+    async def test_create_packing(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-PK", "name": "Pack"})
+        wave = await wms_service.create_picking_wave(db_session, {"warehouse_id": wh["id"], "order_ids": ["o1"]})
+        await wms_service.start_picking(db_session, wave["id"])
+        await wms_service.complete_picking(db_session, wave["id"])
+        record = await wms_service.create_packing(db_session, {"picking_wave_id": wave["id"], "box_count": 3})
+        assert record["box_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_pack_before_complete(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-PK2", "name": "Pack2"})
+        wave = await wms_service.create_picking_wave(db_session, {"warehouse_id": wh["id"], "order_ids": ["o1"]})
+        with pytest.raises(ValidationException, match="Only completed"):
+            await wms_service.create_packing(db_session, {"picking_wave_id": wave["id"]})
+
+
+class TestShipping:
+    """Shipment creation and tracking."""
+
+    @pytest.mark.asyncio
+    async def test_create_shipment(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-SH", "name": "Ship"})
+        shipment = await wms_service.create_shipment(db_session, {
+            "order_id": str(uuid.uuid4()), "warehouse_id": wh["id"],
+        })
+        assert "tracking_number" in shipment
+
+    @pytest.mark.asyncio
+    async def test_mark_shipped(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-SH2", "name": "Ship2"})
+        shipment = await wms_service.create_shipment(db_session, {
+            "order_id": str(uuid.uuid4()), "warehouse_id": wh["id"],
+        })
+        result = await wms_service.mark_shipped(db_session, shipment["id"], "TRK-123", "FedEx")
+        assert result["status"] == "shipped"
+        assert result["tracking_number"] == "TRK-123"
+
+    @pytest.mark.asyncio
+    async def test_list_shipments(self, db_session):
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-SH3", "name": "Ship3"})
+        await wms_service.create_shipment(db_session, {"order_id": str(uuid.uuid4()), "warehouse_id": wh["id"]})
+        await wms_service.create_shipment(db_session, {"order_id": str(uuid.uuid4()), "warehouse_id": wh["id"]})
+        shipments = await wms_service.list_shipments(db_session)
+        assert len(shipments) >= 2
+
+    @pytest.mark.asyncio
+    async def test_full_lifecycle(self, db_session):
+        """End-to-end: create wave → start → complete → pack → ship."""
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-E2E", "name": "E2E"})
+        order_id = str(uuid.uuid4())
+
+        # Create wave
+        wave = await wms_service.create_picking_wave(db_session, {
+            "warehouse_id": wh["id"], "order_ids": [order_id],
+        })
+        assert wave["status"] == "pending"
+
+        # Start picking
+        w = await wms_service.start_picking(db_session, wave["id"])
+        assert w["status"] == "in_progress"
+
+        # Complete picking
+        w = await wms_service.complete_picking(db_session, wave["id"])
+        assert w["status"] == "completed"
+
+        # Pack
+        pack = await wms_service.create_packing(db_session, {"picking_wave_id": wave["id"], "box_count": 2})
+        assert pack["box_count"] == 2
+
+        # Ship
+        shipment = await wms_service.create_shipment(db_session, {
+            "order_id": order_id, "warehouse_id": wh["id"],
+            "packing_record_id": pack["id"], "tracking_number": "ZTO-999",
+        })
+        shipped = await wms_service.mark_shipped(db_session, shipment["id"], carrier="ZTO")
+        assert shipped["status"] == "shipped"

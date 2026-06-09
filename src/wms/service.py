@@ -355,3 +355,132 @@ async def list_picking_waves(db: AsyncSession, wh_id: str | None = None) -> list
         d["updated_at"] = d.get("updated_at", d.get("created_at", ""))
         items.append(d)
     return items
+
+
+# ── Picking Wave Execution ──────────────────────────────────────────────────
+
+async def start_picking(db: AsyncSession, wave_id: str, assignee: str = "") -> dict:
+    """Start executing a picking wave — marks it in_progress."""
+    result = await db.execute(select(PickingWave).where(PickingWave.id == _to_uuid(wave_id)))
+    wave = result.scalar_one_or_none()
+    if not wave:
+        raise NotFoundException(message=f"Picking wave {wave_id} not found")
+    if wave.status != "pending":
+        raise ValidationException(message=f"Wave is already {wave.status}")
+
+    wave.status = "in_progress"
+    try:
+        wave.assignee_id = _to_uuid(assignee) if assignee else None
+    except (ValueError, TypeError):
+        wave.assignee_id = None
+    wave.updated_at = _now()
+    await db.commit()
+    await db.refresh(wave)
+    d = model_to_dict(wave)
+    d["wave_no"] = d.pop("code", "")
+    return d
+
+
+async def complete_picking(db: AsyncSession, wave_id: str) -> dict:
+    """Mark a picking wave as completed."""
+    result = await db.execute(select(PickingWave).where(PickingWave.id == _to_uuid(wave_id)))
+    wave = result.scalar_one_or_none()
+    if not wave:
+        raise NotFoundException(message=f"Picking wave {wave_id} not found")
+    if wave.status != "in_progress":
+        raise ValidationException(message=f"Cannot complete wave in '{wave.status}' status")
+
+    wave.status = "completed"
+    wave.completed_items = wave.total_items
+    wave.updated_at = _now()
+    await db.commit()
+    await db.refresh(wave)
+    d = model_to_dict(wave)
+    d["wave_no"] = d.pop("code", "")
+    return d
+
+
+# ── Packing ─────────────────────────────────────────────────────────────────
+
+async def create_packing(db: AsyncSession, data: dict) -> dict:
+    """Record packing for a completed picking wave."""
+    from src.wms.models import PackingRecord
+
+    wave_id = data["picking_wave_id"]
+    result = await db.execute(select(PickingWave).where(PickingWave.id == _to_uuid(wave_id)))
+    wave = result.scalar_one_or_none()
+    if not wave:
+        raise NotFoundException(message=f"Picking wave {wave_id} not found")
+    if wave.status != "completed":
+        raise ValidationException(message="Only completed waves can be packed")
+
+    record = PackingRecord(
+        id=uuid.uuid4(),
+        picking_wave_id=_to_uuid(wave_id),
+        packed_by=data.get("packed_by", ""),
+        box_count=data.get("box_count", 1),
+        notes=data.get("notes", ""),
+    )
+    db.add(record)
+    await db.commit()
+    await db.refresh(record)
+    return model_to_dict(record)
+
+
+# ── Shipping ────────────────────────────────────────────────────────────────
+
+async def create_shipment(db: AsyncSession, data: dict) -> dict:
+    """Create a shipment for an order."""
+    from src.wms.models import Shipment, ShipmentStatus
+
+    order_id = data["order_id"]
+    wh_id = data["warehouse_id"]
+
+    wh_result = await db.execute(select(Warehouse).where(Warehouse.id == _to_uuid(wh_id)))
+    if not wh_result.scalar_one_or_none():
+        raise NotFoundException(message=f"Warehouse {wh_id} not found")
+
+    shipment = Shipment(
+        id=uuid.uuid4(),
+        order_id=_to_uuid(order_id),
+        warehouse_id=_to_uuid(wh_id),
+        packing_record_id=_to_uuid(data.get("packing_record_id")),
+        tracking_number=data.get("tracking_number", ""),
+        carrier=data.get("carrier", ""),
+        status=ShipmentStatus.PACKED if data.get("packing_record_id") else ShipmentStatus.PICKED,
+    )
+    db.add(shipment)
+    await db.commit()
+    await db.refresh(shipment)
+    return model_to_dict(shipment)
+
+
+async def mark_shipped(db: AsyncSession, shipment_id: str, tracking_number: str = "", carrier: str = "") -> dict:
+    """Mark a shipment as shipped with tracking info."""
+    from src.wms.models import Shipment, ShipmentStatus
+
+    result = await db.execute(select(Shipment).where(Shipment.id == _to_uuid(shipment_id)))
+    shipment = result.scalar_one_or_none()
+    if not shipment:
+        raise NotFoundException(message=f"Shipment {shipment_id} not found")
+
+    shipment.status = ShipmentStatus.SHIPPED
+    shipment.tracking_number = tracking_number or shipment.tracking_number
+    shipment.carrier = carrier or shipment.carrier
+    shipment.shipped_at = _now().isoformat()
+    shipment.updated_at = _now()
+    await db.commit()
+    await db.refresh(shipment)
+    return model_to_dict(shipment)
+
+
+async def list_shipments(db: AsyncSession, warehouse_id: str | None = None) -> list[dict]:
+    """List shipments with optional warehouse filter."""
+    from src.wms.models import Shipment
+
+    stmt = select(Shipment)
+    if warehouse_id:
+        stmt = stmt.where(Shipment.warehouse_id == _to_uuid(warehouse_id))
+    stmt = stmt.order_by(Shipment.created_at.desc())
+    result = await db.execute(stmt)
+    return [model_to_dict(s) for s in result.scalars().all()]
