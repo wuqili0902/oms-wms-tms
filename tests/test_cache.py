@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.cache.decorators import cached, rate_limit, distributed_lock
+from src.cache.decorators import cached, distributed_lock, rate_limit
 
 
 class MockRedisClient:

@@ -1,4 +1,5 @@
 """Tests for auth models — all skipped until DB is configured."""
+
 import pytest
 
 
