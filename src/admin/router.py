@@ -5,8 +5,11 @@ All routes require authentication.
 """
 from datetime import datetime, timezone
 
+import csv
+from io import StringIO
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -212,4 +215,61 @@ async def list_users(
             "flashes": _get_flashes(request),
             "users": safe_users,
         },
+    )
+
+
+# ── Export ────────────────────────────────────────────────────────────────────
+
+@router.get("/export/orders")
+async def export_orders_csv(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Export all orders as CSV."""
+    orders, _ = await oms_service.list_orders(db, page=1, page_size=10000)
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Order No", "Status", "Customer", "Total", "Priority", "Items", "Created"])
+    for o in orders:
+        writer.writerow([
+            o.get("order_no", ""),
+            o.get("status", ""),
+            o.get("customer_id", ""),
+            o.get("total_amount", "0"),
+            o.get("priority", ""),
+            len(o.get("items", [])),
+            o.get("created_at", ""),
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=orders.csv"},
+    )
+
+
+@router.get("/export/inventory")
+async def export_inventory_csv(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Export inventory as CSV."""
+    items = await wms_service.query_inventory(db)
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["SKU", "Warehouse ID", "Location ID", "Quantity", "Reserved", "Available"])
+    for item in items:
+        writer.writerow([
+            item.get("sku", ""),
+            item.get("warehouse_id", ""),
+            item.get("location_id", ""),
+            item.get("quantity", 0),
+            item.get("reserved_qty", 0),
+            item.get("available_qty", 0),
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inventory.csv"},
     )
