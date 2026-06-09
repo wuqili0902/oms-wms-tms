@@ -1,0 +1,30 @@
+{% extends "admin/base.html" %}
+{% block title %}Orders{% endblock %}
+{% block content %}
+<div class="page-header"><h2>Orders</h2></div>
+
+{% if orders %}
+<div class="card" style="padding:0;">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Order #</th><th>Customer</th><th>Status</th><th>Total</th><th>Items</th><th>Created</th><th></th></tr></thead>
+      <tbody>
+        {% for o in orders %}
+        <tr>
+          <td><a href="/admin/orders/{{ o.id }}" style="color:var(--accent);text-decoration:none;">{{ o.order_no }}</a></td>
+          <td>{{ o.customer_id or '—' }}</td>
+          <td><span class="badge badge-{{ 'success' if o.status == 'completed' else 'warning' if o.status in ('confirmed','processing','picking') else 'danger' if o.status in ('cancelled','failed') else 'info' }}">{{ o.status }}</span></td>
+          <td>{{ o.total_amount or '0.00' }}</td>
+          <td>{{ o["items"]|length if o["items"] else 0 }}</td>
+          <td style="white-space:nowrap;">{{ o.created_at[:10] if o.created_at else '—' }}</td>
+          <td><a href="/admin/orders/{{ o.id }}" class="btn btn-sm">View</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card"><div class="empty-state"><p>No orders found.</p></div></div>
+{% endif %}
+{% endblock %}

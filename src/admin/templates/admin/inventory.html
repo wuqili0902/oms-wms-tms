@@ -1,0 +1,29 @@
+{% extends "admin/base.html" %}
+{% block title %}Inventory{% endblock %}
+{% block content %}
+<div class="page-header"><h2>Inventory</h2></div>
+
+{% if inventory %}
+<div class="card" style="padding:0;">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>SKU</th><th>Warehouse</th><th>Location</th><th>Quantity</th><th>Reserved</th><th>Available</th></tr></thead>
+      <tbody>
+        {% for item in inventory %}
+        <tr>
+          <td>{{ item.sku }}</td>
+          <td>{{ item.warehouse_id[:8] if item.warehouse_id else '—' }}…</td>
+          <td>{{ item.location_id[:8] if item.location_id else '—' }}…</td>
+          <td>{{ item.quantity }}</td>
+          <td>{{ item.reserved_qty or 0 }}</td>
+          <td>{{ item.available_qty or 0 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card"><div class="empty-state"><p>No inventory records found. Inventory will appear here once items are created via the WMS API.</p></div></div>
+{% endif %}
+{% endblock %}

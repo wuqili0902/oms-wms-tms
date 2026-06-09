@@ -1,0 +1,31 @@
+{% extends "admin/base.html" %}
+{% block title %}Devices{% endblock %}
+{% block content %}
+<div class="page-header"><h2>Terminal Devices</h2></div>
+
+{% if devices %}
+<div class="card" style="padding:0;">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Platform</th><th>Status</th><th>Warehouse</th><th>Last Heartbeat</th><th>Last Sync</th></tr></thead>
+      <tbody>
+        {% for d in devices %}
+        <tr>
+          <td><strong>{{ d.code }}</strong></td>
+          <td>{{ d.name or '—' }}</td>
+          <td>{{ d.device_type }}</td>
+          <td>{{ d.platform }}</td>
+          <td><span class="badge badge-{{ 'success' if d.status == 'online' else 'danger' if d.status == 'disabled' else 'neutral' }}">{{ d.status }}</span></td>
+          <td>{{ d.warehouse_id[:8] if d.warehouse_id else '—' }}…</td>
+          <td style="white-space:nowrap;">{{ d.last_heartbeat_at[:16] if d.last_heartbeat_at else '—' }}</td>
+          <td style="white-space:nowrap;">{{ d.last_sync_at[:16] if d.last_sync_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card"><div class="empty-state"><p>No devices registered. Register devices via the API or mobile app.</p></div></div>
+{% endif %}
+{% endblock %}

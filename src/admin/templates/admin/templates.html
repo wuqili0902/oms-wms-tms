@@ -1,0 +1,28 @@
+{% extends "admin/base.html" %}
+{% block title %}Label Templates{% endblock %}
+{% block content %}
+<div class="page-header"><h2>Label Templates</h2></div>
+
+{% if templates %}
+<div class="card" style="padding:0;">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Code</th><th>Width</th><th>Height</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for t in templates %}
+        <tr>
+          <td>{{ t.name }}</td>
+          <td><code>{{ t.code }}</code></td>
+          <td>{{ t.width_mm }}mm</td>
+          <td>{{ t.height_mm }}mm</td>
+          <td style="white-space:nowrap;">{{ t.created_at[:10] if t.created_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card"><div class="empty-state"><p>No label templates created yet. Create one via the Barcode API.</p></div></div>
+{% endif %}
+{% endblock %}

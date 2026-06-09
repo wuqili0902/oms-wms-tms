@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Admin{% endblock %} — OMS/WMS Admin</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --sidebar: #1e293b;
+      --sidebar-text: #cbd5e1;
+      --sidebar-active: #3b82f6;
+      --card: #fff;
+      --border: #e2e8f0;
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --accent: #3b82f6;
+      --danger: #ef4444;
+      --success: #22c55e;
+      --warning: #f59e0b;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); display: flex; min-height: 100vh; }
+
+    /* Sidebar */
+    .sidebar { width: 240px; background: var(--sidebar); color: var(--sidebar-text); padding: 0; flex-shrink: 0; display: flex; flex-direction: column; }
+    .sidebar h1 { font-size: 1rem; padding: 1.25rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.08); font-weight: 600; letter-spacing: 0.02em; color: #f1f5f9; }
+    .sidebar nav { padding: 0.5rem 0; }
+    .sidebar a { display: flex; align-items: center; gap: 0.6rem; padding: 0.65rem 1rem; color: var(--sidebar-text); text-decoration: none; font-size: 0.875rem; transition: all 0.15s; }
+    .sidebar a:hover { background: rgba(255,255,255,0.06); color: #f1f5f9; }
+    .sidebar a.active { background: var(--sidebar-active); color: #fff; }
+    .sidebar .nav-icon { width: 18px; text-align: center; }
+
+    /* Main */
+    .main { flex: 1; padding: 1.5rem 2rem; min-width: 0; }
+    .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    .page-header h2 { font-size: 1.35rem; font-weight: 600; }
+
+    /* Cards */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 0.5rem; padding: 1.25rem; margin-bottom: 1rem; }
+
+    /* Stats */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 0.5rem; padding: 1.25rem; }
+    .stat-card .stat-value { font-size: 1.75rem; font-weight: 700; color: var(--accent); }
+    .stat-card .stat-label { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* Table */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border); }
+    th { font-weight: 600; color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+    tr:hover td { background: #f8fafc; }
+
+    /* Status badges */
+    .badge { display: inline-block; padding: 0.15em 0.55em; border-radius: 999px; font-size: 0.75rem; font-weight: 500; }
+    .badge-success { background: #dcfce7; color: #166534; }
+    .badge-warning { background: #fef3c7; color: #92400e; }
+    .badge-danger { background: #fee2e2; color: #991b1b; }
+    .badge-info { background: #dbeafe; color: #1e40af; }
+    .badge-neutral { background: #f1f5f9; color: #475569; }
+
+    /* Buttons */
+    .btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.45rem 1rem; border-radius: 0.375rem; font-size: 0.8rem; font-weight: 500; border: 1px solid var(--border); background: var(--card); cursor: pointer; text-decoration: none; color: var(--text); transition: all 0.15s; }
+    .btn:hover { background: #f1f5f9; }
+    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-danger { color: var(--danger); border-color: var(--danger); }
+    .btn-sm { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
+
+    /* Form */
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; font-size: 0.8rem; font-weight: 500; margin-bottom: 0.3rem; color: var(--text-muted); }
+    .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.5rem 0.65rem; border: 1px solid var(--border); border-radius: 0.375rem; font-size: 0.875rem; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+
+    /* Flash messages */
+    .flash { padding: 0.75rem 1rem; border-radius: 0.375rem; margin-bottom: 1rem; font-size: 0.875rem; }
+    .flash-success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+    .flash-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+
+    /* Responsive */
+    @media (max-width: 768px) { .sidebar { width: 60px; } .sidebar h1, .sidebar a span { display: none; } .main { padding: 1rem; } .form-row { grid-template-columns: 1fr; } }
+
+    .empty-state { text-align: center; padding: 3rem 1rem; color: var(--text-muted); }
+    .empty-state p { font-size: 0.9rem; }
+    .actions { display: flex; gap: 0.4rem; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .detail-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .detail-value { font-weight: 500; }
+  </style>
+</head>
+<body>
+  <aside class="sidebar">
+    <h1>📦 OMS/WMS</h1>
+    <nav>
+      <a href="/admin/" class="{% if active == 'dashboard' %}active{% endif %}">
+        <span class="nav-icon">📊</span><span>Dashboard</span>
+      </a>
+      <a href="/admin/orders" class="{% if active == 'orders' %}active{% endif %}">
+        <span class="nav-icon">📋</span><span>Orders</span>
+      </a>
+      <a href="/admin/users" class="{% if active == 'users' %}active{% endif %}">
+        <span class="nav-icon">👤</span><span>Users</span>
+      </a>
+      <a href="/admin/inventory" class="{% if active == 'inventory' %}active{% endif %}">
+        <span class="nav-icon">📦</span><span>Inventory</span>
+      </a>
+      <a href="/admin/templates" class="{% if active == 'templates' %}active{% endif %}">
+        <span class="nav-icon">🏷️</span><span>Labels</span>
+      </a>
+      <a href="/admin/devices" class="{% if active == 'devices' %}active{% endif %}">
+        <span class="nav-icon">📱</span><span>Devices</span>
+      </a>
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:0.5rem 0;">
+      <a href="/docs" style="font-size:0.8rem;" target="_blank">
+        <span class="nav-icon">📄</span><span>API Docs</span>
+      </a>
+    </nav>
+  </aside>
+
+  <div class="main">
+    {% for cat, msg in flashes %}
+    <div class="flash flash-{{ cat }}">{{ msg }}</div>
+    {% endfor %}
+
+    {% block content %}{% endblock %}
+  </div>
+</body>
+</html>

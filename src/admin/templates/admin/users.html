@@ -1,0 +1,28 @@
+{% extends "admin/base.html" %}
+{% block title %}Users{% endblock %}
+{% block content %}
+<div class="page-header"><h2>Users</h2></div>
+
+{% if users %}
+<div class="card" style="padding:0;">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Active</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td style="font-family:monospace;font-size:0.8rem;">{{ u.id[:8] if u.id else '—' }}…</td>
+          <td>{{ u.username }}</td>
+          <td>{{ u.email }}</td>
+          <td><span class="badge badge-{{ 'success' if u.is_active else 'danger' }}">{{ 'Active' if u.is_active else 'Inactive' }}</span></td>
+          <td style="white-space:nowrap;">{{ u.created_at[:10] if u.created_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card"><div class="empty-state"><p>No users found.</p></div></div>
+{% endif %}
+{% endblock %}

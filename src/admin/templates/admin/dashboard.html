@@ -1,0 +1,37 @@
+{% extends "admin/base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-header"><h2>Dashboard</h2><span style="color:var(--text-muted);font-size:0.85rem;">{{ now }}</span></div>
+
+<div class="stats-grid">
+  <div class="stat-card"><div class="stat-value">{{ stats.order_count }}</div><div class="stat-label">Total Orders</div></div>
+  <div class="stat-card"><div class="stat-value">{{ stats.user_count }}</div><div class="stat-label">Users</div></div>
+  <div class="stat-card"><div class="stat-value">{{ stats.inventory_count }}</div><div class="stat-label">Inventory Items</div></div>
+  <div class="stat-card"><div class="stat-value">{{ stats.warehouse_count }}</div><div class="stat-label">Warehouses</div></div>
+  <div class="stat-card"><div class="stat-value">{{ stats.template_count }}</div><div class="stat-label">Label Templates</div></div>
+</div>
+
+<div class="card">
+  <h3 style="font-size:0.95rem;margin-bottom:0.75rem;">Recent Orders</h3>
+  {% if recent_orders %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Order #</th><th>Customer</th><th>Status</th><th>Total</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for o in recent_orders %}
+        <tr>
+          <td><a href="/admin/orders/{{ o.id }}" style="color:var(--accent);text-decoration:none;">{{ o.order_no }}</a></td>
+          <td>{{ o.customer_id or '—' }}</td>
+          <td><span class="badge badge-{{ 'success' if o.status == 'completed' else 'warning' if o.status in ('confirmed','processing','picking') else 'danger' if o.status in ('cancelled','failed') else 'info' }}">{{ o.status }}</span></td>
+          <td>{{ o.total_amount or '0.00' }}</td>
+          <td style="white-space:nowrap;">{{ o.created_at[:10] if o.created_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No orders yet. Orders will appear here once created via the API.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

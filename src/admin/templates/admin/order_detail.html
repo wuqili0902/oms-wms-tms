@@ -1,0 +1,47 @@
+{% extends "admin/base.html" %}
+{% block title %}Order {{ order.order_no }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h2>Order {{ order.order_no }}</h2>
+  <a href="/admin/orders" class="btn">← Back to Orders</a>
+</div>
+
+<div class="detail-grid">
+  <div class="card"><div class="detail-label">Order #</div><div class="detail-value">{{ order.order_no }}</div></div>
+  <div class="card"><div class="detail-label">Status</div><div class="detail-value"><span class="badge badge-{{ 'success' if order.status == 'completed' else 'warning' if order.status in ('confirmed','processing','picking') else 'danger' if order.status in ('cancelled','failed') else 'info' }}">{{ order.status }}</span></div></div>
+  <div class="card"><div class="detail-label">Customer ID</div><div class="detail-value">{{ order.customer_id or '—' }}</div></div>
+  <div class="card"><div class="detail-label">Total Amount</div><div class="detail-value">{{ order.total_amount or '0.00' }}</div></div>
+  <div class="card"><div class="detail-label">Created</div><div class="detail-value">{{ order.created_at or '—' }}</div></div>
+  <div class="card"><div class="detail-label">Updated</div><div class="detail-value">{{ order.updated_at or '—' }}</div></div>
+</div>
+
+{% if order["items"] %}
+<div class="card"><h3 style="font-size:0.95rem;margin-bottom:0.5rem;">Items</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>SKU</th><th>Name</th><th>Qty</th><th>Unit Price</th><th>Subtotal</th></tr></thead>
+      <tbody>
+        {% for item in order["items"] %}
+        <tr><td>{{ item.sku }}</td><td>{{ item.product_name or item.name or '—' }}</td><td>{{ item.quantity }}</td><td>{{ item.unit_price or item.price or '0.00' }}</td><td>{{ item.subtotal or '—' }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if order.status_history %}
+<div class="card"><h3 style="font-size:0.95rem;margin-bottom:0.5rem;">Status History</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>From</th><th>To</th><th>Timestamp</th></tr></thead>
+      <tbody>
+        {% for h in order.status_history %}
+        <tr><td>{{ h.from_status or '—' }}</td><td>{{ h.to_status }}</td><td>{{ h.timestamp or '—' }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
