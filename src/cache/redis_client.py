@@ -1,12 +1,11 @@
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 import redis.asyncio as aioredis
 from redis.exceptions import ConnectionError, TimeoutError
 
 from src.config import settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +55,7 @@ class RedisClient:
     def client(self) -> aioredis.Redis:
         """Get the Redis client instance."""
         if not self._initialized or self._pool.is_closed():
-            raise RuntimeError(
-                "Redis client is not initialized. Call initialize() first."
-            )
+            raise RuntimeError("Redis client is not initialized. Call initialize() first.")
         return self._pool
 
 

@@ -1,5 +1,4 @@
 import logging
-from typing import Any, Dict, Optional
 
 from celery import Task as CeleryTask
 from sqlalchemy.exc import SQLAlchemyError

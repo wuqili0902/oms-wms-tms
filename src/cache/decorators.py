@@ -1,17 +1,14 @@
 import hashlib
 import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, Dict, Optional
 
-import redis.asyncio as aioredis
-from redis.exceptions import ConnectionError, TimeoutError
+from redis.exceptions import ConnectionError
 
 from src.cache.redis_client import get_redis
 
 
-def cached(
-    ttl: int = 300, prefix: str = "cache"
-) -> Callable[Callable, Callable]:
+def cached(ttl: int = 300, prefix: str = "cache"):
     """Cache decorator that stores function results in Redis.
 
     Args:
@@ -39,9 +36,7 @@ def cached(
                     result = await func(*args, **kwargs)
 
                     # Store result in cache
-                    await redis.setex(
-                        key, ttl, str(result).encode("utf-8"), ex="nx"
-                    )
+                    await redis.setex(key, ttl, str(result).encode("utf-8"), ex="nx")
                     return result
             except (ConnectionError, Timeout):
                 logger.error("Redis connection error in cached decorator")
@@ -52,7 +47,7 @@ def cached(
     return decorator
 
 
-def rate_limit(max_calls: int = 10, window: int = 60) -> Callable[Callable, Callable]:
+def rate_limit(max_calls: int = 10, window: int = 60):
     """Rate limit decorator using Redis sliding window.
 
     Args:
@@ -101,9 +96,7 @@ def rate_limit(max_calls: int = 10, window: int = 60) -> Callable[Callable, Call
     return decorator
 
 
-def distributed_lock(
-    key: str, timeout: int = 10
-) -> Callable[Callable, Callable]:
+def distributed_lock(key: str, timeout: int = 10):
     """Distributed lock decorator using Redis SETNX.
 
     Args:
@@ -145,9 +138,7 @@ def distributed_lock(
     return decorator
 
 
-def _generate_cache_key(
-    prefix: str, func_name: str, args: tuple, kwargs: dict
-) -> str:
+def _generate_cache_key(prefix: str, func_name: str, args: tuple, kwargs: dict) -> str:
     """Generate a cache key from function name and arguments.
 
     Args:

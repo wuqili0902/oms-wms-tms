@@ -5,10 +5,10 @@ to limit the number of requests per user or IP address within a specified time w
 """
 
 import functools
-from typing import Any, Callable, Optional
+from collections.abc import Callable
 
 import aioredis
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
 from starlette.responses import JSONResponse
 
 from src.config import settings
@@ -26,9 +26,9 @@ class RateLimiter:
         client (Optional[aioredis.Redis]): Redis client connection
     """
 
-    def __init__(self, redis_url: Optional[str] = None) -> None:
+    def __init__(self, redis_url: str | None = None) -> None:
         self.redis_url = redis_url or settings.redis_url
-        self.client: Optional[aioredis.Redis] = None
+        self.client: aioredis.Redis | None = None
         self._connected = False
 
     async def connect(self) -> bool:
@@ -76,24 +76,24 @@ class RateLimiter:
         try:
             bucket_key = f"rate_limit:{key}"
             current_time = await self.client.time()
-            
+
             # Use ZRANGE to get tokens in the current window
             start_window = int(current_time) - window
             end_window = int(current_time)
-            
+
             # Add token for this request and check count
             pipe = self.client.pipeline()
             pipe.zadd(bucket_key, "1", f"{start_window}:{end_window}")
             pipe.zrange(bucket_key, start_window, end_window)
             results = await pipe.execute()
-            
+
             if isinstance(results[0], int):
                 # If we got a count, check against limit
                 return results[0] <= requests
             else:
                 # Redis returned an error or unexpected response - allow request
                 return True
-                
+
         except Exception as e:
             print(f"Error checking rate limit: {e}")
             # Graceful degradation on errors
@@ -114,13 +114,13 @@ class RateLimiter:
         try:
             bucket_key = f"rate_limit:{key}"
             current_time = await self.client.time()
-            
+
             # Get tokens in the window
             start_window = int(current_time) - 60
             end_window = int(current_time)
-            
+
             count = await self.client.zrange(bucket_key, start_window, end_window)
-            
+
             if isinstance(count, int):
                 return {
                     "X-Rate-Limit": "100",
@@ -142,7 +142,7 @@ rate_limiter = RateLimiter()
 def rate_limit(
     requests: int = 100,
     window: int = 60,
-    key_func: Optional[Callable] = None,
+    key_func: Callable | None = None,
 ) -> Callable:
     """Decorator to apply rate limiting to API endpoints.
 
@@ -155,6 +155,7 @@ def rate_limit(
     Returns:
         Callable: Decorator function that applies rate limiting
     """
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         async def wrapper(request: Request, *args, **kwargs):
@@ -168,7 +169,7 @@ def rate_limit(
 
             # Check rate limit
             allowed = await rate_limiter.check_rate_limit(key, requests, window)
-            
+
             if not allowed:
                 raise HTTPException(
                     status_code=429,
@@ -181,7 +182,7 @@ def rate_limit(
 
             # Call the original function
             result = await func(request, *args, **kwargs)
-            
+
             # Add rate limit headers to response if it's a JSONResponse
             if isinstance(result, JSONResponse):
                 headers = dict(result.headers)

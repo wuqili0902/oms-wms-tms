@@ -1,6 +1,6 @@
 from celery import Celery
-from src.config import settings
 
+from src.config import settings
 
 # Create Celery application instance with Redis broker
 app = Celery(

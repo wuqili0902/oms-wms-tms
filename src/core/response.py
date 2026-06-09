@@ -4,7 +4,7 @@ This module provides classes and functions to ensure consistent JSON response st
 across all API endpoints. This helps with client-side parsing and error handling.
 """
 
-from typing import Any, Optional, List, Dict
+from typing import Any
 
 from fastapi.responses import JSONResponse
 
@@ -30,15 +30,15 @@ class ApiResponse:
     def __init__(
         self,
         data: Any = None,
-        message: Optional[str] = None,
-        meta: Optional[Dict] = None,
+        message: str | None = None,
+        meta: dict | None = None,
     ) -> None:
         self.success = True
         self.data = data
         self.message = message
         self.meta = meta
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert the response to a dictionary for JSON serialization."""
         result = {
             "success": self.success,
@@ -57,8 +57,8 @@ class ApiResponse:
 
 def success_response(
     data: Any = None,
-    message: Optional[str] = None,
-    meta: Optional[Dict] = None,
+    message: str | None = None,
+    meta: dict | None = None,
 ) -> ApiResponse:
     """Create a successful API response.
 
@@ -77,7 +77,7 @@ def error_response(
     status_code: int = 400,
     code: str = "ERROR",
     message: str = "An error occurred",
-    errors: Optional[List[Dict]] = None,
+    errors: list[dict] | None = None,
 ) -> JSONResponse:
     """Create an error API response with a consistent format.
 
@@ -117,7 +117,7 @@ def error_response(
 
 
 def paginated_response(
-    data: List[Any],
+    data: list[Any],
     total_count: int,
     page: int = 1,
     per_page: int = 20,
@@ -148,8 +148,8 @@ def paginated_response(
 
 
 def list_response(
-    data: List[Any],
-    message: Optional[str] = None,
+    data: list[Any],
+    message: str | None = None,
 ) -> ApiResponse:
     """Create a response for listing resources.
 
@@ -165,7 +165,7 @@ def list_response(
 
 def detail_response(
     data: Any,
-    message: Optional[str] = None,
+    message: str | None = None,
 ) -> ApiResponse:
     """Create a response for a single resource detail.
 
@@ -195,7 +195,7 @@ def delete_response(
 
 def create_response(
     data: Any,
-    message: Optional[str] = None,
+    message: str | None = None,
 ) -> ApiResponse:
     """Create a response for creation operations.
 
@@ -211,7 +211,7 @@ def create_response(
 
 def update_response(
     data: Any,
-    message: Optional[str] = None,
+    message: str | None = None,
 ) -> ApiResponse:
     """Create a response for update operations.
 
@@ -226,7 +226,7 @@ def update_response(
 
 
 def validate_error_response(
-    errors: List[Dict],
+    errors: list[dict],
     status_code: int = 422,
 ) -> JSONResponse:
     """Create a validation error response.

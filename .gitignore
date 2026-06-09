@@ -54,6 +54,10 @@ dmypy.json
 # Ruff
 .ruff_cache/
 
+# Debug scripts
+__debug_*.py
+debug_*.py
+
 # OS
 Thumbs.db
 Desktop.ini

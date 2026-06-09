@@ -4,8 +4,7 @@ This module provides a hierarchy of custom exceptions that can be raised through
 the application to provide consistent error responses across all endpoints.
 """
 
-from http import HTTPStatus
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import status
 
@@ -28,7 +27,7 @@ class AppException(Exception):
         code: str = "APP_ERROR",
         status_code: int = 500,
         message: str = "An application error occurred",
-        detail: Optional[Any] = None,
+        detail: Any | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -50,7 +49,7 @@ class NotFoundException(AppException):
     def __init__(
         self,
         message: str = "Resource not found",
-        detail: Optional[Any] = None,
+        detail: Any | None = None,
     ) -> None:
         super().__init__(
             code="NOT_FOUND",
@@ -70,11 +69,11 @@ class ValidationException(AppException):
     def __init__(
         self,
         message: str = "Validation failed",
-        detail: Optional[Any] = None,
+        detail: Any | None = None,
     ) -> None:
         super().__init__(
             code="VALIDATION_ERROR",
-            status_code=status.HTTP_422_UNVALID_REQUEST,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             message=message,
             detail=detail,
         )
@@ -90,7 +89,7 @@ class AuthException(AppException):
     def __init__(
         self,
         message: str = "Authentication failed",
-        detail: Optional[Any] = None,
+        detail: Any | None = None,
     ) -> None:
         super().__init__(
             code="AUTH_FAILED",
@@ -110,7 +109,7 @@ class PermissionDeniedException(AppException):
     def __init__(
         self,
         message: str = "Permission denied",
-        detail: Optional[Any] = None,
+        detail: Any | None = None,
     ) -> None:
         super().__init__(
             code="PERMISSION_DENIED",
@@ -130,7 +129,7 @@ class RateLimitException(AppException):
     def __init__(
         self,
         message: str = "Rate limit exceeded",
-        detail: Optional[Any] = None,
+        detail: Any | None = None,
     ) -> None:
         super().__init__(
             code="RATE_LIMIT_EXCEEDED",
