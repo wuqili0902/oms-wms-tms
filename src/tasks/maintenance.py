@@ -3,7 +3,9 @@
 Handles periodic cleanup, health checks, and data pruning operations
 that keep the system running smoothly.
 """
+import json
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select, text
@@ -113,35 +115,61 @@ async def health_check(self):
 async def daily_aggregation(self):
     """Daily aggregation task — compute order/inventory stats.
 
-    Placeholder for business intelligence / reporting aggregation.
-    In production, this would compute daily KPIs and write to a
-    reporting table or external analytics system.
+    Writes daily KPI summary to logs/storage for reporting.
     """
     session = _get_async_session()
     try:
-        today = datetime.now(UTC).date()
-        start = datetime(today.year, today.month, today.day, tzinfo=UTC)
-
+        from datetime import datetime, timezone
         from sqlalchemy import func
 
-        from src.oms.models import Order
+        from src.oms.models import Order, OrderStatus
+        from src.wms.models import Inventory
 
-        total_result = await session.execute(
-            select(func.count()).select_from(Order)
-        )
+        today = datetime.now(timezone.utc).date()
+        start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+
+        # Total orders
+        total_result = await session.execute(select(func.count()).select_from(Order))
         total = total_result.scalar() or 0
 
+        # Orders today
         today_result = await session.execute(
             select(func.count()).select_from(Order).where(Order.created_at >= start)
         )
         today_count = today_result.scalar() or 0
 
+        # Orders by status
+        status_counts = {}
+        for status in OrderStatus:
+            count_result = await session.execute(
+                select(func.count()).select_from(Order).where(Order.status == status)
+            )
+            status_counts[status.value] = count_result.scalar() or 0
+
+        # Total inventory items
+        inv_result = await session.execute(select(func.count()).select_from(Inventory))
+        inv_count = inv_result.scalar() or 0
+
         stats = {
             "date": today.isoformat(),
             "total_orders": total,
             "orders_today": today_count,
+            "orders_by_status": status_counts,
+            "total_inventory_items": inv_count,
         }
-        logger.info("Daily aggregation: %s", stats)
+
+        # Persist to JSON log for external ingestion
+        import json
+        import os
+
+        log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        daily_file = os.path.join(log_dir, f"daily_stats_{today.isoformat()}.json")
+        with open(daily_file, "w") as f:
+            json.dump(stats, f, indent=2)
+
+        logger.info("Daily aggregation written: %s — %d orders, %d inventory items",
+                     today.isoformat(), total, inv_count)
         return stats
     finally:
         await session.close()

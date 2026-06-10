@@ -13,6 +13,8 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from src.core.security import decode_token
+
 # Configure structured logging for middleware
 logger = logging.getLogger("middleware")
 
@@ -101,13 +103,13 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         await self.app(scope, receive, send)
 
     async def _get_user_id(self, request: Request) -> str:
-        """Extract user ID from the request. This is a placeholder implementation."""
-        # TODO: Implement actual authentication extraction logic
+        """Extract user identity from JWT in Authorization header."""
         auth_header = request.headers.get("authorization")
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header[7:]
-            # In real implementation, decode JWT or validate session
-            return f"token:{len(token)}chars"  # Placeholder
+            payload = decode_token(token)
+            if payload and "sub" in payload:
+                return payload["sub"]
         return "anonymous"
 
     async def _extract_request_body(self, request: Request, receive: Receive) -> Any | None:
