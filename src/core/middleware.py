@@ -27,11 +27,9 @@ class TraceContext:
     so downstream services or loggers can reconstruct the distributed trace.
     """
 
-    # BaseHTTPMiddleware(BaseMiddleware) no longer takes an argument; set self.app directly.
-
     def __init__(self, app: ASGIApp | None = None) -> None:
-        if app is not None and hasattr(self, "app") == False:
-            self.app = app
+        super().__init__()
+        self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         request = Request(scope, receive)
@@ -42,9 +40,13 @@ class TraceContext:
         scope["trace_id"] = trace_id[-32:] if len(trace_id) >= 32 else "0" * 32
         scope["span_id"] = span_id[:16] if len(span_id) <= 16 else "0" * 16
 
-        # Enrich logging with trace info
-        old_factory = logger.factory if hasattr(logger, "factory") else None
-        enriched_logger = logger.bind(trace_id=scope.get("trace_id", "unknown"), span_id=span_id[:8] or "")
+        # Enrich logging with trace info — logger.bind() is deprecated; use dict-based binding.
+        bound_logger = logger.copy()
+        enriched_logger = logger.bind_factory(lambda **kwargs: bound_logger.bind(**kwargs))
+        try:
+            scope["enriched_logger"] = enriched_logger.bind(trace_id=scope.get("trace_id", "unknown"), span_id=span_id[:8] or "")
+        except AttributeError:
+            pass  # bind() not available on this logger
 
         async def wrapped_send(message: dict) -> None:
             if message["type"] == "http.response.start":
@@ -63,11 +65,9 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
     if not present, and forwards it to downstream services or logs.
     """
 
-    # BaseHTTPMiddleware(BaseMiddleware) no longer takes an argument; set self.app directly.
-
     def __init__(self, app: ASGIApp | None = None) -> None:
-        if app is not None and hasattr(self, "app") == False:
-            self.app = app
+        super().__init__()
+        self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         request = Request(scope, receive)
@@ -94,11 +94,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     Logs include: method, path, status_code, duration_ms, request_id, client_ip
     """
 
-    # BaseHTTPMiddleware(BaseMiddleware) no longer takes an argument; set self.app directly.
-
     def __init__(self, app: ASGIApp | None = None) -> None:
-        if app is not None and hasattr(self, "app") == False:
-            self.app = app
+        super().__init__()
+        self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         start_time = datetime.now()
@@ -125,11 +123,9 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
     This is useful for auditing and tracking changes made through the API.
     """
 
-    # BaseHTTPMiddleware(BaseMiddleware) no longer takes an argument; set self.app directly.
-
     def __init__(self, app: ASGIApp | None = None) -> None:
-        if app is not None and hasattr(self, "app") == False:
-            self.app = app
+        super().__init__()
+        self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         request = Request(scope, receive)
@@ -173,3 +169,7 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 return str(body)[:500]  # Truncate large bodies
         except Exception:
             return "unable to parse request body"
+
+
+__all__ = ["TraceContext", "RequestIDMiddleware", "RequestLoggingMiddleware",
+            "AuditLogMiddleware"]
