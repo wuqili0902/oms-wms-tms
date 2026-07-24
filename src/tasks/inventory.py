@@ -1,105 +1,88 @@
-"""Celery tasks for WMS inventory operations.
-
-Handles inventory synchronization, stock level alerts, and batch
-inventory adjustments that should run asynchronously.
-"""
-import logging
+"""Inventory-related background tasks."""
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from src.celery_app import app
-from src.config import settings
-from src.oms.models import Order, OrderStatus
-from src.tasks.base import BaseTask
-from src.wms.models import Inventory, StockMovement, StockMovementType
-
-logger = logging.getLogger(__name__)
+from src.celery_app import celery
+from src.core.database import async_session_factory
+from src.tms.models import SyncLog, SyncLogStatus, SyncLogType
+from src.wms.models import Inventory as WMS_Inventory
 
 
-def _get_async_session() -> AsyncSession:
-    engine = create_async_engine(settings.database_url, echo=False)
-    return AsyncSession(engine)
+@celery.task(bind=True, name="tasks.inventory.sync")
+async def sync_inventory(self) -> dict:
+    """Periodically scan inventory and create diff records."""
+    from datetime import UTC, datetime
 
-
-@app.task(base=BaseTask, bind=True, max_retries=2)
-async def check_low_stock_alerts(self):
-    """Check inventory levels and log alerts for low-stock items.
-
-    Runs periodically (e.g., every 6 hours). In production, this would
-    send notifications via email/SMS/push.
-    """
-    session = _get_async_session()
-    try:
-        result = await session.execute(select(Inventory))
+    async with async_session_factory() as session:
+        result = await session.execute(select(WMS_Inventory))
         items = result.scalars().all()
-
-        low_stock = []
-        for inv in items:
-            available = float(inv.quantity or 0) - float(inv.locked_qty or 0)
-            if available <= 0:
-                low_stock.append({
-                    "warehouse_id": str(inv.warehouse_id),
-                    "location_id": str(inv.location_id) if inv.location_id else "",
-                    "sku_id": str(inv.sku_id),
-                    "available": available,
-                })
-
-        if low_stock:
-            logger.warning(
-                "Low stock alert: %d items at or below zero available quantity",
-                len(low_stock),
-            )
-        return {"low_stock_items": len(low_stock), "items": low_stock}
-    finally:
-        await session.close()
-
-
-@app.task(base=BaseTask, bind=True)
-async def release_locked_inventory_for_cancelled_orders(self):
-    """Release locked inventory when orders are cancelled.
-
-    When an order is cancelled, any reserved/locked inventory should be
-    released back to available stock.
-    """
-    session = _get_async_session()
-    try:
-        result = await session.execute(
-            select(Order).where(Order.status == OrderStatus.CANCELLED)
-        )
-        cancelled = result.scalars().all()
-
-        released = 0
-        for order in cancelled:
-            # Find stock movements related to this order and release them
-            movements = await session.execute(
-                select(StockMovement).where(
-                    StockMovement.reference_id == str(order.id),
-                    StockMovement.reference_type == "order",
+        count = len(items)
+        for item in items:
+            try:
+                log = SyncLog(
+                    id=self.request.id, device_id=item.warehouse_id,
+                    sync_type=SyncLogType.UPLOAD, status=SyncLogStatus.COMPLETED,
+                    records_count=count, started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
                 )
-            )
-            for move in movements.scalars().all():
-                if hasattr(move, 'quantity') and float(move.quantity) < 0:
-                    # Negative quantity = reservation, reverse it
-                    reverse = StockMovement(
-                        warehouse_id=move.warehouse_id,
-                        location_id=move.location_id,
-                        sku_id=move.sku_id,
-                        movement_type=StockMovementType.ADJUSTMENT,
-                        quantity=abs(float(move.quantity)),
-                        reference_type="order_cancel",
-                        reference_id=str(order.id),
-                        remark=f"Released from cancelled order {order.order_no}",
-                    )
-                    session.add(reverse)
-                    released += 1
+            except Exception:
+                log = SyncLog(id=self.request.id, device_id=None, sync_type=SyncLogType.DOWNLOAD,
+                              status=SyncLogStatus.FAILED, error_message=str(self))
+        await session.commit()
 
-        if released:
-            await session.commit()
-            logger.info("Released %d inventory reservations from cancelled orders", released)
-        return {"released_items": released}
-    except Exception:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()
+    return {"inventory_count": count, "message": "Inventory sync complete"}
+
+
+@celery.task(bind=True, name="tasks.inventory.snapshot")
+async def snapshot_inventory(self) -> dict:
+    """Create a daily inventory snapshot."""
+    from datetime import UTC, datetime
+
+    async with async_session_factory() as session:
+        result = await session.execute(select(WMS_Inventory))
+        items = result.scalars().all()
+        return {"snapshot_count": len(items), "timestamp": datetime.now(UTC).isoformat()}
+
+
+@celery.task(bind=True, name="tasks.order.cancel_expired")
+async def cancel_expired_orders(self) -> int:
+    """Cancel orders that have been pending too long."""
+    from src.oms.models import Order as _Order, OrderStatus as _OS
+
+    async with async_session_factory() as session:
+        result = await session.execute(select(_Order).where(_Order.status == _OS.PENDING))
+        old_orders = [o for o in result.scalars().all() if (datetime.now(UTC) - o.created_at).days > 7]
+
+        count = 0
+        for order in old_orders:
+            try:
+                order.status = _OS.CANCELLED
+                count += 1
+            except Exception:
+                pass
+
+        await session.commit()
+    return {"cancelled_count": count}
+
+
+@celery.task(bind=True, name="tasks.order.process_pending")
+async def process_pending_orders(self) -> dict:
+    """Auto-confirm pending orders after a grace period."""
+    from datetime import UTC, datetime
+
+    async with async_session_factory() as session:
+        result = await session.execute(select(_Order).where(
+            _Order.status == _OS.PENDING))
+        ready = [o for o in result.scalars().all() if (datetime.now(UTC) - o.created_at).days >= 1]
+
+        count = 0
+        for order in ready:
+            try:
+                order.status = _OS.CONFIRMED
+                count += 1
+            except Exception:
+                pass
+
+        await session.commit()
+    return {"processed_count": count}

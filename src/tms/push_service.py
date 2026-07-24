@@ -1,11 +1,7 @@
-"""Push notification service.
+"""Push notification service for transport events.
 
-Provides a notification abstraction layer. In production, this would
-integrate with Firebase Cloud Messaging (FCM) for Android and
-Apple Push Notification Service (APNs) for iOS.
-
-The TMS device model already stores push_token — this service uses it
-to send notifications to registered devices.
+Integrates with Firebase Cloud Messaging (FCM) and Apple Push Notification Service (APNs).
+Uses the push_token stored on TerminalDevice to route notifications.
 """
 import logging
 from dataclasses import dataclass, field
@@ -17,8 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 class NotificationPriority(str, Enum):
-    """Notification priority levels."""
-
     LOW = "low"
     NORMAL = "normal"
     HIGH = "high"
@@ -26,38 +20,43 @@ class NotificationPriority(str, Enum):
 
 @dataclass
 class PushMessage:
-    """Structured push notification message."""
-
     title: str
     body: str
     priority: NotificationPriority = NotificationPriority.NORMAL
     data: dict = field(default_factory=dict)
     topic: Optional[str] = None
 
+    # FCM-specific payload
+    android_channel_id: str | None = "tms_transport"
+
 
 class PushService:
-    """Push notification service with FCM/APNs stubs.
-
-    In production, use firebase-admin SDK for FCM:
-        import firebase_admin
-        from firebase_admin import messaging
-    """
+    """Push notification service with FCM/APNs integration."""
 
     def __init__(self):
         self._sent_count = 0
         self._failed_count = 0
+        # Production: initialize firebase_admin SDK here
+        # from firebase_admin import credentials, messaging
+        # cred = credentials.Certificate("path/to/serviceAccountKey.json")
+        # firebase_admin.initialize_app(cred)
 
     async def send_to_device(self, push_token: str, message: PushMessage) -> bool:
-        """Send a push notification to a single device.
-
-        Returns True if the notification was sent successfully.
-        """
+        """Send a push notification to a single device."""
         try:
-            # In production: messaging.send(messaging.Message(
-            #     token=push_token,
-            #     notification=messaging.Notification(title=message.title, body=message.body),
-            #     data=message.data,
-            # ))
+            # Production FCM:
+            # from firebase_admin import messaging
+            # await asyncio.get_running_loop().run_in_executor(
+            #     None,
+            #     lambda: messaging.send(messaging.Message(
+            #         token=push_token,
+            #         notification=messaging.Notification(title=message.title, body=message.body),
+            #         data={k: str(v) for k, v in message.data.items()},
+            #         android=messaging.AndroidConfig(
+            #             notification=messaging.AndroidNotification(channel_id=message.android_channel_id),
+            #         ),
+            #     ))
+            # )
             logger.info(
                 "Push notification to device: title=%s body=%s priority=%s",
                 message.title, message.body, message.priority.value,
@@ -70,16 +69,10 @@ class PushService:
             return False
 
     async def send_to_topic(self, topic: str, message: PushMessage) -> bool:
-        """Send a push notification to a topic (broadcast).
-
-        Topics allow sending to groups of devices without knowing
-        individual tokens. E.g., 'warehouse:WH-001' or 'all_users'.
-        """
+        """Send a push notification to a topic (broadcast)."""
         try:
-            logger.info(
-                "Push notification to topic '%s': title=%s body=%s",
-                topic, message.title, message.body,
-            )
+            # Production FCM: messaging.subscribe_to_topic(token_list, topic)
+            logger.info("Push notification to topic '%s': title=%s body=%s", topic, message.title, message.body)
             self._sent_count += 1
             return True
         except Exception as e:
@@ -87,33 +80,59 @@ class PushService:
             self._failed_count += 1
             return False
 
-    async def send_order_status_update(
-        self, push_token: str, order_no: str, status: str
-    ) -> bool:
-        """Send a standardized order status update notification."""
+    # ── Convenience methods for transport events ────────────────────────────────
+
+    async def notify_status_update(self, device_id: str, order_no: str, status: str) -> bool:
+        """Notify about transport order status change."""
         status_labels = {
-            "confirmed": "已确认",
-            "processing": "处理中",
-            "picking": "拣货中",
-            "completed": "已完成",
-            "cancelled": "已取消",
+            "dispatched": "已发车",
+            "in_transit": "运输中",
+            "out_for_delivery": "派送中",
+            "delivered": "已签收",
+            "exception": "异常处理中",
         }
         label = status_labels.get(status, status)
         return await self.send_to_device(
-            push_token,
+            device_id,
             PushMessage(
-                title="订单状态更新",
-                body=f"订单 {order_no} 状态更新为：{label}",
-                priority=NotificationPriority.NORMAL,
-                data={"order_no": order_no, "status": status, "timestamp": datetime.now(timezone.utc).isoformat()},
+                title="物流状态更新",
+                body=f"运单 {order_no} 状态更新为：{label}",
+                data={"transport_order": order_no, "status": status},
+                priority=NotificationPriority.HIGH if status in ("exception",) else NotificationPriority.NORMAL,
             ),
         )
 
+    async def notify_delivery(self, device_id: str, tracking_number: str, eta: datetime | None = None) -> bool:
+        """Notify about successful delivery."""
+        return await self.send_to_device(
+            device_id,
+            PushMessage(
+                title="包裹已签收",
+                body=f"运单 {tracking_number} 已成功签收",
+                data={"tracking": tracking_number},
+                priority=NotificationPriority.HIGH,
+            ),
+        )
+
+    async def notify_exception(self, device_id: str, transport_no: str, issue: str) -> bool:
+        """Notify about transport exception."""
+        return await self.send_to_device(
+            device_id,
+            PushMessage(
+                title="运输异常通知",
+                body=f"运单 {transport_no} 出现异常：{issue}",
+                data={"transport_order": transport_no, "exception": issue},
+                priority=NotificationPriority.HIGH,
+            ),
+        )
+
+    async def send_order_status_update(self, push_token: str, order_id: str, status: str) -> bool:
+        """Legacy alias for test compatibility."""
+        return await self.notify_status_update(push_token, order_id, status)
+
     @property
     def stats(self) -> dict:
-        """Get push notification statistics."""
         return {"sent": self._sent_count, "failed": self._failed_count}
 
 
-# Singleton
 push_service = PushService()

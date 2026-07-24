@@ -43,5 +43,15 @@ class Settings(BaseSettings):
     log_level: str = "info"
     log_format: str = "json"
 
+    # Sentry (error capture & alerting)
+    sentry_dsn: str | None = None
+    environment: str = "development"
+
+    # OpenTelemetry OTLP endpoint
+    otlp_endpoint: str | None = None  # defaults to http://localhost:4318/v1/traces in tracing.py
+
+    # PDA Offline mode (SQLite local DB path)
+    pda_local_db_path: str = "wms_pda.db"  # relative to CWD or absolute path
+
 
 settings = Settings()

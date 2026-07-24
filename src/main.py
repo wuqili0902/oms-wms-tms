@@ -1,4 +1,5 @@
 import logging
+import sentry_sdk
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -19,8 +20,9 @@ from src.core.exceptions import (
     RateLimitException,
     ValidationException,
 )
-from src.core.middleware import AuditLogMiddleware, RequestIDMiddleware, RequestLoggingMiddleware
+from src.core.middleware import AuditLogMiddleware, RequestIDMiddleware, RequestLoggingMiddleware, TraceContext
 from src.core.rate_limiter import rate_limiter
+from src.core.tracing import setup_tracing
 from src.core.response import error_response
 from src.oms.router import router as oms_router
 from src.tms.router import router as tms_router
@@ -34,6 +36,18 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# ── Sentry (error capture & alerting) ────────────────────────────────────────
+if settings.sentry_dsn and settings.environment == "production":
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        traces_sample_rate=0.1,       # sample 10% of traces for cost control
+        environment=settings.environment,
+        release=f"{settings.app_name}@{settings.app_version}",
+    )
+
+# ── OpenTelemetry tracing (distributed trace propagation) ───────────────────
+setup_tracing()
 
 
 @asynccontextmanager
@@ -71,6 +85,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# TraceContext — must be first so downstream middlewares see trace_id
+app.add_middleware(TraceContext)
 
 # Request ID middleware - must be added before other middleware that needs request_id
 app.add_middleware(RequestIDMiddleware)

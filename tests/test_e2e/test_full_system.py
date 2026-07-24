@@ -362,7 +362,7 @@ class TestTms:
             f"{P}/devices/{dev_id}/sessions/{sess_id}", headers=auth_header,
         )
         assert r.status_code == 200
-        assert r.json()["session"]["logout_at"] is not None
+        assert r.json()["logout_at"] is not None
 
         # ── Record sync ──────────────────────────────────────────────────
         r = await async_client.post(

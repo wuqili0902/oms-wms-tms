@@ -1,0 +1,19 @@
+{% extends "admin/base.html" %}
+{% block title %}Transport Orders{% endblock %}
+{% block content %}
+<h2>Transport Orders</h2>
+<table class="table">
+  <thead><tr><th>No.</th><th>Status</th><th>Carrier</th><th>Pickup</th><th>Delivery</th></tr></thead>
+  <tbody>
+    {% for order in transport_orders %}
+    <tr>
+      <td>{{ order.transport_no }}</td>
+      <td>{{ order.status }}</td>
+      <td>{{ order.carrier_code }}</td>
+      <td>{{ order.pickup_address.city if order.pickup_address else '' }}</td>
+      <td>{{ order.delivery_address.city if order.delivery_address else '' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "admin/base.html" %}
+{% block title %}Demand Forecast{% endblock %}
+{% block content %}
+<h2>Demand Forecast</h2>
+
+<form method="get" style="display:flex;gap:0.5rem;margin-bottom:1rem;">
+  <input name="origin_city" value="{{ origin_city or '' }}" placeholder="Origin City"/>
+  <input name="destination_city" value="{{ destination_city or '' }}" placeholder="Dest City"/>
+  <select name="days"><option>7</option><option selected>7</option></select>
+  <button class="btn btn-primary">Forecast</button>
+</form>
+
+<table class="table">
+  <thead><tr><th>Date</th><th>Predicted</th><th>Lower</th><th>Upper</th></tr></thead>
+  <tbody>
+    {% for p in points %}
+    <tr><td>{{ p.date }}</td><td>{{ p.predicted_orders|round(1) }}</td>
+        <td>{{ p.confidence_lower|default('') }}</td><td>{{ p.confidence_upper|default('') }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

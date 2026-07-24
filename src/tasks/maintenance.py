@@ -96,7 +96,7 @@ async def health_check(self):
 
     # Check Redis
     try:
-        import aioredis
+        import redis.asyncio as aioredis
 
         client = aioredis.from_url(settings.redis_url)
         await client.ping()

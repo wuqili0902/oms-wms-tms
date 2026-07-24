@@ -109,8 +109,17 @@
       <a href="/admin/templates" class="{% if active == 'templates' %}active{% endif %}">
         <span class="nav-icon">🏷️</span><span>Labels</span>
       </a>
-      <a href="/admin/devices" class="{% if active == 'devices' %}active{% endif %}">
-        <span class="nav-icon">📱</span><span>Devices</span>
+      <a href="/admin/transport-orders" class="{% if active in ('transport_orders', 'route_plans') %}active{% endif %}">
+        <span class="nav-icon">🚛</span><span>Transport Orders</span>
+      </a>
+      <a href="/admin/route-plans" class="{% if active == 'route_plans' %}active{% endif %}">
+        <span class="nav-icon">🗺️</span><span>Route Plans</span>
+      </a>
+      <a href="/admin/returns" class="{% if active in ('returns', 'exceptions') %}active{% endif %}">
+        <span class="nav-icon">↩️</span><span>Returns & Exceptions</span>
+      </a>
+      <a href="/ml/forecast" class="{% if active == 'ml_forecast' %}active{% endif %}">
+        <span class="nav-icon">📈</span><span>Demand Forecast</span>
       </a>
       <hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:0.5rem 0;">
       <a href="/docs" style="font-size:0.8rem;" target="_blank">

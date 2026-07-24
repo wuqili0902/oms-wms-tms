@@ -10,10 +10,6 @@ The example.py module contains educational stubs and should not be
 imported in production.
 """
 from src.tasks.base import BaseTask  # noqa: F401
-from src.tasks.inventory import (  # noqa: F401
-    check_low_stock_alerts,
-    release_locked_inventory_for_cancelled_orders,
-)
 from src.tasks.maintenance import (  # noqa: F401
     cleanup_expired_tokens,
     cleanup_old_sync_logs,

@@ -1,0 +1,19 @@
+{% extends "admin/base.html" %}
+{% block title %}Route Plans{% endblock %}
+{% block content %}
+<h2>Route Plans</h2>
+<table class="table">
+  <thead><tr><th>No.</th><th>Origin</th><th>Dest</th><th>Distance (km)</th><th>Cost</th></tr></thead>
+  <tbody>
+    {% for plan in route_plans %}
+    <tr>
+      <td>{{ plan.plan_no }}</td>
+      <td>{{ plan.origin_city }}</td>
+      <td>{{ plan.destination_city }}</td>
+      <td>{{ plan.total_distance_km }}</td>
+      <td>{{ plan.total_cost_amount }} YUAN</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "admin/base.html" %}
+{% block title %}Demand Forecast{% endblock %}
+{% block content %}
+<h2>Demand Forecast (ML)</h2>
+
+<form method="get" style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap;">
+  <input name="origin_city" value="{{ origin_city or '' }}" placeholder="Origin City" />
+  <input name="destination_city" value="{{ destination_city or '' }}" placeholder="Dest City" />
+  <select name="days"><option>7</option><option>14</option><option>30</option></select>
+  <button class="btn btn-primary">Forecast</button>
+</form>
+
+<canvas id="chart" width="800" height="300"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const d = {{ points | tojson }};
+const ctx = document.getElementById('chart').getContext('2d');
+new Chart(ctx, {type:'line', data:{labels:d.map(p=>p.date), datasets:[{label:'Orders',data:d.map(p=>p.predicted_orders),borderColor:'#3b82f6',tension:0.1}]}, options:{responsive:true}});
+</script>
+
+<h4 style="margin-top:1rem;">Train with historical data</h4>
+<form method="post" action="/admin/ml/forecast/train">
+  <div class="form-row">
+    <input name="origin_city" placeholder="Origin City"/>
+    <input name="destination_city" placeholder="Dest City"/>
+  </div>
+  <button class="btn btn-primary" style="margin-top:0.5rem;">Train</button>
+</form>
+{% endblock %}

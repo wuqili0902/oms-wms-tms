@@ -7,7 +7,7 @@ to limit the number of requests per user or IP address within a specified time w
 import functools
 from collections.abc import Callable
 
-import aioredis
+import redis.asyncio as aioredis
 from fastapi import HTTPException, Request
 from starlette.responses import JSONResponse
 

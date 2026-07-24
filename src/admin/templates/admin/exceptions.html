@@ -1,0 +1,18 @@
+{% extends "admin/base.html" %}
+{% block title %}Exceptions{% endblock %}
+{% block content %}
+<h2>Transport Exceptions</h2>
+<table class="table">
+  <thead><tr><th>No.</th><th>Status</th><th>Type</th><th>Severity</th></tr></thead>
+  <tbody>
+    {% for exc in exceptions %}
+    <tr>
+      <td>{{ exc.id }}</td>
+      <td>{{ exc.status }}</td>
+      <td>{{ exc.type }}</td>
+      <td>{{ exc.severity }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

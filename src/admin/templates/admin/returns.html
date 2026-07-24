@@ -1,0 +1,18 @@
+{% extends "admin/base.html" %}
+{% block title %}Returns{% endblock %}
+{% block content %}
+<h2>Returns & Refunds</h2>
+<table class="table">
+  <thead><tr><th>No.</th><th>Status</th><th>Reason</th><th>Refund</th></tr></thead>
+  <tbody>
+    {% for ret in return_orders %}
+    <tr>
+      <td>{{ ret.return_no }}</td>
+      <td>{{ ret.status }}</td>
+      <td>{{ ret.reason }}</td>
+      <td>{{ ret.refund_amount }} YUAN</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
