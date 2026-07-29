@@ -16,20 +16,22 @@ Typical flow:
 References:
     - Microservices Pattern – Outbox: https://microservices.io/patterns/data/Outbox.html
 """
-from datetime import UTC, datetime
-from decimal import Decimal
-from enum import Enum
-from typing import Any
 import uuid
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import DateTime, Index, String, Text, func
+from sqlalchemy import select as _select
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Mapped, mapped_column
+
 
 from src.models.base import Base
 
 
-class OutboxEventStatus(str, Enum):
+class OutboxEventStatus(StrEnum):
     """Outbox event lifecycle states."""
 
     PENDING = "pending"       # committed but not yet dispatched to MQ
@@ -118,43 +120,46 @@ class OutboxEvent(Base):
 
 # ── Service layer (append + dispatch) ────────────────────────────────────────
 
-from src.core.database import get_session  # circular but OK — lazy imported
-
 
 async def append_event(
+    db: AsyncSession,
     *,
     aggregate_type: str,
     aggregate_id: uuid.UUID,
     event_type: str,
     payload: dict[str, Any],
 ) -> OutboxEvent:
-    """Append an outbox event in the same DB transaction as business logic."""
-    async with get_session() as session:
-        event = OutboxEvent(
-            aggregate_type=aggregate_type,
-            aggregate_id=aggregate_id,
-            event_type=event_type,
-            payload=payload,
-        )
-        session.add(event)
-        await session.commit()
-        await session.refresh(event)
+    """Append an outbox event **within the caller's transaction**.
+
+    Call this in the same DB transaction as the business logic (e.g. inside
+    ``create_order``) so that the event is committed atomically with the
+    entity change.  Do **not** commit here — the caller owns the transaction.
+    """
+    event = OutboxEvent(
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        event_type=event_type,
+        payload=payload,
+    )
+    db.add(event)
+    await db.flush()
     return event
 
 
 async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
-    """Fetch pending events up to `batch_size` for Celery worker processing.
+    """Fetch pending events up to ``batch_size`` for Celery worker processing.
 
-    Returns the list of events that should be published to RabbitMQ.
-    The caller is responsible for calling `mark_dispatched()` after MQ publish succeeds.
+    Returns events that are due for dispatch.  The caller should publish
+    each event to RabbitMQ and then call ``mark_dispatched()`` on success
+    or ``mark_failed()`` on failure.
     """
-    from sqlalchemy import select
+    from src.core.database import get_session
+
     async with get_session() as session:
         stmt = (
-            select(OutboxEvent)
+            _select(OutboxEvent)
             .where(
                 OutboxEvent.status == OutboxEventStatus.PENDING.value,
-                # Only dispatch events that are due (scheduled_at is NULL or in the past)
                 (OutboxEvent.scheduled_at.is_(None)) | (OutboxEvent.scheduled_at <= func.now()),
             )
             .order_by(OutboxEvent.created_at)
@@ -166,7 +171,9 @@ async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
 
 
 async def mark_dispatched(event_ids: list[uuid.UUID]) -> int:
-    """Mark a batch of events as dispatched (published to MQ)."""
+    """Mark a batch of events as dispatched (successfully published to MQ)."""
+    from src.core.database import get_session
+
     async with get_session() as session:
         count = await session.execute(
             OutboxEvent.__table__.update()
@@ -183,13 +190,16 @@ async def mark_dispatched(event_ids: list[uuid.UUID]) -> int:
 async def mark_failed(event_id: uuid.UUID, error_message: str) -> None:
     """Mark an event as failed and schedule a retry after 60 seconds."""
     from datetime import timedelta
+
+    from src.core.database import get_session
+
     async with get_session() as session:
         await session.execute(
             OutboxEvent.__table__.update()
             .where(OutboxEvent.id == event_id)
             .values(
                 status=OutboxEventStatus.FAILED.value,
-                error_message=error_message[:500],  # cap length
+                error_message=error_message[:500],
                 retry_count=OutboxEvent.retry_count + 1,
                 scheduled_at=datetime.now(UTC) + timedelta(seconds=60),
             )

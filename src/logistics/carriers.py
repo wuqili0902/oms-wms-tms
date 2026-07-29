@@ -2,24 +2,31 @@
 
 Provides carrier abstraction, tracking query stubs, and waybill management
 for Chinese domestic carriers (ZTO, SF Express, YTO, STO, etc.).
+
+Configure carrier API endpoints via environment variable:
+  CARRIER_API_ENDPOINTS='{"sf":"https://api.sf-express.com/track","zto":"https://api.zto.com/track"}'
+
+Leave empty (default) to use mock data for demo/testing.
 """
 import hashlib
+import logging
 import uuid
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Optional
+from datetime import UTC, datetime
+from enum import StrEnum
+
+import httpx
+
+logger = logging.getLogger(__name__)
 
 
-class CarrierCode(str, Enum):
-    """Supported carrier codes."""
-
-    SF = "sf"           # 顺丰
-    ZTO = "zto"         # 中通
-    YTO = "yto"         # 圆通
-    STO = "sto"         # 申通
-    YUNDA = "yunda"     # 韵达
-    EMS = "ems"         # EMS
-    JD = "jd"           # 京东
+class CarrierCode(StrEnum):
+    SF = "sf"
+    ZTO = "zto"
+    YTO = "yto"
+    STO = "sto"
+    YUNDA = "yunda"
+    EMS = "ems"
+    JD = "jd"
 
 
 CARRIER_NAMES: dict[CarrierCode, str] = {
@@ -43,7 +50,16 @@ CARRIER_TRACKING_URLS: dict[CarrierCode, str] = {
 }
 
 
-class TrackingStatus(str, Enum):
+def _get_carrier_endpoints() -> dict[str, str]:
+    """Read carrier API endpoints from Settings (configurable via env var)."""
+    try:
+        from src.config import settings
+        return settings.carrier_api_endpoints_dict
+    except Exception:
+        return {}
+
+
+class TrackingStatus(StrEnum):
     """Standardized tracking statuses."""
 
     PENDING = "pending"
@@ -71,7 +87,7 @@ def generate_tracking_number(carrier: CarrierCode, order_id: str = "") -> str:
         CarrierCode.JD: "JD",
     }
     prefix = prefix_map.get(carrier, "XX")
-    today = datetime.now(timezone.utc).strftime("%y%m%d")
+    today = datetime.now(UTC).strftime("%y%m%d")
     # Use order_id hash for deterministic suffix
     if order_id:
         suffix = hashlib.md5(order_id.encode()).hexdigest()[:8].upper()
@@ -91,7 +107,7 @@ def get_tracking_url(carrier: CarrierCode, tracking_number: str) -> str:
     return f"{template}{tracking_number}"
 
 
-def validate_carrier(carrier: str) -> Optional[CarrierCode]:
+def validate_carrier(carrier: str) -> CarrierCode | None:
     """Validate and normalize a carrier code string. Returns None if invalid."""
     try:
         return CarrierCode(carrier.lower())
@@ -99,20 +115,84 @@ def validate_carrier(carrier: str) -> Optional[CarrierCode]:
         return None
 
 
-# ── Carrier API Stubs ──────────────────────────────────────────────────────
-# In production, these would call each carrier's REST/SOAP API.
-# The stubs return plausible mock data for testing and demo purposes.
+# ── Carrier API ─────────────────────────────────────────────────────────
+# Attempts real HTTP calls when carrier API endpoints are configured;
+# falls back to mock data for demo/testing when endpoints are empty.
 
 
 async def query_tracking(carrier: CarrierCode, tracking_number: str) -> dict:
     """Query tracking information for a waybill.
 
-    Returns a standardized tracking response. In production, this
-    would call the carrier's actual API and normalize the response.
+    When a carrier API endpoint is configured via CARRIER_API_ENDPOINTS env var,
+    makes an HTTP GET request. Otherwise returns mock data.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    endpoints = _get_carrier_endpoints()
+    api_url = endpoints.get(carrier.value, "")
 
-    # Simulate different statuses based on tracking number hash
+    if api_url:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(api_url, params={"tracking": tracking_number})
+                resp.raise_for_status()
+                data = resp.json()
+                return {
+                    "carrier": carrier.value,
+                    "carrier_name": CARRIER_NAMES.get(carrier, ""),
+                    "tracking_number": tracking_number,
+                    "status": data.get("status", "unknown"),
+                    "status_detail": data.get("detail", ""),
+                    "estimated_delivery": data.get("estimated_delivery", ""),
+                    "tracking_url": get_tracking_url(carrier, tracking_number),
+                    "events": data.get("events", []),
+                }
+        except Exception:
+            logger.warning("Carrier API %s unavailable, falling back to mock", api_url)
+
+    return _mock_tracking(carrier, tracking_number)
+
+
+async def estimate_shipping(
+    carrier: CarrierCode,
+    origin: str = "",
+    destination: str = "",
+    weight_kg: float = 1.0,
+) -> dict:
+    """Estimate shipping cost and delivery time.
+
+    When a carrier API endpoint is configured via CARRIER_API_ENDPOINTS env var,
+    makes an HTTP POST. Otherwise returns mock estimates.
+    """
+    endpoints = _get_carrier_endpoints()
+    api_url = endpoints.get(carrier.value, "")
+
+    if api_url:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    api_url,
+                    json={"origin": origin, "destination": destination, "weight_kg": weight_kg},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return {
+                    "carrier": carrier.value,
+                    "carrier_name": CARRIER_NAMES.get(carrier, ""),
+                    "estimated_cost_yuan": data.get("cost", 0),
+                    "estimated_days": data.get("days", 3),
+                    "weight_kg": weight_kg,
+                }
+        except Exception:
+            logger.warning("Carrier API %s unavailable, falling back to mock", api_url)
+
+    return _mock_estimate(carrier, weight_kg)
+
+
+# ── Mock fallbacks ────────────────────────────────────────────────────────────
+
+
+def _mock_tracking(carrier: CarrierCode, tracking_number: str) -> dict:
+    """Generate plausible mock tracking data."""
+    now = datetime.now(UTC).isoformat()
     hash_val = sum(ord(c) for c in tracking_number) % 100
 
     if hash_val < 20:
@@ -139,28 +219,14 @@ async def query_tracking(carrier: CarrierCode, tracking_number: str) -> dict:
         "status_detail": detail,
         "estimated_delivery": now[:10],
         "tracking_url": get_tracking_url(carrier, tracking_number),
-        "events": [
-            {
-                "time": now,
-                "location": "上海转运中心",
-                "description": detail,
-            }
-        ],
+        "events": [{"time": now, "location": "上海转运中心", "description": detail}],
     }
 
 
-async def estimate_shipping(
-    carrier: CarrierCode,
-    origin: str = "",
-    destination: str = "",
-    weight_kg: float = 1.0,
-) -> dict:
-    """Estimate shipping cost and delivery time.
-
-    Returns mock estimates. In production, calls carrier rate API.
-    """
+def _mock_estimate(carrier: CarrierCode, weight_kg: float) -> dict:
+    """Generate plausible mock shipping estimate."""
     base_rates = {
-        CarrierCode.SF: (18.0, 2),    # (base_cost, days)
+        CarrierCode.SF: (18.0, 2),
         CarrierCode.ZTO: (8.0, 3),
         CarrierCode.YTO: (8.0, 3),
         CarrierCode.STO: (8.0, 4),

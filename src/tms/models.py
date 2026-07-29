@@ -7,12 +7,11 @@ tracking, POD, and reverse logistics.
 
 from datetime import date, datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 from typing import Optional
 
 from sqlalchemy import (
     JSON,
-    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -28,10 +27,9 @@ from sqlalchemy.orm import relationship
 
 from src.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDMixin
 
-
 # ───────────── Carrier Enums ────────────────────────────────────────────────
 
-class CarrierCode(str, Enum):
+class CarrierCode(StrEnum):
     """Supported carrier codes."""
 
     SF_EXPRESS = "sf_express"
@@ -50,7 +48,7 @@ CARRIER_NAMES: dict[str, str] = {
 }
 
 
-class TransportStatus(str, Enum):
+class TransportStatus(StrEnum):
     """Transport order lifecycle."""
 
     DRAFT = "draft"
@@ -63,7 +61,7 @@ class TransportStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class CarrierServiceType(str, Enum):
+class CarrierServiceType(StrEnum):
     """Carrier service level."""
 
     STANDARD = "standard"      # 3-5 days
@@ -72,7 +70,7 @@ class CarrierServiceType(str, Enum):
     FREIGHT = "freight"        # B2B heavy
 
 
-class TransportType(str, Enum):
+class TransportType(StrEnum):
     """Transport method."""
 
     SELF_DELIVERY = "self_delivery"     # company own driver
@@ -155,7 +153,7 @@ class TransportOrder(Base, UUIDMixin, TimestampMixin):
 
 # ───────────── Tracking Event Model ─────────────────────────────────────────
 
-class TrackingEventType(str, Enum):
+class TrackingEventType(StrEnum):
     """Types of tracking scan events."""
 
     CREATED = "created"              # order created
@@ -201,7 +199,7 @@ class TrackingEvent(Base, UUIDMixin, TimestampMixin):
 
 # ───────────── Proof of Delivery Model ──────────────────────────────────────
 
-class PODSignature(str, Enum):
+class PODSignature(StrEnum):
     """POD signature type."""
 
     PHYSICAL = "physical"     # paper receipt photo
@@ -244,7 +242,7 @@ class CarrierConfig(Base, UUIDMixin, TimestampMixin):
 
 # ───────────── Hub-and-Spoke Routing Models ──────────────────────────────────
 
-class TransferHubType(str, Enum):
+class TransferHubType(StrEnum):
     """Types of transfer hubs."""
 
     PRIMARY = "primary"            # major hub (e.g., Wuhan)
@@ -252,7 +250,7 @@ class TransferHubType(str, Enum):
     CARGO_STATION = "cargo_station"  # cargo station / sorting center
 
 
-class HubStatus(str, Enum):
+class HubStatus(StrEnum):
     """Hub operational status."""
 
     OPEN = "open"
@@ -305,7 +303,7 @@ class CarrierRoute(Base, UUIDMixin, TimestampMixin):
 
 # ───────────── Transport Segment Model ────────────────────────────────────────
 
-class TransportSegmentStatus(str, Enum):
+class TransportSegmentStatus(StrEnum):
     """Lifecycle of an individual transport segment."""
 
     DRAFT = "draft"
@@ -370,14 +368,14 @@ class HubConnection(Base, UUIDMixin, TimestampMixin):
 
 # ───────────── Route Plan Model ──────────────────────────────────────────────
 
-class RoutePlanType(str, Enum):
+class RoutePlanType(StrEnum):
     """How the route plan was generated."""
 
     AUTO_GEN = "auto_gen"        # algorithm computed optimal multi-segment plan
     MANUAL = "manual"           # user manually selected a predefined plan
 
 
-class RoutePlanStatus(str, Enum):
+class RoutePlanStatus(StrEnum):
     ROUTE_ACTIVE = "route_active"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -407,12 +405,14 @@ class RoutePlan(Base, UUIDMixin, TimestampMixin):
     total_cost_amount: Decimal = Column(Numeric(18, 2))           # freight cost for full order
     estimated_transit_hours: Decimal = Column(Numeric(10, 1))     # total ETA in hours
 
-    plan_json: dict | None = Column(JSON)                         # raw route tree for UI display
+    plan_json: dict | None = Column(
+        JSON, nullable=False
+    )  # raw route tree for UI display
 
 
 # ───────────── Reverse Logistics Model ────────────────────────────────────────
 
-class ReturnReason(str, Enum):
+class ReturnReason(StrEnum):
     """Customer return reason codes."""
 
     DAMAGED = "damaged"
@@ -423,7 +423,7 @@ class ReturnReason(str, Enum):
     DUPLICATE_ORDER = "duplicate_order"
 
 
-class ReturnStatus(str, Enum):
+class ReturnStatus(StrEnum):
     """Return order lifecycle."""
 
     REQUESTED = "requested"
@@ -434,6 +434,16 @@ class ReturnStatus(str, Enum):
     CLOSED = "closed"
 
 
+class ReturnShipmentStatus(StrEnum):
+    """Physical shipment lifecycle for return orders."""
+
+    PENDING = "pending"
+    PICKUP_SCHEDULED = "pickup_scheduled"
+    IN_TRANSIT_RETURN = "in_transit_return"
+    RECEIVED_BY_CARRIER = "received_by_carrier"
+    RETURNED_TO_WAREHOUSE = "returned_to_warehouse"
+
+
 class ReturnOrder(Base, UUIDMixin, TimestampMixin):
     """Reverse logistics / return order."""
 
@@ -441,6 +451,9 @@ class ReturnOrder(Base, UUIDMixin, TimestampMixin):
 
     return_no: str = Column(String(50), unique=True, index=True)  # RTN-20260718-0001
     status: ReturnStatus = Column(SAEnum(ReturnStatus), default=ReturnStatus.REQUESTED)
+    shipment_status: ReturnShipmentStatus = Column(
+        SAEnum(ReturnShipmentStatus), default=ReturnShipmentStatus.PENDING,
+    )
     reason: ReturnReason = Column(SAEnum(ReturnReason))
     reason_detail: str | None = Column(Text)
 
@@ -464,7 +477,7 @@ class ReturnOrder(Base, UUIDMixin, TimestampMixin):
 
 # ───────────── Exception Model ──────────────────────────────────────────────
 
-class ExceptionType(str, Enum):
+class ExceptionType(StrEnum):
     """Types of transport exceptions."""
 
     DELAYED = "delayed"
@@ -475,7 +488,7 @@ class ExceptionType(str, Enum):
     WEATHER = "weather"
 
 
-class ExceptionStatus(str, Enum):
+class ExceptionStatus(StrEnum):
     OPEN = "open"
     RESOLVED = "resolved"
     ESCALATED = "escalated"
@@ -500,7 +513,7 @@ class TransportException(Base, UUIDMixin, TimestampMixin):
 
 # ───────────── Settlement Model ────────────────────────────────────────────
 
-class FreightRule(str, Enum):
+class FreightRule(StrEnum):
     """Freight calculation rule types."""
 
     WEIGHT_TIERED = "weight_tiered"      # tiered by weight bracket
@@ -524,36 +537,36 @@ class FreightTier(Base, UUIDMixin, TimestampMixin):
 
 # ── Legacy Device Management Models (Terminal Management) — kept for backward compat ─
 
-class TerminalDeviceType(str, Enum):
+class TerminalDeviceType(StrEnum):
     PDA = "pda"
     PHONE = "phone"
     SCANNER = "scanner"
     PRINTER = "printer"
 
 
-class PlatformType(str, Enum):
+class PlatformType(StrEnum):
     ANDROID = "android"
     IOS = "ios"
     DESKTOP = "desktop"
 
 
-class DeviceStatus(str, Enum):
+class DeviceStatus(StrEnum):
     ONLINE = "online"
     OFFLINE = "offline"
     DISABLED = "disabled"
 
 
-class SyncLogType(str, Enum):
+class SyncLogType(StrEnum):
     UPLOAD = "upload"
     DOWNLOAD = "download"
 
 
-class SessionStatus(str, Enum):
+class SessionStatus(StrEnum):
     ACTIVE = "active"
     ENDED = "ended"
 
 
-class SyncLogStatus(str, Enum):
+class SyncLogStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"

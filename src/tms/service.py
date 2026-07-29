@@ -4,6 +4,8 @@ hub-and-spoke routing, carrier routes, transport segments, and route plans.
 All CRUD functions are async and require an ``AsyncSession``.
 """
 import heapq
+import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -12,6 +14,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.cache.decorators import cached, distributed_lock, rate_limit
 from src.core.exceptions import NotFoundException, ValidationException
 from src.models.base import model_to_dict
 from src.tms.models import (
@@ -20,11 +23,13 @@ from src.tms.models import (
     CarrierServiceType,
     DeviceSession,
     DeviceStatus,
+    FreightTier,
     HubConnection,
     HubStatus,
     PlatformType,
-    PODSignature,
-    ProofOfDelivery as POD,
+    ReturnOrder,
+    ReturnShipmentStatus,
+    ReturnStatus,
     RoutePlan,
     RoutePlanStatus,
     RoutePlanType,
@@ -44,6 +49,8 @@ from src.tms.models import (
     TransportStatus,
     TransportType,
 )
+
+logger = logging.getLogger(__name__)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -278,7 +285,7 @@ async def create_transport_order(db: AsyncSession, data: dict) -> dict:
     """Create a new transport order (draft)."""
     from datetime import date
 
-    now = _now()
+    _now()
     # carrier_code may be omitted if shipment_id or packing_record_id is provided (auto-resolved later)
     carrier_code_value = data.get("carrier_code")
     order = TransportOrder(
@@ -316,12 +323,13 @@ async def create_transport_order(db: AsyncSession, data: dict) -> dict:
         db.add(evt)
         await db.commit()
     except Exception:
-        pass  # best-effort; don't fail order creation
+        logger.warning("Best-effort tracking event failed for transport order %s", order.id)
 
     await db.refresh(order)
     return model_to_dict(order)
 
 
+@cached(ttl=300, prefix="tms", skip_args=1)
 async def get_transport_order(db: AsyncSession, order_id: str) -> dict:
     """Get a transport order by ID."""
     result = await db.execute(
@@ -368,7 +376,11 @@ async def list_transport_orders(
 
 _transport_status_transitions: dict[TransportStatus, list[TransportStatus]] = {
     TransportStatus.DRAFT: [TransportStatus.DISPATCHED, TransportStatus.CANCELLED],
-    TransportStatus.DISPATCHED: [TransportStatus.PICKUP_COMPLETED, TransportStatus.IN_TRANSIT, TransportStatus.CANCELLED],
+    TransportStatus.DISPATCHED: (
+        TransportStatus.PICKUP_COMPLETED,
+        TransportStatus.IN_TRANSIT,
+        TransportStatus.CANCELLED,
+    ),
     TransportStatus.PICKUP_COMPLETED: [TransportStatus.IN_TRANSIT, TransportStatus.EXCEPTION],
     TransportStatus.IN_TRANSIT: [TransportStatus.OUT_FOR_DELIVERY, TransportStatus.EXCEPTION],
     TransportStatus.OUT_FOR_DELIVERY: [TransportStatus.DELIVERED, TransportStatus.EXCEPTION],
@@ -441,6 +453,7 @@ async def create_hub(db: AsyncSession, data: dict) -> dict:
     return model_to_dict(hub)
 
 
+@cached(ttl=300, prefix="tms", skip_args=1)
 async def get_hub(db: AsyncSession, hub_id: str) -> dict:
     """Get a transfer hub by ID."""
     result = await db.execute(select(TransferHub).where(TransferHub.id == uuid.UUID(hub_id)))
@@ -701,20 +714,12 @@ class _PriorityNode:
     total_hours: Decimal = field(compare=False)
 
 
-async def find_best_route_plan(
+async def _find_best_route_plan_impl(
     transport_order_id: str, db: AsyncSession
 ) -> dict:
-    """Dijkstra shortest-path + CarrierRoute price optimization.
-
-    Loads the transport order, builds a graph from HubConnections,
-    finds all feasible origin→destination hub paths, then scores
-    each by CarrierRoute pricing. Returns the optimal multi-segment plan.
-    """
-    # Step 1 — Load transport order
-    from src.tms.models import TransportOrder as _TransportOrder
-
+    """Internal implementation — no caching."""
     order_result = await db.execute(
-        select(_TransportOrder).where(_TransportOrder.id == uuid.UUID(transport_order_id))
+        select(TransportOrder).where(TransportOrder.id == uuid.UUID(transport_order_id))
     )
     order = order_result.scalar_one_or_none()
     if not order:
@@ -793,6 +798,60 @@ async def find_best_route_plan(
     }
 
 
+_ROUTE_CACHE_TTL = 86400  # 24 hours
+
+
+@rate_limit(max_calls=10, window=60)
+async def find_best_route_plan(
+    transport_order_id: str, db: AsyncSession
+) -> dict:
+    """Dijkstra + price optimisation with Redis result cache.
+
+    When Redis is available, route plans are cached by
+    ``route:{pickup_city}:{delivery_city}:{weight_kg}`` for 24 h.
+    Cache is invalidated when carrier routes or hub connections change.
+    """
+    pickup_city = ""
+    delivery_city = ""
+    weight_kg = "1"
+
+    try:
+        from src.cache.redis_client import get_redis
+
+        async with get_redis() as r:
+            if r:
+                order_result = await db.execute(
+                    select(TransportOrder).where(
+                        TransportOrder.id == uuid.UUID(transport_order_id)
+                    )
+                )
+                order = order_result.scalar_one_or_none()
+                if order:
+                    pickup_city = (order.pickup_address or {}).get("city", "")
+                    delivery_city = (order.delivery_address or {}).get("city", "")
+                    weight_kg = str(order.total_weight_kg or "1")
+                    cache_key = f"route:{pickup_city}:{delivery_city}:{weight_kg}"
+                    cached = await r.get(cache_key)
+                    if cached:
+                        return json.loads(cached)
+    except Exception:
+        logger.warning("Route plan cache read failed — recomputing")
+
+    result = await _find_best_route_plan_impl(transport_order_id, db)
+
+    try:
+        from src.cache.redis_client import get_redis
+
+        async with get_redis() as r:
+            if r:
+                cache_key = f"route:{pickup_city}:{delivery_city}:{weight_kg}"
+                await r.setex(cache_key, _ROUTE_CACHE_TTL, json.dumps(result))
+    except Exception:
+        logger.warning("Route plan cache write failed")
+
+    return result
+
+
 def _dijkstra(
     origin: str,
     destination: str,
@@ -805,7 +864,7 @@ def _dijkstra(
     """Internal Dijkstra over hub graph returning cheapest path + costs."""
     # Priority queue entries: (total_cost, current_hub, path, total_distance, total_hours)
     # cost = distance * price_per_km  (approximate if no exact carrier route)
-    INF = Decimal("Infinity")
+    inf_val = Decimal("Infinity")
     best: dict[str, Decimal] = {}  # hub_code → best cost so far
 
     # Starting nodes — find carrier routes from origin_city to first hub
@@ -831,7 +890,7 @@ def _dijkstra(
         node = heapq.heappop(heap)
         if node.hub_code == destination:
             break
-        if node.priority > best.get(node.hub_code, INF):
+        if node.priority > best.get(node.hub_code, inf_val):
             continue
 
         for next_hub, dist, hours in graph.get(node.hub_code, []):
@@ -845,7 +904,7 @@ def _dijkstra(
                     break
 
             new_cost = node.priority + seg_cost
-            if new_cost < best.get(next_hub, INF):
+            if new_cost < best.get(next_hub, inf_val):
                 best[next_hub] = new_cost
                 heapq.heappush(
                     heap,
@@ -920,6 +979,8 @@ def _dijkstra(
 # Phase A3 — generate_route_plan
 # ═══════════════════════════════════════════════════════════════════════════════
 
+@rate_limit(max_calls=10, window=60)
+@distributed_lock(key="generate_route_plan", timeout=30)
 async def generate_route_plan(
     transport_order_id: str,
     db: AsyncSession,
@@ -976,6 +1037,7 @@ async def generate_route_plan(
     return result
 
 
+@cached(ttl=300, prefix="tms", skip_args=1)
 async def get_route_plan(db: AsyncSession, plan_id: str) -> dict:
     """Get a route plan by ID, including its segments."""
     result = await db.execute(select(RoutePlan).where(RoutePlan.id == uuid.UUID(plan_id)))
@@ -1002,11 +1064,13 @@ async def create_tracking_event(db: AsyncSession, data: dict) -> dict:
     """Record a tracking event for a transport order."""
     from src.tms.models import (
         TrackingEvent as _TrackingEvent,
-        TransportOrder as _TransportOrder,
+    )
+    from src.tms.models import (
+        TransportOrder as TransportOrder,
     )
 
     result = await db.execute(
-        select(_TransportOrder).where(_TransportOrder.id == uuid.UUID(data["transport_order_id"]))
+        select(TransportOrder).where(TransportOrder.id == uuid.UUID(data["transport_order_id"]))
     )
     order = result.scalar_one_or_none()
     if not order:
@@ -1056,22 +1120,26 @@ async def create_pod(db: AsyncSession, data_or_transport_order_id: str | dict, d
     else:
         real_data = data_or_transport_order_id
 
-    from src.tms.models import ProofOfDelivery as _POD
+    from src.tms.models import ProofOfDelivery
 
     result = await db.execute(
-        select(_POD).where(_POD.transport_order_id == uuid.UUID(real_data["transport_order_id"]))
+        select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == uuid.UUID(real_data["transport_order_id"]))
     )
     pod = result.scalar_one_or_none()
 
     if not pod:
-        pod = POD(
+        pod = ProofOfDelivery(
             id=uuid.uuid4(),
             transport_order_id=_to_uuid(real_data["transport_order_id"]),
             signed_by=(data or {}).get("signed_by", "unknown"),
             signature_type=(data or {}).get("signature_type", "physical"),
-            signature_image_url=data_or_transport_order_id if isinstance(data_or_transport_order_id, str) else None,
+            signature_image_url=data_or_transport_order_id
+                if isinstance(data_or_transport_order_id, str)
+                else None,
             delivery_photo_urls=(data or {}).get("delivery_photo_urls") or [],
-            delivered_to_address=real_data.get("delivered_to_address") if data is not None else data_or_transport_order_id,
+            delivered_to_address=real_data.get("delivered_to_address")
+                if data is not None
+                else data_or_transport_order_id,
             notes=real_data.get("notes"),
         )
         db.add(pod)
@@ -1083,10 +1151,10 @@ async def create_pod(db: AsyncSession, data_or_transport_order_id: str | dict, d
 
 async def get_pod(db: AsyncSession, transport_order_id: str) -> dict | None:
     """Get POD for a transport order."""
-    from src.tms.models import ProofOfDelivery as _POD
+    from src.tms.models import ProofOfDelivery
 
     result = await db.execute(
-        select(_POD).where(_POD.transport_order_id == uuid.UUID(transport_order_id))
+        select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == uuid.UUID(transport_order_id))
     )
     pod = result.scalar_one_or_none()
     return model_to_dict(pod) if pod else None
@@ -1094,10 +1162,10 @@ async def get_pod(db: AsyncSession, transport_order_id: str) -> dict | None:
 
 async def update_pod(db: AsyncSession, transport_order_id: str, data: dict) -> dict:
     """Update existing POD."""
-    from src.tms.models import ProofOfDelivery as _POD
+    from src.tms.models import ProofOfDelivery
 
     result = await db.execute(
-        select(_POD).where(_POD.transport_order_id == uuid.UUID(transport_order_id))
+        select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == uuid.UUID(transport_order_id))
     )
     pod = result.scalar_one_or_none()
     if not pod:
@@ -1114,113 +1182,14 @@ async def update_pod(db: AsyncSession, transport_order_id: str, data: dict) -> d
     return model_to_dict(pod)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Phase B — Return Order (Reverse Logistics)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-async def create_return_order(db: AsyncSession, data: dict) -> dict:
-    """Create a return order."""
-    from src.tms.models import ReturnOrder as _ReturnOrder, ReturnReason as _ReturnReason
-    from datetime import date
-
-    result = await db.execute(
-        select(_ReturnOrder).where(False))  # placeholder — we need the model below
-    from src.tms.models import ReturnOrder, ReturnReason
-
-    count_result = await db.execute(select(func.count()).select_from(ReturnOrder))
-    count = count_result.scalar() or 0
-    return_no = f"RTN-{date.today().strftime('%Y%m%d')}-{count + 1:04d}"
-
-    ret = ReturnOrder(
-        id=uuid.uuid4(),
-        return_no=return_no,
-        status="requested",
-        reason=_ReturnReason(data["reason"]),
-        reason_detail=data.get("reason_detail"),
-        transport_order_id=uuid.UUID(data["transport_order_id"]) if data.get("transport_order_id") else None,
-        carrier_code=CarrierCode(data["carrier_code"]) if data.get("carrier_code") else None,
-        return_tracking_number=data.get("return_tracking_number"),
-        pickup_address=data.get("pickup_address", {}),
-        destination_warehouse_id=data.get("destination_warehouse_id"),
-        refund_amount=Decimal(str(data.get("refund_amount", "0"))),
-    )
-    db.add(ret)
-    await db.commit()
-    await db.refresh(ret)
-    return model_to_dict(ret)
-
-
-async def list_return_orders(db: AsyncSession, status: str | None = None, warehouse_id: str | None = None) -> tuple[list[dict], int]:
-    """List return orders with filters."""
-    stmt = select(ReturnOrder)
-    if status:
-        stmt = stmt.where(ReturnOrder.status == status)
-    if warehouse_id:
-        from sqlalchemy import func as sa_func
-        count_q = select(sa_func.count()).select_from(ReturnOrder)
-        if status:
-            count_q = count_q.where(ReturnOrder.status == status)
-        total = (await db.execute(count_q)).scalar() or 0
-    else:
-        count_stmt = select(func.count()).select_from(ReturnOrder)
-        total = (await db.execute(count_stmt)).scalar() or 0
-
-    stmt = stmt.order_by(ReturnOrder.created_at.desc())
-    result = await db.execute(stmt)
-    return [model_to_dict(r) for r in result.scalars().all()], total
-
-
-async def get_return_order(db: AsyncSession, return_id: str) -> dict | None:
-    """Get a return order by ID."""
-    result = await db.execute(
-        select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id))
-    )
-    ret = result.scalar_one_or_none()
-    if not ret:
-        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
-    return model_to_dict(ret)
-
-
-async def update_return_status(db: AsyncSession, return_id: str, target: str) -> dict:
-    """Transition a return order to a new status."""
-    result = await db.execute(
-        select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id))
-    )
-    ret = result.scalar_one_or_none()
-    if not ret:
-        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
-
-    allowed_transitions = {
-        "requested": {"pickup_scheduled", "cancelled"},
-        "pickup_scheduled": {"in_transit_return", "cancelled"},
-        "in_transit_return": {"returned_to_warehouse", "cancelled"},
-        "returned_to_warehouse": {"refunded", "closed"},
-        "refunded": set(),
-        "closed": set(),
-        "cancelled": set(),
-    }
-
-    current = ret.status
-    if target not in allowed_transitions.get(current, set()):
-        raise ValidationException(
-            message=f"Cannot transition return order from '{current}' to '{target}'",
-            detail=f"Allowed transitions from '{current}': {allowed_transitions.get(current)}",
-        )
-
-    ret.status = target
-    await db.commit()
-    await db.refresh(ret)
-    return model_to_dict(ret)
-
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # Return Order (Reverse Logistics)
 # ═══════════════════════════════════════════════════════════════════════
 
 async def create_return_order(db: AsyncSession, data: dict) -> dict:
-    from src.tms.models import ReturnOrder, ReturnReason
     from datetime import date
+
+    from src.tms.models import ReturnOrder, ReturnReason
     count = (await db.execute(select(func.count()).select_from(ReturnOrder))).scalar() or 0
     ret = ReturnOrder(
         id=uuid.uuid4(), return_no=f"RTN-{date.today().strftime('%Y%m%d')}-{count+1:04d}",
@@ -1240,6 +1209,7 @@ async def create_return_order(db: AsyncSession, data: dict) -> dict:
 
 
 async def list_return_orders(db: AsyncSession, status=None, warehouse_id=None) -> tuple[list[dict], int]:
+    from src.tms.models import ReturnOrder
     stmt = select(ReturnOrder)
     if status:
         stmt = stmt.where(ReturnOrder.status == status)
@@ -1254,7 +1224,8 @@ async def get_return_order(db: AsyncSession, return_id: str) -> dict | None:
     from src.tms.models import ReturnOrder
     result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id)))
     ret = result.scalar_one_or_none()
-    if not ret: raise NotFoundException(message=f"ReturnOrder {return_id} not found")
+    if not ret:
+        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
     return model_to_dict(ret)
 
 
@@ -1262,7 +1233,8 @@ async def update_return_status(db: AsyncSession, return_id: str, target: str) ->
     from src.tms.models import ReturnOrder
     result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id)))
     ret = result.scalar_one_or_none()
-    if not ret: raise NotFoundException(message=f"ReturnOrder {return_id} not found")
+    if not ret:
+        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
     allowed_transitions = {"requested": {"pickup_scheduled", "cancelled"},
         "pickup_scheduled": {"in_transit_return", "cancelled"},
         "in_transit_return": {"returned_to_warehouse", "cancelled"},
@@ -1277,12 +1249,98 @@ async def update_return_status(db: AsyncSession, return_id: str, target: str) ->
     return model_to_dict(ret)
 
 
+# ── Return Shipment Tracking (Item 91) ─────────────────────────────────────
+
+async def mark_shipment_received(db: AsyncSession, return_id: str) -> dict:
+    """Mark a return order as received by the carrier.
+
+    Transition flow: PENDING → IN_TRANSIT_RETURN → RECEIVED_BY_CARRIER
+    """
+    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id)))
+    ret = result.scalar_one_or_none()
+    if not ret:
+        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
+
+    allowed_transitions = {
+        ReturnShipmentStatus.PENDING: [ReturnShipmentStatus.IN_TRANSIT_RETURN],
+        ReturnShipmentStatus.IN_TRANSIT_RETURN: [ReturnShipmentStatus.RECEIVED_BY_CARRIER],
+    }
+
+    current = ret.shipment_status
+    if current not in allowed_transitions:
+        raise ValidationException(message=f"Cannot transition shipment from '{current}'")
+
+    if ReturnShipmentStatus.RECEIVED_BY_CARRIER not in allowed_transitions[current]:
+        raise ValidationException(
+            message=f"Cannot move to RECEIVED_BY_CARRIER, expected one of {allowed_transitions.get(current)}"
+        )
+
+    ret.shipment_status = ReturnShipmentStatus.RECEIVED_BY_CARRIER
+    ret.status = ReturnStatus.IN_TRANSIT_RETURN
+
+    await db.commit()
+    await db.refresh(ret)
+    return model_to_dict(ret)
+
+
+async def mark_return_inspected(db: AsyncSession, return_id: str, accepted: bool = True) -> dict:
+    """Inspect a returned item and decide disposition.
+
+    If accepted → REFUNDED / CLOSED
+    If rejected → RETURNED_TO_SUPPLIER
+    """
+    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id)))
+    ret = result.scalar_one_or_none()
+    if not ret:
+        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
+
+    allowed_statuses = [ReturnStatus.RETURNED_TO_WAREHOUSE, ReturnStatus.IN_TRANSIT_RETURN]
+    if ret.status not in allowed_statuses:
+        raise ValidationException(
+            message=f"Cannot inspect return in status '{ret.status}'"
+        )
+
+    if accepted:
+        # Item verified OK → refund and close
+        ret.status = ReturnStatus.REFUNDED
+        ret.shipment_status = ReturnShipmentStatus.RETURNED_TO_WAREHOUSE
+    else:
+        # Reject → send back to supplier (handled by admin workflow)
+        ret.status = ReturnStatus.CLOSED
+        ret.shipment_status = ReturnShipmentStatus.RETURNED_TO_WAREHOUSE
+
+    await db.commit()
+    await db.refresh(ret)
+    return model_to_dict(ret)
+
+
+async def cancel_return_order(db: AsyncSession, return_id: str) -> dict:
+    """Cancel a return order (only if still in PENDING or SHIPPED)."""
+    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id)))
+    ret = result.scalar_one_or_none()
+    if not ret:
+        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
+
+    allowed_cancel_statuses = [ReturnStatus.REQUESTED, ReturnStatus.PICKUP_SCHEDULED]
+    if ret.status not in allowed_cancel_statuses:
+        raise ValidationException(
+            message=f"Cannot cancel return in status '{ret.status}'"
+        )
+
+    ret.status = ReturnStatus.CLOSED
+    ret.shipment_status = ReturnShipmentStatus.RETURNED_TO_WAREHOUSE
+
+    await db.commit()
+    await db.refresh(ret)
+    return model_to_dict(ret)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Transport Exception / Incident
 # ═══════════════════════════════════════════════════════════════════════
 
 async def create_exception(db: AsyncSession, data: dict) -> dict:
-    from src.tms.models import TransportException, ExceptionType as _ET
+    from src.tms.models import ExceptionType, TransportException
 
     # transport_order_id may be optional (exceptions not linked to an order)
     order_id = data.get("transport_order_id")
@@ -1294,7 +1352,7 @@ async def create_exception(db: AsyncSession, data: dict) -> dict:
     exc = TransportException(
         id=uuid.uuid4(),
         transport_order_id=_to_uuid(str(order_id)) if order_id else None,
-        type=_ET(data["type"]), status="open", severity=data.get("severity", "normal"),
+        type=ExceptionType(data["type"]), status="open", severity=data.get("severity", "normal"),
         description=data.get("description"), resolution_notes=data.get("resolution_notes"),
     )
     db.add(exc)
@@ -1316,7 +1374,8 @@ async def resolve_exception(db: AsyncSession, exc_id: str, resolution_notes=None
     from src.tms.models import TransportException
     result = await db.execute(select(TransportException).where(TransportException.id == uuid.UUID(exc_id)))
     exc = result.scalar_one_or_none()
-    if not exc: raise NotFoundException(message=f"TransportException {exc_id} not found")
+    if not exc:
+        raise NotFoundException(message=f"TransportException {exc_id} not found")
     exc.status = "resolved"
     exc.resolution_notes = resolution_notes or exc.resolution_notes
     await db.commit()
@@ -1325,26 +1384,14 @@ async def resolve_exception(db: AsyncSession, exc_id: str, resolution_notes=None
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# FreightRule & FreightTier (Shipping Cost Calculation)
+# FreightTier (Shipping Cost Calculation)
 # ═══════════════════════════════════════════════════════════════════════
 
-async def create_freight_rule(db: AsyncSession, data: dict) -> dict:
-    from src.tms.models import FreightRule as _FR
-    rule = FreightRule(
-        id=uuid.uuid4(), carrier_code=CarrierCode(data["carrier_code"]),
-        rule_type=_FR(data["rule_type"]),
-    )
-    db.add(rule)
-    await db.commit()
-    await db.refresh(rule)
-    return model_to_dict(rule)
-
-
 async def create_freight_tier(db: AsyncSession, data: dict) -> dict:
-    from src.tms.models import FreightTier as _FT, FreightRule as _FR
-    tier = _FT(
+    tier = FreightTier(
         id=uuid.uuid4(), carrier_code=CarrierCode(data["carrier_code"]),
-        rule_type=_FR(data["rule_type"]), min_value=Decimal(str(data.get("min_value", "0"))),
+        rule_type=data["rule_type"],  # already a FreightRule enum value
+        min_value=Decimal(str(data.get("min_value", "0"))),
         max_value=Decimal(str(data["max_value"])) if data.get("max_value") else None,
         price_per_unit=Decimal(str(data["price_per_unit"])),
         surcharge_express=Decimal(str(data.get("surcharge_express", "0"))),
@@ -1356,11 +1403,13 @@ async def create_freight_tier(db: AsyncSession, data: dict) -> dict:
 
 
 async def calculate_freight(db: AsyncSession, data: dict) -> dict:
-    from src.tms.models import FreightTier as _FT, CarrierCode
+    from src.tms.models import CarrierCode, FreightTier
     carrier = CarrierCode(data["carrier_code"])
     weight_kg = Decimal(str(data.get("weight", 1)))
 
-    tiers = await db.execute(select(FT).where(FT.carrier_code == carrier))
+    tiers = await db.execute(
+        select(FreightTier).where(FreightTier.carrier_code == carrier)
+    )
     matching_tier = None
     for t in tiers.scalars().all():
         if t.min_value <= weight_kg and (t.max_value is None or weight_kg <= t.max_value):
@@ -1400,6 +1449,41 @@ async def get_forecast(db: AsyncSession, data: dict) -> list[dict]:
     days = int(data.get("days", 7))
     points = forecaster.forecast(key, days)
     return [p.__dict__ for p in points]
+
+
+async def train_forecast(db: AsyncSession, months: int = 6) -> dict:
+    """Batch train the forecast model from historical transport orders."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import func, select
+
+    from src.tms.models import TransportOrder
+
+    cutoff = datetime.now(UTC) - timedelta(days=30 * months)
+    stmt = (
+        select(
+            TransportOrder.pickup_address,
+            TransportOrder.delivery_address,
+            func.date_trunc("day", TransportOrder.created_at).label("day"),
+            func.count(TransportOrder.id).label("cnt"),
+        )
+        .where(TransportOrder.created_at >= cutoff)
+        .group_by(
+            TransportOrder.pickup_address,
+            TransportOrder.delivery_address,
+            func.date_trunc("day", TransportOrder.created_at),
+        )
+    )
+    result = await db.execute(stmt)
+    from src.tms.ml.forecast import forecaster
+    count = 0
+    for row in result.all():
+        origin = (row.pickup_address or {}).get("city", "")
+        dest = (row.delivery_address or {}).get("city", "")
+        key = f"{origin}-{dest}"
+        forecaster.add_observation(key, float(row.cnt))
+        count += 1
+    return {"status": "ok", "trained": count}
 
 
 # Alias: allow test transport_service to call create_exception(db, data) with no order_id
@@ -1448,21 +1532,3 @@ async def estimate_freight(*args, carrier_code=None, service_type="standard", di
 
 # Expose as create_pod_with_transport_order so tests can alias it
 create_pod_via_alias = _make_pod_alias
-
-# ── Fix for test transport_service.py calling create_exception with no order_id ──
-async def create_exception_optional_order(db: AsyncSession, data: dict) -> dict:
-    """Create exception that works without a linked transport order."""
-    from src.tms.models import TransportException, ExceptionType as _ET
-
-    exc = TransportException(
-        id=uuid.uuid4(),
-        type=_ET(data.get("type", "delayed")),
-        severity=data.get("severity"),
-        description=data.get("description"),
-        status="open",
-        transport_order_id=None,  # no order required
-    )
-    db.add(exc)
-    await db.commit()
-    await db.refresh(exc)
-    return model_to_dict(exc)

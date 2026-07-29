@@ -11,18 +11,27 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import NotFoundException, ValidationException
+from src.core.pagination import paginate
 from src.models.base import model_to_dict
 from src.wms.models import (
     SKU,
+    Address,
+    CreditMemo,
+    CreditMemoLine,
     Inventory,
+    Invoice,
+    InvoiceLine,
     Location,
     LocationStatus,
     LocationType,
     PickingWave,
     PickingWavePriority,
     PickingWaveType,
+    PurchaseOrder,
+    PurchaseOrderLine,
     StockMovement,
     StockMovementType,
+    Vendor,
     Warehouse,
     WarehouseStatus,
     WarehouseType,
@@ -78,9 +87,25 @@ async def get_warehouse(db: AsyncSession, wh_id: str) -> dict:
     return d
 
 
-async def list_warehouses(db: AsyncSession) -> list[dict]:
+async def list_warehouses(db: AsyncSession, page: int | None = None, page_size: int | None = None) -> list[dict] | dict:
     """List all warehouses."""
-    result = await db.execute(select(Warehouse).order_by(Warehouse.created_at.desc()))
+    stmt = select(Warehouse).order_by(Warehouse.created_at.desc())
+    if page is not None and page_size is not None:
+        result = await paginate(stmt, db, page=page, page_size=page_size)
+        items = []
+        for wh in result.items:
+            d = model_to_dict(wh)
+            d["type"] = d.pop("warehouse_type", "standard")
+            d["is_active"] = d.get("status") == "active"
+            items.append(d)
+        return {
+            "items": items,
+            "total": result.total,
+            "page": result.page,
+            "page_size": result.page_size,
+            "total_pages": result.total_pages,
+        }
+    result = await db.execute(stmt)
     warehouses = []
     for wh in result.scalars().all():
         d = model_to_dict(wh)
@@ -88,6 +113,36 @@ async def list_warehouses(db: AsyncSession) -> list[dict]:
         d["is_active"] = d.get("status") == "active"
         warehouses.append(d)
     return warehouses
+
+
+async def update_warehouse(db: AsyncSession, wh_id: str, data: dict) -> Warehouse | None:
+    """Update an existing warehouse."""
+    result = await db.execute(select(Warehouse).where(Warehouse.id == _to_uuid(wh_id)))
+    wh = result.scalar_one_or_none()
+    if not wh:
+        raise NotFoundException(message=f"Warehouse {wh_id} not found")
+
+    for key, value in data.items():
+        setattr(wh, key, value)
+
+    await db.commit()
+    await db.refresh(wh)
+    return wh
+
+
+async def delete_warehouse(db: AsyncSession, wh_id: str) -> dict:
+    """Soft-delete a warehouse (sets deleted_at)."""
+    result = await db.execute(select(Warehouse).where(Warehouse.id == _to_uuid(wh_id)))
+    wh = result.scalar_one_or_none()
+    if not wh:
+        raise NotFoundException(message=f"Warehouse {wh_id} not found")
+
+    await db.delete(wh)
+    await db.commit()
+    d = model_to_dict(wh)
+    d["type"] = d.pop("warehouse_type", "standard")
+    d["is_active"] = False
+    return d
 
 
 # ── Location CRUD ───────────────────────────────────────────────────────────
@@ -136,12 +191,21 @@ def _loc_to_dict(loc: Location) -> dict:
     return d
 
 
-async def list_locations(db: AsyncSession, wh_id: str | None = None) -> list[dict]:
+async def list_locations(db: AsyncSession, wh_id: str | None = None, page: int | None = None, page_size: int | None = None) -> list[dict] | dict:
     """List locations with optional warehouse filter."""
     stmt = select(Location)
     if wh_id:
         stmt = stmt.where(Location.warehouse_id == _to_uuid(wh_id))
     stmt = stmt.order_by(Location.created_at.desc())
+    if page is not None and page_size is not None:
+        result = await paginate(stmt, db, page=page, page_size=page_size)
+        return {
+            "items": [_loc_to_dict(loc) for loc in result.items],
+            "total": result.total,
+            "page": result.page,
+            "page_size": result.page_size,
+            "total_pages": result.total_pages,
+        }
     result = await db.execute(stmt)
     return [_loc_to_dict(loc) for loc in result.scalars().all()]
 
@@ -153,6 +217,50 @@ async def get_location(db: AsyncSession, loc_id: str) -> dict:
     if not loc:
         raise NotFoundException(message=f"Location {loc_id} not found")
     return _loc_to_dict(loc)
+
+
+async def update_location(db: AsyncSession, wh_id: str, loc_id: str, data: dict) -> dict:
+    """Update a location within a warehouse."""
+    result = await db.execute(select(Location).where(
+        Location.id == _to_uuid(loc_id),
+        Location.warehouse_id == _to_uuid(wh_id),
+    ))
+    loc = result.scalar_one_or_none()
+    if not loc:
+        raise NotFoundException(message=f"Location {loc_id} not found in warehouse {wh_id}")
+
+    zone = data.get("zone")
+    if zone is not None:
+        loc.zone = zone
+    aisle = data.get("aisle")
+    if aisle is not None:
+        loc.aisle = aisle
+    shelf = data.get("shelf")
+    if shelf is not None:
+        loc.shelf = shelf
+    level = data.get("bin") or data.get("level")
+    if level is not None:
+        loc.level = level
+    loc_type = data.get("type")
+    if loc_type is not None:
+        loc.location_type = LocationType(loc_type)
+
+    await db.commit()
+    await db.refresh(loc)
+    return _loc_to_dict(loc)
+
+
+async def delete_location(db: AsyncSession, wh_id: str, loc_id: str) -> None:
+    """Delete a location within a warehouse."""
+    result = await db.execute(select(Location).where(
+        Location.id == _to_uuid(loc_id),
+        Location.warehouse_id == _to_uuid(wh_id),
+    ))
+    loc = result.scalar_one_or_none()
+    if not loc:
+        raise NotFoundException(message=f"Location {loc_id} not found in warehouse {wh_id}")
+    await db.delete(loc)
+    await db.commit()
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -177,12 +285,61 @@ def _inv_to_dict(inv: Inventory, sku_str: str) -> dict:
         "warehouse_id": str(inv.warehouse_id),
         "location_id": str(inv.location_id) if inv.location_id else "",
         "sku": sku_str,
+        "batch_no": inv.batch_no or "",
+        "expiry_date": inv.expiry_date.isoformat() if inv.expiry_date else None,
+        "manufacturing_date": inv.manufacturing_date.isoformat() if inv.manufacturing_date else None,
+        "received_at": inv.received_at.isoformat() if inv.received_at else None,
         "quantity": qty,
         "reserved_qty": locked,
         "available_qty": qty - locked,
         "created_at": inv.created_at.isoformat() if inv.created_at else "",
         "updated_at": inv.updated_at.isoformat() if inv.updated_at else "",
     }
+
+
+# ── Batch picking strategies ──────────────────────────────────────────────────
+
+
+async def _pick_batches(
+    db: AsyncSession,
+    wh_id: uuid.UUID,
+    loc_id: uuid.UUID | None,
+    sku_id: uuid.UUID,
+    need: Decimal,
+    strategy: str = "fefo",
+) -> list[dict]:
+    """Select inventory batches to fulfil a pick request.
+
+    ``strategy`` controls the order:
+      - ``"fefo"`` (default) — First Expiry First Out
+      - ``"fifo"`` — First In First Out (by ``received_at``)
+      - ``"batch"`` — strict batch_no ordering
+
+    Returns a list of batches with available quantity, sorted by the
+    chosen strategy.  Each dict contains ``{"inv": Inventory, "available": Decimal}``.
+    """
+    stmt = select(Inventory).where(
+        Inventory.warehouse_id == wh_id,
+        Inventory.sku_id == sku_id,
+        Inventory.quantity > 0,
+    )
+    if loc_id:
+        stmt = stmt.where(Inventory.location_id == loc_id)
+
+    if strategy == "fefo":
+        stmt = stmt.order_by(Inventory.expiry_date.asc().nulls_last(), Inventory.received_at.asc())
+    elif strategy == "fifo":
+        stmt = stmt.order_by(Inventory.received_at.asc().nulls_last(), Inventory.batch_no.asc())
+    else:
+        stmt = stmt.order_by(Inventory.batch_no.asc())
+
+    result = await db.execute(stmt)
+    batches = []
+    for inv in result.scalars().all():
+        available = Decimal(str(inv.quantity)) - Decimal(str(inv.locked_qty))
+        if available > 0:
+            batches.append({"inv": inv, "available": available})
+    return batches
 
 
 # ── Inventory ───────────────────────────────────────────────────────────────
@@ -203,15 +360,27 @@ async def query_inventory(
         sku_obj = await _get_or_create_sku(db, sku)
         stmt = stmt.where(Inventory.sku_id == sku_obj.id)
     result = await db.execute(stmt)
+    inventory_rows = result.scalars().all()
+    sku_ids = {inv.sku_id for inv in inventory_rows if inv.sku_id}
+    sku_map: dict[uuid.UUID, SKU] = {}
+    if sku_ids:
+        skus_result = await db.execute(select(SKU).where(SKU.id.in_(list(sku_ids))))
+        sku_map = {s.id: s for s in skus_result.scalars().all()}
     items = []
-    for inv in result.scalars().all():
-        sku_obj = await db.get(SKU, inv.sku_id)
+    for inv in inventory_rows:
+        sku_obj = sku_map.get(inv.sku_id)
         items.append(_inv_to_dict(inv, sku_obj.sku if sku_obj else ""))
     return items
 
 
 async def adjust_inventory(db: AsyncSession, data: dict) -> dict:
-    """Adjust inventory quantity (positive=in, negative=out)."""
+    """Adjust inventory quantity (positive=in, negative=out).
+
+    Supports batch-level tracking: when adding stock (qty > 0) the caller
+    may provide ``batch_no``, ``expiry_date``, and ``manufacturing_date``.
+    When removing stock (qty < 0) the system picks the best batch
+    automatically (FEFO first, then FIFO).
+    """
     wh_id = _to_uuid(data["warehouse_id"])
     loc_id = _to_uuid(data["location_id"])
     sku_str = data["sku"]
@@ -226,38 +395,57 @@ async def adjust_inventory(db: AsyncSession, data: dict) -> dict:
 
     sku_obj = await _get_or_create_sku(db, sku_str)
 
-    inv_result = await db.execute(
-        select(Inventory).where(
-            Inventory.warehouse_id == wh_id,
-            Inventory.location_id == loc_id,
-            Inventory.sku_id == sku_obj.id,
-        )
-    )
-    inv = inv_result.scalar_one_or_none()
-
     now = _now()
-    if inv:
-        new_qty = Decimal(str(inv.quantity)) + qty
-        if new_qty < 0:
-            raise ValidationException(message="Insufficient stock")
-        inv.quantity = new_qty
-        inv.updated_at = now
-    else:
-        if qty < 0:
-            raise ValidationException(message="Insufficient stock — no existing inventory")
-        inv = Inventory(
-            id=uuid.uuid4(),
-            warehouse_id=wh_id,
-            location_id=loc_id,
-            sku_id=sku_obj.id,
-            gtin="",
-            batch_no="DEFAULT",
-            quantity=qty,
-            locked_qty=Decimal(0),
-            min_qty=Decimal(0),
-            max_qty=Decimal(0),
+    batch_no = data.get("batch_no", "DEFAULT")
+    expiry_date = data.get("expiry_date")
+    manufacturing_date = data.get("manufacturing_date")
+
+    if qty > 0:
+        inv_result = await db.execute(
+            select(Inventory).where(
+                Inventory.warehouse_id == wh_id,
+                Inventory.location_id == loc_id,
+                Inventory.sku_id == sku_obj.id,
+                Inventory.batch_no == batch_no,
+            )
         )
-        db.add(inv)
+        inv = inv_result.scalar_one_or_none()
+        if inv:
+            new_qty = Decimal(str(inv.quantity)) + qty
+            inv.quantity = new_qty
+            inv.updated_at = now
+            if expiry_date and not inv.expiry_date:
+                inv.expiry_date = expiry_date
+            if manufacturing_date and not inv.manufacturing_date:
+                inv.manufacturing_date = manufacturing_date
+        else:
+            inv = Inventory(
+                id=uuid.uuid4(),
+                warehouse_id=wh_id,
+                location_id=loc_id,
+                sku_id=sku_obj.id,
+                gtin="",
+                batch_no=batch_no,
+                expiry_date=expiry_date,
+                manufacturing_date=manufacturing_date,
+                received_at=now,
+                quantity=qty,
+                locked_qty=Decimal(0),
+                min_qty=Decimal(0),
+                max_qty=Decimal(0),
+            )
+            db.add(inv)
+    else:
+        need = abs(qty)
+        batches = await _pick_batches(
+            db, wh_id, loc_id, sku_obj.id, need,
+            strategy=data.get("picking_strategy", "fefo"),
+        )
+        if not batches or sum(b["available"] for b in batches) < need:
+            raise ValidationException(message="Insufficient stock")
+        inv = batches[0]["inv"]
+        inv.quantity = Decimal(str(inv.quantity)) + qty  # qty is negative
+        inv.updated_at = now
 
     movement = StockMovement(
         id=uuid.uuid4(),
@@ -284,9 +472,15 @@ async def list_movements(db: AsyncSession, wh_id: str | None = None) -> list[dic
         stmt = stmt.where(StockMovement.source_warehouse_id == _to_uuid(wh_id))
     stmt = stmt.order_by(StockMovement.created_at.desc())
     result = await db.execute(stmt)
+    movements = result.scalars().all()
+    sku_ids = {m.sku_id for m in movements if m.sku_id}
+    sku_map: dict[uuid.UUID, SKU] = {}
+    if sku_ids:
+        skus_result = await db.execute(select(SKU).where(SKU.id.in_(list(sku_ids))))
+        sku_map = {s.id: s for s in skus_result.scalars().all()}
     items = []
-    for m in result.scalars().all():
-        sku_obj = await db.get(SKU, m.sku_id)
+    for m in movements:
+        sku_obj = sku_map.get(m.sku_id)
         d = {
             "id": str(m.id),
             "warehouse_id": str(m.source_warehouse_id),
@@ -484,3 +678,247 @@ async def list_shipments(db: AsyncSession, warehouse_id: str | None = None) -> l
     stmt = stmt.order_by(Shipment.created_at.desc())
     result = await db.execute(stmt)
     return [model_to_dict(s) for s in result.scalars().all()]
+
+
+# ── Vendor CRUD ────────────────────────────────────────────────────────
+
+
+async def create_vendor(db: AsyncSession, data: dict) -> dict:
+    result = await db.execute(select(Vendor).where(Vendor.code == data["code"]))
+    if result.scalar_one_or_none():
+        raise ValidationException(message=f"Vendor code {data['code']} already exists")
+    v = Vendor(id=uuid.uuid4(), **{k: data[k] for k in ("code", "name", "email", "phone") if k in data})
+    db.add(v)
+    await db.commit()
+    await db.refresh(v)
+    return model_to_dict(v)
+
+
+async def get_vendor(db: AsyncSession, vendor_id: str) -> dict:
+    result = await db.execute(select(Vendor).where(Vendor.id == _to_uuid(vendor_id)))
+    v = result.scalar_one_or_none()
+    if not v:
+        raise NotFoundException(message=f"Vendor {vendor_id} not found")
+    return model_to_dict(v)
+
+
+async def list_vendors(db: AsyncSession, page: int | None = None, page_size: int | None = None) -> list[dict] | dict:
+    stmt = select(Vendor).order_by(Vendor.created_at.desc())
+    if page is not None and page_size is not None:
+        result = await paginate(stmt, db, page=page, page_size=page_size)
+        return {
+            "items": [model_to_dict(v) for v in result.items],
+            "total": result.total,
+            "page": result.page,
+            "page_size": result.page_size,
+            "total_pages": result.total_pages,
+        }
+    result = await db.execute(stmt)
+    return [model_to_dict(v) for v in result.scalars().all()]
+
+
+# ── Address CRUD ───────────────────────────────────────────────────────
+
+
+async def create_address(db: AsyncSession, data: dict) -> dict:
+    kwargs = {}
+    for k in ("entity_type", "address_type", "contact_name", "phone",
+              "email", "address_line_1", "address_line_2", "city", "state",
+              "postal_code", "country"):
+        if data.get(k):
+            kwargs[k] = data[k]
+    if data.get("entity_id"):
+        kwargs["entity_id"] = _to_uuid(data["entity_id"])
+    a = Address(id=uuid.uuid4(), **kwargs)
+    db.add(a)
+    await db.commit()
+    await db.refresh(a)
+    return model_to_dict(a)
+
+
+async def list_addresses(db: AsyncSession, entity_type: str | None = None, entity_id: str | None = None) -> list[dict]:
+    stmt = select(Address)
+    if entity_type:
+        stmt = stmt.where(Address.entity_type == entity_type)
+    if entity_id:
+        stmt = stmt.where(Address.entity_id == _to_uuid(entity_id))
+    stmt = stmt.order_by(Address.created_at.desc())
+    result = await db.execute(stmt)
+    return [model_to_dict(a) for a in result.scalars().all()]
+
+
+# ── PurchaseOrder CRUD ─────────────────────────────────────────────────
+
+
+async def create_purchase_order(db: AsyncSession, data: dict) -> dict:
+    po = PurchaseOrder(
+        id=uuid.uuid4(),
+        po_number=data["po_number"],
+        vendor_id=_to_uuid(data.get("vendor_id")) if data.get("vendor_id") else None,
+        expected_date=datetime.fromisoformat(data["expected_date"]).date() if data.get("expected_date") else None,
+        notes=data.get("notes", ""),
+    )
+    db.add(po)
+    await db.flush()
+
+    total = Decimal("0")
+    for line_data in data.get("lines", []):
+        line = PurchaseOrderLine(
+            id=uuid.uuid4(),
+            purchase_order_id=po.id,
+            sku_id=_to_uuid(line_data.get("sku_id")) if line_data.get("sku_id") else None,
+            description=line_data.get("description", ""),
+            quantity=Decimal(str(line_data.get("quantity", 1))),
+            unit_price=Decimal(str(line_data.get("unit_price", 0))),
+        )
+        db.add(line)
+        total += line.quantity * line.unit_price
+
+    po.total_amount = total
+    await db.commit()
+    await db.refresh(po)
+    return model_to_dict(po)
+
+
+async def get_purchase_order(db: AsyncSession, po_id: str) -> dict:
+    result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == _to_uuid(po_id)))
+    po = result.scalar_one_or_none()
+    if not po:
+        raise NotFoundException(message=f"PurchaseOrder {po_id} not found")
+    return model_to_dict(po)
+
+
+async def list_purchase_orders(db: AsyncSession, page: int | None = None, page_size: int | None = None) -> list[dict] | dict:
+    stmt = select(PurchaseOrder).order_by(PurchaseOrder.created_at.desc())
+    if page is not None and page_size is not None:
+        result = await paginate(stmt, db, page=page, page_size=page_size)
+        return {
+            "items": [model_to_dict(po) for po in result.items],
+            "total": result.total,
+            "page": result.page,
+            "page_size": result.page_size,
+            "total_pages": result.total_pages,
+        }
+    result = await db.execute(stmt)
+    return [model_to_dict(po) for po in result.scalars().all()]
+
+
+async def approve_purchase_order(db: AsyncSession, po_id: str) -> dict:
+    result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == _to_uuid(po_id)))
+    po = result.scalar_one_or_none()
+    if not po:
+        raise NotFoundException(message=f"PurchaseOrder {po_id} not found")
+    if po.status != "draft":
+        raise ValidationException(message=f"Cannot approve PO in '{po.status}' state")
+    po.status = "approved"
+    await db.commit()
+    await db.refresh(po)
+    return model_to_dict(po)
+
+
+async def receive_goods(db: AsyncSession, po_id: str) -> dict:
+    result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == _to_uuid(po_id)))
+    po = result.scalar_one_or_none()
+    if not po:
+        raise NotFoundException(message=f"PurchaseOrder {po_id} not found")
+    if po.status not in ("approved", "partial"):
+        raise ValidationException(message=f"Cannot receive goods for PO in '{po.status}' state")
+    po.status = "received"
+    await db.commit()
+    await db.refresh(po)
+    return model_to_dict(po)
+
+
+# ── Invoice CRUD ───────────────────────────────────────────────────────
+
+
+async def create_invoice(db: AsyncSession, data: dict) -> dict:
+    inv = Invoice(
+        id=uuid.uuid4(),
+        invoice_number=data["invoice_number"],
+        entity_type=data["entity_type"],
+        entity_id=_to_uuid(data.get("entity_id")) if data.get("entity_id") else None,
+        issue_date=datetime.fromisoformat(data["issue_date"]).date() if data.get("issue_date") else None,
+        due_date=datetime.fromisoformat(data["due_date"]).date() if data.get("due_date") else None,
+        notes=data.get("notes", ""),
+    )
+    db.add(inv)
+    await db.flush()
+
+    total = Decimal("0")
+    for line_data in data.get("lines", []):
+        line = InvoiceLine(
+            id=uuid.uuid4(),
+            invoice_id=inv.id,
+            description=line_data.get("description", ""),
+            quantity=Decimal(str(line_data.get("quantity", 1))),
+            unit_price=Decimal(str(line_data.get("unit_price", 0))),
+        )
+        db.add(line)
+        total += line.quantity * line.unit_price
+
+    inv.total_amount = total
+    await db.commit()
+    await db.refresh(inv)
+    return model_to_dict(inv)
+
+
+async def get_invoice(db: AsyncSession, invoice_id: str) -> dict:
+    result = await db.execute(select(Invoice).where(Invoice.id == _to_uuid(invoice_id)))
+    inv = result.scalar_one_or_none()
+    if not inv:
+        raise NotFoundException(message=f"Invoice {invoice_id} not found")
+    return model_to_dict(inv)
+
+
+async def list_invoices(db: AsyncSession) -> list[dict]:
+    result = await db.execute(select(Invoice).order_by(Invoice.created_at.desc()))
+    return [model_to_dict(inv) for inv in result.scalars().all()]
+
+
+# ── CreditMemo CRUD ─────────────────────────────────────────────────────
+
+
+async def create_credit_memo(db: AsyncSession, data: dict) -> dict:
+    cm = CreditMemo(
+        id=uuid.uuid4(),
+        credit_memo_number=data["credit_memo_number"],
+        invoice_id=_to_uuid(data.get("invoice_id")) if data.get("invoice_id") else None,
+        entity_type=data["entity_type"],
+        entity_id=_to_uuid(data.get("entity_id")) if data.get("entity_id") else None,
+        issue_date=datetime.fromisoformat(data["issue_date"]).date() if data.get("issue_date") else None,
+        reason=data.get("reason", ""),
+        notes=data.get("notes", ""),
+    )
+    db.add(cm)
+    await db.flush()
+
+    total = Decimal("0")
+    for line_data in data.get("lines", []):
+        line = CreditMemoLine(
+            id=uuid.uuid4(),
+            credit_memo_id=cm.id,
+            description=line_data.get("description", ""),
+            quantity=Decimal(str(line_data.get("quantity", 1))),
+            unit_price=Decimal(str(line_data.get("unit_price", 0))),
+        )
+        db.add(line)
+        total += line.quantity * line.unit_price
+
+    cm.total_amount = total
+    await db.commit()
+    await db.refresh(cm)
+    return model_to_dict(cm)
+
+
+async def get_credit_memo(db: AsyncSession, cm_id: str) -> dict:
+    result = await db.execute(select(CreditMemo).where(CreditMemo.id == _to_uuid(cm_id)))
+    cm = result.scalar_one_or_none()
+    if not cm:
+        raise NotFoundException(message=f"CreditMemo {cm_id} not found")
+    return model_to_dict(cm)
+
+
+async def list_credit_memos(db: AsyncSession) -> list[dict]:
+    result = await db.execute(select(CreditMemo).order_by(CreditMemo.created_at.desc()))
+    return [model_to_dict(cm) for cm in result.scalars().all()]

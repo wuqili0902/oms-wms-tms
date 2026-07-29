@@ -17,18 +17,24 @@ async def get_current_user(
     Raises 401 when no token is present OR token is invalid/expired.
     For routes that want to allow anonymous access, check `credentials` first.
     """
-    from src.core.security import decode_token
+    from src.core.security import TokenExpired, TokenInvalid, decode_token
 
     if not credentials or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
         )
-    payload = decode_token(credentials.credentials)
-    if not payload or "sub" not in payload:
+    try:
+        payload = decode_token(credentials.credentials)
+    except (TokenExpired, TokenInvalid):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
+        )
+    if "sub" not in payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
         )
     return payload
 
@@ -38,14 +44,17 @@ async def get_optional_current_user(
 ):
     """Validate JWT token and return current user — but returns {} on missing/invalid token."""
 
-    from src.core.security import decode_token
+    from src.core.security import TokenExpired, TokenInvalid, decode_token
 
     if not credentials or not credentials.credentials:
         return {}  # Anonymous access allowed
 
-    payload = decode_token(credentials.credentials)
-    if not payload or "sub" not in payload:
-        return {}  # Invalid/expired token — treat as anonymous
+    try:
+        payload = decode_token(credentials.credentials)
+    except (TokenExpired, TokenInvalid):
+        return {}
+    if "sub" not in payload:
+        return {}
 
     return payload
 
@@ -54,15 +63,21 @@ async def get_required_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer()),
 ):
     """Strict version — raises 401 for missing/invalid tokens."""
-    from src.core.security import decode_token
+    from src.core.security import TokenExpired, TokenInvalid, decode_token
 
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    payload = decode_token(credentials.credentials)
-    if not payload or "sub" not in payload:
+    try:
+        payload = decode_token(credentials.credentials)
+    except (TokenExpired, TokenInvalid):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
+        )
+    if "sub" not in payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
         )
     return payload
 
@@ -72,9 +87,15 @@ async def _get_user_permissions(db, username):
     from sqlalchemy import select
 
     # Lazy-import to avoid circular dep with auth.router which imports this module
-    from src.auth.models import User
+    from sqlalchemy.orm import selectinload
 
-    result = await db.execute(select(User).where(User.username == username))
+    from src.auth.models import Role, User
+
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.roles).selectinload(Role.permissions))
+        .where(User.username == username)
+    )
     user = result.scalar_one_or_none()
     if not user or not user.roles:
         return set()
@@ -102,8 +123,8 @@ def require_permission(*required_perms: str):
         if not username:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User identity not found")
 
-        db_session = await get_db().__anext__()  # type: ignore[misc]
-        user_perms = await _get_user_permissions(db_session, username)
+        async with get_db() as db_session:
+            user_perms = await _get_user_permissions(db_session, username)
         for perm in required_perms:
             if perm not in user_perms:
                 raise HTTPException(
@@ -113,21 +134,6 @@ def require_permission(*required_perms: str):
         return current_user
 
     return _check
-
-
-def get_db():  # type: ignore[misc]
-    """Yield a database session. Lazy-import to avoid circular deps."""
-    from src.core.database import async_session_factory
-
-    session = async_session_factory()
-
-    async def _gen():
-        try:
-            yield session
-        finally:
-            await session.close()
-
-    return _gen().__next__
 
 
 def get_celery_task(task_name):  # type: ignore[misc]

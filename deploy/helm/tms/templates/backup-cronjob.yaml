@@ -1,0 +1,67 @@
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "tms.fullname" . }}-backup
+  labels:
+    {{- include "tms.labels" . | nindent 4 }}
+spec:
+  schedule: "{{ .Values.backup.schedule }}"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: backup
+              image: postgres:16-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+                  BACKUP_FILE=/backups/oms_wms_tms_$${TIMESTAMP}.sql.gz
+                  echo "Backing up database → $${BACKUP_FILE}..."
+                  PGPASSWORD=$PG_PASSWORD pg_dump \
+                    -h $PG_HOST \
+                    -U $PG_USER \
+                    -d $PG_DATABASE \
+                    --format=custom \
+                    --compress=9 \
+                    -f $${BACKUP_FILE}
+                  echo "Removing backups older than {{ .Values.backup.retentionDays }} days..."
+                  find /backups -name "oms_wms_tms_*.sql.gz" -mtime +{{ .Values.backup.retentionDays }} -delete
+                  echo "Backup complete."
+              env:
+                - name: PG_HOST
+                  value: {{ .Release.Name }}-postgresql
+                - name: PG_USER
+                  value: {{ .Values.postgresql.auth.username }}
+                - name: PG_DATABASE
+                  value: {{ .Values.postgresql.auth.database }}
+                - name: PG_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "tms.fullname" . }}
+                      key: PG_PASSWORD
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backups
+          volumes:
+            - name: backup-storage
+              persistentVolumeClaim:
+                claimName: {{ include "tms.fullname" . }}-backup
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "tms.fullname" . }}-backup
+  labels:
+    {{- include "tms.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.backup.storageSize }}
+{{- end }}

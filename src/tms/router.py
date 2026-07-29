@@ -8,20 +8,18 @@ from src.core.dependencies import get_current_user
 from src.core.exceptions import NotFoundException, ValidationException
 from src.tms import service as tms_service
 from src.tms.schemas import (
-    TransportOrderCreate,
-    TransportOrderResponse,
-    TransportOrderListResponse,
-    TrackingEventCreate,
-    TrackingEventResponse,
-    PODCreate,
-    TransferHubCreate,
-    TransferHubResponse,
     CarrierRouteCreate,
     CarrierRouteResponse,
     HubConnectionCreate,
     HubConnectionResponse,
-    RoutePlanCreate,
     RoutePlanResponse,
+    TrackingEventCreate,
+    TrackingEventResponse,
+    TransferHubCreate,
+    TransferHubResponse,
+    TransportOrderCreate,
+    TransportOrderListResponse,
+    TransportOrderResponse,
     TransportSegmentCreate,
     TransportSegmentResponse,
 )
@@ -37,11 +35,7 @@ async def create_transport_order(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new transport order (draft)."""
-    payload = data.model_dump()
-    try:
-        return await tms_service.create_transport_order(db, payload)
-    except ValidationException as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    return await tms_service.create_transport_order(db, data.model_dump())
 
 
 @router.get("/transport-orders/{order_id}", response_model=dict)
@@ -92,10 +86,7 @@ async def record_tracking_event(
     db: AsyncSession = Depends(get_db),
 ):
     """Register a tracking scan event."""
-    try:
-        return await tms_service.record_tracking_event(db, data.model_dump())
-    except ValidationException as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    return await tms_service.record_tracking_event(db, data.model_dump())
 
 
 @router.get("/transport-orders/{order_id}/tracking", response_model=list[TrackingEventResponse])
@@ -104,10 +95,7 @@ async def get_tracking_events(
     db: AsyncSession = Depends(get_db),
 ):
     """Get all tracking events for a transport order."""
-    try:
-        return await tms_service.get_tracking_events(db, order_id)
-    except NotFoundException as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    return await tms_service.get_tracking_events(db, order_id)
 
 
 # ── POD (Proof of Delivery) Endpoints ────────────────────────────────────────
@@ -119,11 +107,7 @@ async def create_pod(
     db: AsyncSession = Depends(get_db),
 ):
     """Record proof of delivery."""
-    try:
-        return await tms_service.create_pod(db, order_id, data)
-    except (NotFoundException, ValidationException) as e:
-        code = 404 if isinstance(e, NotFoundException) else 422
-        raise HTTPException(status_code=code, detail=str(e))
+    return await tms_service.create_pod(db, order_id, data)
 
 
 # ── Return Order Endpoints (Reverse Logistics) ───────────────────────────────
@@ -134,10 +118,7 @@ async def create_return_order(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a return / reverse logistics order."""
-    try:
-        return await tms_service.create_return_order(db, data)
-    except ValidationException as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    return await tms_service.create_return_order(db, data)
 
 
 # ── Exception Endpoints ──────────────────────────────────────────────────────
@@ -148,10 +129,7 @@ async def create_exception(
     db: AsyncSession = Depends(get_db),
 ):
     """Report a transport exception."""
-    try:
-        return await tms_service.create_exception(db, data)
-    except ValidationException as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    return await tms_service.create_exception(db, data)
 
 
 @router.patch("/exceptions/{exception_id}/resolve", response_model=dict)
@@ -378,10 +356,7 @@ async def add_carrier_route(
     db: AsyncSession = Depends(get_db),
 ):
     """Add a new carrier route with pricing."""
-    try:
-        return await tms_service.add_carrier_route(db, data.model_dump())
-    except ValidationException as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    return await tms_service.add_carrier_route(db, data.model_dump())
 
 
 @router.get("/carrier-routes", response_model=list[CarrierRouteResponse])
@@ -422,7 +397,11 @@ async def list_hub_connections(
 
 # ── RoutePlan Endpoints ───────────────────────────────────────────────────────
 
-@router.post("/transport-orders/{order_id}/route-plans", response_model=RoutePlanResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/transport-orders/{order_id}/route-plans",
+    response_model=RoutePlanResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def generate_route_plan(
     order_id: str,
     plan_type: str = Query(default="auto_gen", alias="type"),
@@ -456,10 +435,7 @@ async def create_segment(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a transport segment."""
-    try:
-        return await tms_service.create_segment(db, data.model_dump())
-    except ValidationException as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    return await tms_service.create_segment(db, data.model_dump())
 
 
 @router.get("/segments/{seg_id}", response_model=TransportSegmentResponse)
@@ -521,18 +497,6 @@ async def list_tracking_events(
     return await tms_service.list_tracking_events(db, transport_order_id=order_id)
 
 
-@router.post("/transport-orders/{order_id}/pod", status_code=status.HTTP_201_CREATED)
-async def create_pod(
-    order_id: str,
-    data: dict,
-    db: AsyncSession = Depends(get_db),
-):
-    try:
-        return await tms_service.create_pod(db, {"transport_order_id": order_id, **data})
-    except (NotFoundException, ValidationException) as e:
-        raise HTTPException(status_code=404 if isinstance(e, NotFoundException) else 422, detail=str(e))
-
-
 @router.get("/transport-orders/{order_id}/pod")
 async def get_pod(
     order_id: str,
@@ -560,17 +524,6 @@ async def update_pod(
 # Return Order (Reverse Logistics)
 # ═══════════════════════════════════════════════════════════════════════
 
-@router.post("/return-orders", status_code=status.HTTP_201_CREATED)
-async def create_return_order(
-    data: dict,
-    db: AsyncSession = Depends(get_db),
-):
-    try:
-        return await tms_service.create_return_order(db, data)
-    except (NotFoundException, ValidationException) as e:
-        raise HTTPException(status_code=404 if isinstance(e, NotFoundException) else 422, detail=str(e))
-
-
 @router.get("/return-orders")
 async def list_return_orders(
     db: AsyncSession = Depends(get_db),
@@ -581,10 +534,10 @@ async def list_return_orders(
 
 @router.get("/return-orders/{return_id}")
 async def get_return_order(return_id: str, db: AsyncSession = Depends(get_db)):
-    order = await tms_service.get_return_order(db, return_id=return_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="ReturnOrder not found")
-    return order
+    try:
+        return await tms_service.get_return_order(db, return_id=return_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.patch("/return-orders/{return_id}/status", response_model=dict)
@@ -600,7 +553,7 @@ async def update_return_status(return_id: str, data: dict, db: AsyncSession = De
 # ═══════════════════════════════════════════════════════════════════════
 
 @router.post("/transport-orders/{order_id}/exceptions", status_code=status.HTTP_201_CREATED)
-async def create_exception(order_id: str, data: dict, db: AsyncSession = Depends(get_db)):
+async def create_order_exception(order_id: str, data: dict, db: AsyncSession = Depends(get_db)):
     try:
         return await tms_service.create_exception(db, {"transport_order_id": order_id, **data})
     except (NotFoundException, ValidationException) as e:
@@ -617,7 +570,7 @@ async def list_exceptions(
 
 
 @router.patch("/exceptions/{exc_id}", response_model=dict)
-async def resolve_exception(exc_id: str, data: dict, db: AsyncSession = Depends(get_db)):
+async def resolve_exc(exc_id: str, data: dict, db: AsyncSession = Depends(get_db)):
     try:
         return await tms_service.resolve_exception(
             db, exc_id=exc_id, resolution_notes=data.get("resolution_notes"))
@@ -626,13 +579,8 @@ async def resolve_exception(exc_id: str, data: dict, db: AsyncSession = Depends(
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# FreightRule & FreightTier (Shipping Cost Calculation)
+# FreightTier (Shipping Cost Calculation)
 # ═══════════════════════════════════════════════════════════════════════
-
-@router.post("/freight-rules", status_code=status.HTTP_201_CREATED)
-async def create_freight_rule(data: dict, db: AsyncSession = Depends(get_db)):
-    return await tms_service.create_freight_rule(db, data)
-
 
 @router.post("/freight-tiers", status_code=status.HTTP_201_CREATED)
 async def create_freight_tier(data: dict, db: AsyncSession = Depends(get_db)):
@@ -658,14 +606,26 @@ async def record_forecast_observation(data: dict, db: AsyncSession = Depends(get
 
 @router.get("/forecast", response_model=list[dict])
 async def get_forecast(
+    db: AsyncSession = Depends(get_db),
     origin_city: str = Query(None),
     destination_city: str = Query(None),
     days: int = Query(7, ge=1, le=30),
 ):
-    return await tms_service.get_forecast(db={}, data={"origin_city": origin_city or "", "destination_city": destination_city or "", "days": days})
+    return await tms_service.get_forecast(
+        db=db,
+        data={
+            "origin_city": origin_city or "",
+            "destination_city": destination_city or "",
+            "days": days,
+        },
+    )
 
 
 @router.post("/forecast/training")
-async def train_forecast(data: dict, db: AsyncSession = Depends(get_db)):
-    """Train forecast model with historical data."""
-    return await tms_service.record_forecast_observation(db, data)
+async def train_forecast(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Train forecast model from historical transport orders."""
+    months = int(data.get("months", 6))
+    return await tms_service.train_forecast(db, months=months)

@@ -2,12 +2,18 @@
 import asyncio
 import uuid
 from decimal import Decimal
+
 from sqlalchemy import select
 
 from src.core.database import async_session_factory
 from src.tms.models import (
-    TransferHub, HubConnection, CarrierRoute, FreightRule, FreightTier,
-    TransferHubType, HubStatus, CarrierCode, FreightRule as _FR, FreightTier as _FT,
+    CarrierCode,
+    CarrierRoute,
+    FreightRule,
+    FreightTier,
+    HubConnection,
+    TransferHub,
+    TransferHubType,
 )
 
 
@@ -64,7 +70,7 @@ async def seed_freight_rules(db):
         (CarrierCode.SF_EXPRESS, "weight_tiered", Decimal("10.0"), None, Decimal("7.2")),
     ]
     for carrier, rule_type, mn, mx, pp in rules:
-        f = FreightTier(id=uuid.uuid4(), carrier_code=carrier, rule_type=_FR(rule_type),
+        f = FreightTier(id=uuid.uuid4(), carrier_code=carrier, rule_type=FreightRule(rule_type),
                         min_value=mn, max_value=mx, price_per_unit=pp)
         db.add(f)
     await db.commit()
@@ -87,5 +93,5 @@ async def main(db=None):
     print("Seed done.")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     asyncio.run(main())

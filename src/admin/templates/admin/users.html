@@ -3,19 +3,46 @@
 {% block content %}
 <div class="page-header"><h2>Users</h2></div>
 
+<details style="margin-bottom:16px;">
+  <summary style="cursor:pointer;color:var(--accent);font-weight:600;">+ Create User</summary>
+  <form method="POST" action="/admin/users" style="margin-top:8px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="form-label">Username</label>
+    <input class="form-control" name="username" required>
+    <label class="form-label">Email</label>
+    <input class="form-control" name="email" type="email" required>
+    <label class="form-label">Password</label>
+    <input class="form-control" name="password" type="password" required>
+    <button type="submit">Create</button>
+  </form>
+</details>
+
 {% if users %}
 <div class="card" style="padding:0;">
   <div class="table-wrap">
     <table>
-      <thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Active</th><th>Created</th></tr></thead>
+      <thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Active</th><th>Created</th><th></th></tr></thead>
       <tbody>
         {% for u in users %}
         <tr>
           <td style="font-family:monospace;font-size:0.8rem;">{{ u.id[:8] if u.id else '—' }}…</td>
           <td>{{ u.username }}</td>
           <td>{{ u.email }}</td>
-          <td><span class="badge badge-{{ 'success' if u.is_active else 'danger' }}">{{ 'Active' if u.is_active else 'Inactive' }}</span></td>
+          <td>
+            <form method="POST" action="/admin/users/{{ u.id }}/toggle" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="badge badge-{{ 'success' if u.is_active else 'danger' }}" style="border:none;cursor:pointer;">
+                {{ 'Active' if u.is_active else 'Inactive' }}
+              </button>
+            </form>
+          </td>
           <td style="white-space:nowrap;">{{ u.created_at[:10] if u.created_at else '—' }}</td>
+          <td>
+            <form method="POST" action="/admin/users/{{ u.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete user {{ u.username }}?')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" style="color:var(--danger);border:none;background:none;cursor:pointer;">Delete</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>

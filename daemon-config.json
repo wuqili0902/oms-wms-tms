@@ -1,0 +1,9 @@
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://docker.1mol.com",
+    "https://docker.xuanyuan.xyz"
+  ],
+  "ipv6": false,
+  "experimental": true
+}

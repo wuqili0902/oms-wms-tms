@@ -15,6 +15,8 @@ import io
 from datetime import UTC, datetime
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import pandas as pd
+from fastapi import UploadFile
 from openpyxl import load_workbook
 
 
@@ -60,7 +62,7 @@ def _parse_excel(file: UploadFile):
 
     headers = [str(h).strip().lower() for h in rows[0]]
     data_rows = []
-    import pandas as pd  # noqa: F811
+
 
     for row in rows[1:]:
         mapping = {col: (row[i] if i < len(row) else None) for i, col in enumerate(headers)}
@@ -81,7 +83,7 @@ def generate_barcode_zip(file: UploadFile) -> bytes:
 
     headers = [str(h).strip().lower() for h in rows[0]]
     data_rows = []
-    import pandas as pd  # noqa: F811
+
 
     for row in rows[1:]:
         mapping = {col: (row[i] if i < len(row) else None) for i, col in enumerate(headers)}
@@ -92,15 +94,16 @@ def generate_barcode_zip(file: UploadFile) -> bytes:
     buf = io.BytesIO()
     with ZipFile(buf, "w", ZIP_DEFLATED) as zf:
         for _, row in df.iterrows():
-            sku = str(row.get("sku", "")).strip() or ""
-            name = str(row.get("name", "")).strip() or ""
-            qty = int(float(str(row.get("quantity", 1)).strip())) if pd.notna(row.get("quantity")) else 1
+            sku_raw = row.get("sku")
+            sku = str(sku_raw).strip() if pd.notna(sku_raw) else ""
+            name_raw = row.get("name")
+            name = str(name_raw).strip() if pd.notna(name_raw) else ""
 
             if not sku:
                 continue
 
             # Resolve GTIN — user-provided or auto-generated
-            gtin_raw_val = row.get("gtin", "")
+            gtin_raw_val = row.get("gtin")
             gtin_raw = str(gtin_raw_val).strip() if pd.notna(gtin_raw_val) else ""
             if not gtin_raw:
                 gtin = generate_gtin_from_sku(sku)
@@ -111,7 +114,7 @@ def generate_barcode_zip(file: UploadFile) -> bytes:
                 gtin = gtin_raw
 
             prefix = f"{sku.replace('/', '_')}"
-            now = datetime.now(UTC).isoformat()
+            datetime.now(UTC).isoformat()
 
             # ── PDF label (EAN-13 text + QR) ────────────────
             from reportlab.lib.pagesizes import A5 as A5size
@@ -147,9 +150,9 @@ def export_csv_barcodes(df: pd.DataFrame) -> str:
     """Export barcode data as CSV (for Excel import into label software)."""
     rows = []
     for _, row in df.iterrows():
-        sku = str(row.get("sku", "")).strip() or ""
-        name = str(row.get("name", "")).strip() or ""
-        gtin_raw = str(row.get("gtin", "")).strip()
+        sku = str(row.get("sku")).strip() if pd.notna(row.get("sku")) else ""
+        name = str(row.get("name")).strip() if pd.notna(row.get("name")) else ""
+        gtin_raw = str(row.get("gtin")).strip() if pd.notna(row.get("gtin")) else ""
         gtin = generate_gtin_from_sku(sku) if not gtin_raw else gtin_raw
 
         rows.append({"SKU": sku, "Name": name, "GTIN": gtin})
@@ -182,15 +185,16 @@ def _zpl_line(sku: str, name: str, qty: int, gtin: str) -> str:
 
 def export_zpl_labels(df: pd.DataFrame) -> str:
     """Export all barcodes as ZPL commands ready to send to a thermal printer."""
-    import pandas as pd  # noqa: F811
+
 
     parts = []
     for _, row in df.iterrows():
-        sku = str(row.get("sku", "")).strip() or ""
-        name = str(row.get("name", "")).strip() or ""
-        qty = int(float(str(row.get("quantity", 1)).strip())) if pd.notna(row.get("quantity")) else 1
+        sku = str(row.get("sku")).strip() if pd.notna(row.get("sku")) else ""
+        name = str(row.get("name")).strip() if pd.notna(row.get("name")) else ""
+        qty_raw = row.get("quantity")
+        qty = int(float(str(qty_raw).strip())) if pd.notna(qty_raw) else 1
 
-        gtin_raw = str(row.get("gtin", "")).strip()
+        gtin_raw = str(row.get("gtin")).strip() if pd.notna(row.get("gtin")) else ""
         gtin = generate_gtin_from_sku(sku) if not gtin_raw else gtin_raw
 
         parts.append(_zpl_line(sku, name, qty, gtin))

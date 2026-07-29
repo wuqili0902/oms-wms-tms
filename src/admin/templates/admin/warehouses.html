@@ -1,0 +1,92 @@
+{% extends "admin/base.html" %}
+{% block title %}Warehouses{% endblock %}
+{% block content %}
+
+<!-- Flash messages -->
+{% for msg_type, msg in flashes %}
+<div class="flash flash-{{ msg_type }}">{{ msg }}</div>
+{% endfor %}
+
+<div class="page-header">
+  <h2>Warehouses</h2>
+</div>
+
+{# Edit form (shown when wh context is passed) #}
+{% if wh %}
+<form method="POST" action="/admin/warehouses/{{ wh.id }}" style="margin-bottom:16px;">
+  <label class="form-label">Code</label>
+  <input class="form-control" name="code" required value="{{ wh.code }}">
+  <br>
+  <label class="form-label">Name</label>
+  <input class="form-control" name="name" required value="{{ wh.name }}">
+  <br>
+  <button type="submit">Save Changes</button>
+</form>
+{% endif %}
+
+{# Create form #}
+<form method="POST" action="/admin/warehouses" style="margin-bottom:16px;">
+  <label class="form-label">Code</label>
+  <input class="form-control" name="code" required>
+  <br>
+  <label class="form-label">Name</label>
+  <input class="form-control" name="name" required>
+  <br>
+  <button type="submit">Create Warehouse</button>
+</form>
+
+{% if warehouses %}
+<div class="card" style="padding:0;">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Address</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for wh in warehouses %}
+        <tr>
+          <td>{{ wh.code }}</td>
+          <td>{{ wh.name }}</td>
+          <td>{{ wh.type|replace('_', ' ')|title }}</td>
+          <td>{{ wh.address[:50] if wh.address else '—' }}…</td>
+          <td>
+            {% if wh.is_active %}
+              <span class="badge badge-success">Active</span>
+            {% else %}
+              <span class="badge badge-neutral">Inactive</span>
+            {% endif %}
+          </td>
+          <td>
+            <a href="/admin/warehouses/{{ wh.id }}/edit" style="color:var(--accent);text-decoration:none;">Edit</a>
+            &nbsp;|&nbsp;
+            <a href="#" onclick="document.getElementById('del-{{ wh.id }}').style.display='block'; return false;" style="color:var(--danger);text-decoration:none;">Delete</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# Delete forms (hidden until confirmed) #}
+{% for wh in warehouses %}
+<form id="del-{{ wh.id }}" method="POST" action="/admin/warehouses/{{ wh.id }}" style="display:none;margin-top:16px;">
+  <input type="hidden" name="_method" value="DELETE">
+  <button type="submit">Confirm Delete</button>
+</form>
+{% endfor %}
+
+<script>
+// Close delete form when clicking elsewhere
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('[id^="del-"]')) {
+    document.querySelectorAll('[id^="del-"]').forEach(f => f.style.display = 'none');
+  }
+});
+</script>
+
+{% else %}
+<div class="card"><div class="empty-state">
+  <p>No warehouses found. Warehouses will appear here once created via the WMS API.</p>
+</div></div>
+{% endif %}
+
+{% endblock %}

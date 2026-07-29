@@ -4,7 +4,6 @@ This module provides various middleware classes that can be added to the FastAPI
 to enhance security, observability, and user experience.
 """
 
-import json
 import logging
 import uuid
 from datetime import datetime
@@ -27,26 +26,19 @@ class TraceContext:
     so downstream services or loggers can reconstruct the distributed trace.
     """
 
-    def __init__(self, app: ASGIApp | None = None) -> None:
-        super().__init__()
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         request = Request(scope, receive)
-        trace_id = request.headers.get("traceparent", "")
+        traceparent = request.headers.get("traceparent", "")
         span_id = request.headers.get("x-span-id") or ""
 
-        # Store in scope for downstream access (e.g. middleware, handlers)
-        scope["trace_id"] = trace_id[-32:] if len(trace_id) >= 32 else "0" * 32
-        scope["span_id"] = span_id[:16] if len(span_id) <= 16 else "0" * 16
+        trace_parts = traceparent.split("-")
+        trace_id = trace_parts[1] if len(trace_parts) >= 2 else traceparent[-32:]
 
-        # Enrich logging with trace info — logger.bind() is deprecated; use dict-based binding.
-        bound_logger = logger.copy()
-        enriched_logger = logger.bind_factory(lambda **kwargs: bound_logger.bind(**kwargs))
-        try:
-            scope["enriched_logger"] = enriched_logger.bind(trace_id=scope.get("trace_id", "unknown"), span_id=span_id[:8] or "")
-        except AttributeError:
-            pass  # bind() not available on this logger
+        scope["trace_id"] = trace_id[-32:] if len(trace_id) >= 32 else "0" * 32
+        scope["span_id"] = span_id[:16] if len(span_id) >= 16 else "0" * 16
 
         async def wrapped_send(message: dict) -> None:
             if message["type"] == "http.response.start":
@@ -66,7 +58,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
     """
 
     def __init__(self, app: ASGIApp | None = None) -> None:
-        super().__init__()
+        super().__init__(app)  # type: ignore[arg-type]
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -95,7 +87,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """
 
     def __init__(self, app: ASGIApp | None = None) -> None:
-        super().__init__()
+        super().__init__(app)  # type: ignore[arg-type]
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -124,7 +116,7 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
     """
 
     def __init__(self, app: ASGIApp | None = None) -> None:
-        super().__init__()
+        super().__init__(app)  # type: ignore[arg-type]
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -149,9 +141,12 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         auth_header = request.headers.get("authorization")
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header[7:]
-            payload = decode_token(token)
-            if payload and "sub" in payload:
-                return payload["sub"]
+            try:
+                payload = decode_token(token)
+                if "sub" in payload:
+                    return payload["sub"]
+            except Exception:
+                pass
         return "anonymous"
 
     async def _extract_request_body(self, request: Request, receive: Receive) -> Any | None:

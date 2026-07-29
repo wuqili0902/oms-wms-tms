@@ -1,0 +1,128 @@
+name: Build, Test, and Deploy
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: oms_wms_tms
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready -U postgres
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run lint
+        run: ruff check src/
+
+      - name: Run tests
+        run: pytest tests/ --ignore=tests/test_e2e --cov=src --cov-report=term
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/oms_wms_tms
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: ci-test-secret-key
+
+  build-and-push:
+    needs: [test]
+    if: github.event_name == 'push' || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha,prefix=,suffix=,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [build-and-push]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Helm deploy
+        run: |
+          echo "Deploy step — configure with your K8s provider (GKE/EKS/ACK):"
+          echo "1. Install Helm: helm upgrade oms-wms-tms deploy/helm/tms"
+          echo "2. Set image tag to ${{ github.sha }}"
+        # Uncomment and configure for your environment:
+        # - uses: azure/setup-helm@v4
+        # - run: |
+        #     helm upgrade --install oms-wms-tms deploy/helm/tms \
+        #       --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+        #       --set image.tag=${{ github.sha }} \
+        #       --set env.SECRET_KEY=${{ secrets.SECRET_KEY }} \
+        #       --set postgresql.auth.password=${{ secrets.PG_PASSWORD }} \
+        #       --set rabbitmq.auth.password=${{ secrets.RABBITMQ_PASSWORD }} \
+        #       --namespace oms-wms-tms --create-namespace

@@ -1,0 +1,91 @@
+replicaCount: 2
+
+image:
+  repository: oms-wms-tms
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: nginx
+  host: tms.example.com
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    secretName: oms-wms-tms-tls
+
+postgresql:
+  enabled: true
+  auth:
+    database: oms_wms_tms
+    username: postgres
+    password: changeme
+  primary:
+    persistence:
+      size: 10Gi
+
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      size: 5Gi
+
+rabbitmq:
+  enabled: true
+  auth:
+    username: guest
+    password: changeme
+  persistence:
+    size: 5Gi
+
+celery:
+  worker:
+    replicas: 2
+    concurrency: 4
+  beat:
+    enabled: true
+
+resources:
+  app:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+  worker:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80
+
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retentionDays: 30
+  storageSize: 20Gi
+
+env:
+  DEBUG: "false"
+  CORS_ORIGINS: '["https://tms.example.com"]'
+  SECRET_KEY: ""
+  SMTP_HOST: ""
+  SMTP_PORT: "587"
+  SMTP_USER: ""
+  SMTP_PASSWORD: ""
+  SMTP_FROM: "noreply@oms-wms-tms.local"

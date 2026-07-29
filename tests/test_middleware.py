@@ -2,6 +2,7 @@
 
 import pytest
 from httpx import AsyncClient
+from unittest.mock import patch
 
 from src.core.response import (
     ApiResponse,
@@ -210,7 +211,9 @@ class TestHealthEndpoints:
     @pytest.mark.asyncio
     async def test_health_check(self, async_client: AsyncClient):
         """Test health check endpoint returns OK."""
-        response = await async_client.get("/api/v1/health")
+        with patch("src.api.v1.health.check_db_health") as mock_check:
+            mock_check.return_value = True
+            response = await async_client.get("/api/v1/health")
 
         assert response.status_code == 200
         data = response.json()
@@ -219,7 +222,11 @@ class TestHealthEndpoints:
     @pytest.mark.asyncio
     async def test_readiness_check(self, async_client: AsyncClient):
         """Test readiness check endpoint returns ready."""
-        response = await async_client.get("/api/v1/ready")
+        with patch("src.api.v1.health.check_db_health") as mock_db:
+            mock_db.return_value = True
+            with patch("src.cache.redis_client.redis_health_check") as mock_redis:
+                mock_redis.return_value = True
+                response = await async_client.get("/api/v1/ready")
 
         assert response.status_code == 200
         data = response.json()

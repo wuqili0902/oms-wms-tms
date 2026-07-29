@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
+COPY src/ ./src/
+COPY alembic/ ./alembic/
+COPY alembic.ini .
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir .
 
@@ -31,9 +34,12 @@ COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
 COPY pyproject.toml .
+COPY docker/scripts/entrypoint.sh /entrypoint.sh
+COPY docker/scripts/entrypoint-celery-worker.sh /entrypoint-celery-worker.sh
+COPY docker/scripts/entrypoint-celery-beat.sh /entrypoint-celery-beat.sh
 
 # Create non-root user
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app && chmod +x /entrypoint.sh
 USER appuser
 
 EXPOSE 8000
@@ -41,4 +47,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')" || exit 1
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

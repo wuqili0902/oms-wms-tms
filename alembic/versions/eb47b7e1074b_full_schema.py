@@ -1,8 +1,8 @@
-"""initial
+"""full_schema
 
-Revision ID: ac07bc39423d
+Revision ID: eb47b7e1074b
 Revises: 
-Create Date: 2026-06-02 14:37:39.758838
+Create Date: 2026-07-24 12:26:34.490578
 """
 from typing import Sequence, Union
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = 'ac07bc39423d'
+revision: str = 'eb47b7e1074b'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -26,13 +26,44 @@ def upgrade() -> None:
     sa.Column('format', sa.String(length=20), nullable=False, comment='ean13/code128/qr/datamatrix'),
     sa.Column('image_url', sa.Text(), nullable=True),
     sa.Column('raw_data', sa.Text(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_barcode_records_entity_id'), 'barcode_records', ['entity_id'], unique=False)
     op.create_index(op.f('ix_barcode_records_gtin'), 'barcode_records', ['gtin'], unique=False)
     op.create_index(op.f('ix_barcode_records_id'), 'barcode_records', ['id'], unique=False)
+    op.create_table('carrier_configs',
+    sa.Column('carrier_code', sa.Enum('SF_EXPRESS', 'ZTO', 'YUNDA', 'JD_LOGISTICS', 'EMS', name='carriercode'), nullable=False),
+    sa.Column('api_endpoint', sa.String(length=500), nullable=True),
+    sa.Column('api_key', sa.String(length=200), nullable=True),
+    sa.Column('account_number', sa.String(length=100), nullable=True),
+    sa.Column('on_time_rate', sa.Numeric(precision=5, scale=2), nullable=True),
+    sa.Column('avg_delivery_days', sa.Numeric(precision=4, scale=1), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.PrimaryKeyConstraint('carrier_code', 'id')
+    )
+    op.create_index(op.f('ix_carrier_configs_id'), 'carrier_configs', ['id'], unique=False)
+    op.create_table('carrier_routes',
+    sa.Column('carrier_code', sa.Enum('SF_EXPRESS', 'ZTO', 'YUNDA', 'JD_LOGISTICS', 'EMS', name='carriercode'), nullable=False),
+    sa.Column('origin_city', sa.String(length=100), nullable=False),
+    sa.Column('dest_city', sa.String(length=100), nullable=False),
+    sa.Column('distance_km', sa.Numeric(precision=20, scale=4), nullable=True),
+    sa.Column('transit_hours', sa.Numeric(precision=10, scale=1), nullable=True),
+    sa.Column('base_price_per_kg', sa.Numeric(precision=18, scale=4), nullable=True),
+    sa.Column('express_surcharge', sa.Numeric(precision=18, scale=4), nullable=True),
+    sa.Column('min_charge_weight', sa.Numeric(precision=20, scale=4), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_carrier_routes_carrier_code'), 'carrier_routes', ['carrier_code'], unique=False)
+    op.create_index(op.f('ix_carrier_routes_dest_city'), 'carrier_routes', ['dest_city'], unique=False)
+    op.create_index(op.f('ix_carrier_routes_id'), 'carrier_routes', ['id'], unique=False)
+    op.create_index(op.f('ix_carrier_routes_origin_city'), 'carrier_routes', ['origin_city'], unique=False)
     op.create_table('customers',
     sa.Column('code', sa.String(length=50), nullable=True),
     sa.Column('name', sa.String(length=200), nullable=False),
@@ -40,8 +71,8 @@ def upgrade() -> None:
     sa.Column('phone', sa.String(length=30), nullable=True),
     sa.Column('address', sa.JSON(), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
@@ -49,6 +80,32 @@ def upgrade() -> None:
     op.create_index(op.f('ix_customers_code'), 'customers', ['code'], unique=True)
     op.create_index(op.f('ix_customers_id'), 'customers', ['id'], unique=False)
     op.create_index(op.f('ix_customers_is_deleted'), 'customers', ['is_deleted'], unique=False)
+    op.create_table('freight_tiers',
+    sa.Column('carrier_code', sa.Enum('SF_EXPRESS', 'ZTO', 'YUNDA', 'JD_LOGISTICS', 'EMS', name='carriercode'), nullable=False),
+    sa.Column('rule_type', sa.Enum('WEIGHT_TIERED', 'DISTANCE_TIERED', 'FLAT_RATE', 'VOLUME_BASED', name='freightrule'), nullable=True),
+    sa.Column('min_value', sa.Numeric(precision=20, scale=4), nullable=True),
+    sa.Column('max_value', sa.Numeric(precision=20, scale=4), nullable=True),
+    sa.Column('price_per_unit', sa.Numeric(precision=18, scale=4), nullable=True),
+    sa.Column('surcharge_express', sa.Numeric(precision=18, scale=4), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.PrimaryKeyConstraint('carrier_code', 'id')
+    )
+    op.create_index(op.f('ix_freight_tiers_id'), 'freight_tiers', ['id'], unique=False)
+    op.create_table('hub_connections',
+    sa.Column('from_hub_code', sa.String(length=50), nullable=False),
+    sa.Column('to_hub_code', sa.String(length=50), nullable=False),
+    sa.Column('distance_km', sa.Numeric(precision=20, scale=4), nullable=True),
+    sa.Column('transit_hours', sa.Numeric(precision=10, scale=1), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_hub_connections_from_hub_code'), 'hub_connections', ['from_hub_code'], unique=False)
+    op.create_index(op.f('ix_hub_connections_id'), 'hub_connections', ['id'], unique=False)
+    op.create_index(op.f('ix_hub_connections_to_hub_code'), 'hub_connections', ['to_hub_code'], unique=False)
     op.create_table('label_templates',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('name', sa.String(length=100), nullable=False),
@@ -56,10 +113,10 @@ def upgrade() -> None:
     sa.Column('format', sa.String(length=20), nullable=False, comment='zpl/ezpl'),
     sa.Column('width_mm', sa.Float(), nullable=False),
     sa.Column('height_mm', sa.Float(), nullable=False),
-    sa.Column('content', postgresql.JSONB(astext_type=Text()), nullable=False),
+    sa.Column('content', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('is_default', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_label_templates_code'), 'label_templates', ['code'], unique=True)
@@ -71,8 +128,8 @@ def upgrade() -> None:
     sa.Column('resource', sa.String(length=100), nullable=False),
     sa.Column('action', sa.String(length=50), nullable=False),
     sa.Column('description', sa.Text(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_permissions_code'), 'permissions', ['code'], unique=True)
@@ -82,8 +139,8 @@ def upgrade() -> None:
     sa.Column('reference_id', sa.UUID(), nullable=True),
     sa.Column('entity_data', sa.JSON(), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
@@ -99,8 +156,8 @@ def upgrade() -> None:
     sa.Column('code', sa.String(length=50), nullable=False),
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('is_system', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_roles_code'), 'roles', ['code'], unique=True)
@@ -113,8 +170,8 @@ def upgrade() -> None:
     sa.Column('category', sa.String(length=100), nullable=True),
     sa.Column('manufacturer', sa.String(length=200), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
@@ -123,14 +180,32 @@ def upgrade() -> None:
     op.create_index(op.f('ix_skus_id'), 'skus', ['id'], unique=False)
     op.create_index(op.f('ix_skus_is_deleted'), 'skus', ['is_deleted'], unique=False)
     op.create_index(op.f('ix_skus_sku'), 'skus', ['sku'], unique=True)
+    op.create_table('transfer_hubs',
+    sa.Column('code', sa.String(length=50), nullable=False),
+    sa.Column('name', sa.String(length=200), nullable=False),
+    sa.Column('hub_type', sa.Enum('PRIMARY', 'SECONDARY', 'CARGO_STATION', name='transferhubtype'), nullable=True),
+    sa.Column('city', sa.String(length=100), nullable=False),
+    sa.Column('address', sa.JSON(), nullable=True),
+    sa.Column('capacity_weight_kg', sa.Numeric(precision=20, scale=4), nullable=True),
+    sa.Column('contact_name', sa.String(length=100), nullable=True),
+    sa.Column('contact_phone', sa.String(length=30), nullable=True),
+    sa.Column('status', sa.Enum('OPEN', 'MAINTENANCE', 'CLOSED', name='hubstatus'), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_transfer_hubs_city'), 'transfer_hubs', ['city'], unique=False)
+    op.create_index(op.f('ix_transfer_hubs_code'), 'transfer_hubs', ['code'], unique=True)
+    op.create_index(op.f('ix_transfer_hubs_id'), 'transfer_hubs', ['id'], unique=False)
     op.create_table('users',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('username', sa.String(length=100), nullable=False),
     sa.Column('email', sa.String(length=255), nullable=False),
     sa.Column('hashed_password', sa.String(length=256), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
@@ -146,8 +221,8 @@ def upgrade() -> None:
     sa.Column('phone', sa.String(length=30), nullable=True),
     sa.Column('config', sa.JSON(), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
@@ -167,8 +242,8 @@ def upgrade() -> None:
     sa.Column('location_type', sa.Enum('STORAGE', 'PICKING', 'RECEIVING', 'SHIPPING', 'QUARANTINE', name='locationtype'), nullable=True),
     sa.Column('status', sa.Enum('ACTIVE', 'RESERVED', 'MAINTENANCE', 'CLOSED', name='locationstatus'), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id'], ),
@@ -178,6 +253,24 @@ def upgrade() -> None:
     op.create_index(op.f('ix_locations_id'), 'locations', ['id'], unique=False)
     op.create_index(op.f('ix_locations_is_deleted'), 'locations', ['is_deleted'], unique=False)
     op.create_index('ix_locations_warehouse_id_zone', 'locations', ['warehouse_id', 'zone'], unique=False)
+    op.create_table('merge_groups',
+    sa.Column('code', sa.String(length=50), nullable=True),
+    sa.Column('warehouse_id', sa.UUID(), nullable=True),
+    sa.Column('status', sa.String(length=20), nullable=True),
+    sa.Column('total_items', sa.Integer(), nullable=True),
+    sa.Column('total_amount', sa.Numeric(precision=18, scale=2), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('is_deleted', sa.Boolean(), nullable=False),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+    sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_merge_groups_code'), 'merge_groups', ['code'], unique=True)
+    op.create_index(op.f('ix_merge_groups_id'), 'merge_groups', ['id'], unique=False)
+    op.create_index(op.f('ix_merge_groups_is_deleted'), 'merge_groups', ['is_deleted'], unique=False)
     op.create_table('orders',
     sa.Column('order_no', sa.String(length=50), nullable=True),
     sa.Column('status', sa.Enum('PENDING', 'CONFIRMED', 'PROCESSING', 'PICKING', 'COMPLETED', 'CANCELLED', 'FAILED', name='orderstatus'), nullable=True),
@@ -189,8 +282,8 @@ def upgrade() -> None:
     sa.Column('version', sa.Integer(), nullable=True),
     sa.Column('notes', sa.Text(), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['customer_id'], ['customers.id'], ),
@@ -211,8 +304,8 @@ def upgrade() -> None:
     sa.Column('completed_items', sa.Integer(), nullable=True),
     sa.Column('assignee_id', sa.UUID(), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id'], ),
@@ -244,8 +337,8 @@ def upgrade() -> None:
     sa.Column('config', sa.JSON(), nullable=True),
     sa.Column('push_token', sa.String(length=500), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id'], ),
@@ -269,11 +362,12 @@ def upgrade() -> None:
     sa.Column('device_id', sa.UUID(), nullable=True),
     sa.Column('token', sa.String(length=500), nullable=True),
     sa.Column('login_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('status', sa.Enum('ACTIVE', 'ENDED', name='sessionstatus'), nullable=True),
     sa.Column('logout_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('ip_address', sa.String(length=45), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['device_id'], ['terminal_devices.id'], ),
@@ -289,14 +383,17 @@ def upgrade() -> None:
     sa.Column('sku_id', sa.UUID(), nullable=True),
     sa.Column('gtin', sa.String(length=13), nullable=True),
     sa.Column('batch_no', sa.String(length=50), nullable=True),
+    sa.Column('expiry_date', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('manufacturing_date', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('received_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('quantity', sa.Numeric(precision=20, scale=4), nullable=True),
     sa.Column('locked_qty', sa.Numeric(precision=20, scale=4), nullable=True),
     sa.Column('min_qty', sa.Numeric(precision=18, scale=4), nullable=True),
     sa.Column('max_qty', sa.Numeric(precision=18, scale=4), nullable=True),
     sa.Column('version', sa.Integer(), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['location_id'], ['locations.id'], ),
@@ -304,6 +401,7 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index('ix_inventory_batch_expiry', 'inventory', ['batch_no', 'expiry_date'], unique=False)
     op.create_index(op.f('ix_inventory_batch_no'), 'inventory', ['batch_no'], unique=False)
     op.create_index(op.f('ix_inventory_gtin'), 'inventory', ['gtin'], unique=False)
     op.create_index(op.f('ix_inventory_id'), 'inventory', ['id'], unique=False)
@@ -322,8 +420,8 @@ def upgrade() -> None:
     sa.Column('batch_no', sa.String(length=50), nullable=True),
     sa.Column('status', sa.String(length=20), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['order_id'], ['orders.id'], ),
@@ -341,14 +439,43 @@ def upgrade() -> None:
     sa.Column('operator_id', sa.UUID(), nullable=True),
     sa.Column('remark', sa.Text(), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.ForeignKeyConstraint(['operator_id'], ['users.id'], ),
     sa.ForeignKeyConstraint(['order_id'], ['orders.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_order_status_logs_id'), 'order_status_logs', ['id'], unique=False)
     op.create_index('ix_order_status_logs_order_id_created_at', 'order_status_logs', ['order_id', 'created_at'], unique=False)
+    op.create_table('packing_records',
+    sa.Column('picking_wave_id', sa.UUID(), nullable=False),
+    sa.Column('packed_by', sa.String(length=100), nullable=True),
+    sa.Column('box_count', sa.Integer(), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['picking_wave_id'], ['picking_waves.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_packing_records_id'), 'packing_records', ['id'], unique=False)
+    op.create_table('split_child_orders',
+    sa.Column('parent_order_id', sa.UUID(), nullable=True),
+    sa.Column('child_order_id', sa.UUID(), nullable=False),
+    sa.Column('merge_group_id', sa.UUID(), nullable=True),
+    sa.Column('split_reason', sa.String(length=100), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('is_deleted', sa.Boolean(), nullable=False),
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
+    sa.ForeignKeyConstraint(['child_order_id'], ['orders.id'], ),
+    sa.ForeignKeyConstraint(['merge_group_id'], ['merge_groups.id'], ),
+    sa.ForeignKeyConstraint(['parent_order_id'], ['orders.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_split_child_orders_id'), 'split_child_orders', ['id'], unique=False)
+    op.create_index(op.f('ix_split_child_orders_is_deleted'), 'split_child_orders', ['is_deleted'], unique=False)
     op.create_table('stock_movements',
     sa.Column('source_warehouse_id', sa.UUID(), nullable=True),
     sa.Column('target_warehouse_id', sa.UUID(), nullable=True),
@@ -360,8 +487,8 @@ def upgrade() -> None:
     sa.Column('movement_type', sa.Enum('TRANSFER', 'REPLENISHMENT', 'RETURN', name='stockmovementtype'), nullable=True),
     sa.Column('status', sa.String(length=20), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['sku_id'], ['skus.id'], ),
@@ -384,8 +511,8 @@ def upgrade() -> None:
     sa.Column('started_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['device_id'], ['terminal_devices.id'], ),
@@ -394,7 +521,6 @@ def upgrade() -> None:
     op.create_index('ix_sync_logs_device_id_status', 'sync_logs', ['device_id', 'status'], unique=False)
     op.create_index(op.f('ix_sync_logs_id'), 'sync_logs', ['id'], unique=False)
     op.create_index(op.f('ix_sync_logs_is_deleted'), 'sync_logs', ['is_deleted'], unique=False)
-    op.create_index('ix_sync_logs_started_at_completed_at', 'sync_logs', ['started_at', 'completed_at'], unique=False)
     op.create_table('inventory_logs',
     sa.Column('inventory_id', sa.UUID(), nullable=True),
     sa.Column('change_type', sa.Enum('INBOUND', 'OUTBOUND', 'ADJUSTMENT', 'TRANSFER_IN', 'TRANSFER_OUT', 'PICKING', 'RETURNED', name='inventorychangetype'), nullable=True),
@@ -406,8 +532,8 @@ def upgrade() -> None:
     sa.Column('operator_id', sa.UUID(), nullable=True),
     sa.Column('remark', sa.Text(), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('is_deleted', sa.Boolean(), nullable=False),
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['inventory_id'], ['inventory.id'], ),
@@ -419,18 +545,213 @@ def upgrade() -> None:
     op.create_index('ix_inventory_logs_inventory_id_created_at', 'inventory_logs', ['inventory_id', 'created_at'], unique=False)
     op.create_index(op.f('ix_inventory_logs_is_deleted'), 'inventory_logs', ['is_deleted'], unique=False)
     op.create_index('ix_inventory_logs_reference_type_reference_id', 'inventory_logs', ['reference_type', 'reference_id'], unique=False)
+    op.create_table('shipments',
+    sa.Column('order_id', sa.UUID(), nullable=False),
+    sa.Column('warehouse_id', sa.UUID(), nullable=False),
+    sa.Column('packing_record_id', sa.UUID(), nullable=True),
+    sa.Column('tracking_number', sa.String(length=100), nullable=True),
+    sa.Column('carrier', sa.String(length=50), nullable=True),
+    sa.Column('status', sa.Enum('PENDING', 'PICKED', 'PACKED', 'SHIPPED', 'DELIVERED', 'CANCELLED', name='shipmentstatus'), nullable=True),
+    sa.Column('shipped_at', sa.String(length=30), nullable=True),
+    sa.Column('delivered_at', sa.String(length=30), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['order_id'], ['orders.id'], ),
+    sa.ForeignKeyConstraint(['packing_record_id'], ['packing_records.id'], ),
+    sa.ForeignKeyConstraint(['warehouse_id'], ['warehouses.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_shipments_id'), 'shipments', ['id'], unique=False)
+    op.create_unique_constraint('uq_carrier_configs_id', 'carrier_configs', ['id'])
+    op.create_unique_constraint('uq_freight_tiers_id', 'freight_tiers', ['id'])
+    op.create_table('transport_orders',
+    sa.Column('transport_no', sa.String(length=50), nullable=True),
+    sa.Column('status', sa.Enum('DRAFT', 'DISPATCHED', 'PICKUP_COMPLETED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'EXCEPTION', 'CANCELLED', name='transportstatus'), nullable=True),
+    sa.Column('carrier_code', sa.Enum('SF_EXPRESS', 'ZTO', 'YUNDA', 'JD_LOGISTICS', 'EMS', name='carriercode'), nullable=True),
+    sa.Column('pickup_warehouse_id', sa.UUID(), nullable=True),
+    sa.Column('pickup_address', sa.JSON(), nullable=False),
+    sa.Column('delivery_name', sa.String(length=200), nullable=False),
+    sa.Column('delivery_phone', sa.String(length=30), nullable=True),
+    sa.Column('delivery_address', sa.JSON(), nullable=False),
+    sa.Column('shipment_id', sa.UUID(), nullable=True),
+    sa.Column('packing_record_id', sa.UUID(), nullable=True),
+    sa.Column('package_count', sa.Integer(), nullable=True),
+    sa.Column('total_weight_kg', sa.Numeric(precision=20, scale=4), nullable=True),
+    sa.Column('total_volume_m3', sa.Numeric(precision=20, scale=6), nullable=True),
+    sa.Column('tracking_number', sa.String(length=100), nullable=True),
+    sa.Column('service_type', sa.Enum('STANDARD', 'EXPRESS', 'OVERNIGHT', 'FREIGHT', name='carrierservicetype'), nullable=True),
+    sa.Column('transport_type', sa.Enum('SELF_DELIVERY', 'CARRIER_PICKUP', 'DROP_OFF', name='transporttype'), nullable=True),
+    sa.Column('estimated_delivery_date', sa.String(length=30), nullable=True),
+    sa.Column('actual_pickup_time', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('actual_delivery_time', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('driver_terminal_id', sa.UUID(), nullable=True),
+    sa.Column('driver_name', sa.String(length=100), nullable=True),
+    sa.Column('driver_phone', sa.String(length=30), nullable=True),
+    sa.Column('freight_amount', sa.Numeric(precision=18, scale=2), nullable=True),
+    sa.Column('settlement_status', sa.String(length=20), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('carrier_config_id', sa.UUID(), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['carrier_config_id'], ['carrier_configs.id'], ),
+    sa.ForeignKeyConstraint(['driver_terminal_id'], ['terminal_devices.id'], ),
+    sa.ForeignKeyConstraint(['pickup_warehouse_id'], ['warehouses.id'], ),
+    sa.ForeignKeyConstraint(['shipment_id'], ['shipments.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_transport_orders_carrier_code_created_at', 'transport_orders', ['carrier_code', 'created_at'], unique=False)
+    op.create_index(op.f('ix_transport_orders_id'), 'transport_orders', ['id'], unique=False)
+    op.create_index('ix_transport_orders_status', 'transport_orders', ['status'], unique=False)
+    op.create_index(op.f('ix_transport_orders_transport_no'), 'transport_orders', ['transport_no'], unique=True)
+    op.create_table('pod_records',
+    sa.Column('transport_order_id', sa.UUID(), nullable=False),
+    sa.Column('signed_by', sa.String(length=200), nullable=True),
+    sa.Column('signature_type', sa.Enum('PHYSICAL', 'DIGITAL', name='podsignature'), nullable=True),
+    sa.Column('signature_image_url', sa.String(length=500), nullable=True),
+    sa.Column('delivery_photo_urls', sa.JSON(), nullable=True),
+    sa.Column('delivered_to_address', sa.JSON(), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['transport_order_id'], ['transport_orders.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('transport_order_id')
+    )
+    op.create_index(op.f('ix_pod_records_id'), 'pod_records', ['id'], unique=False)
+    op.create_table('return_orders',
+    sa.Column('return_no', sa.String(length=50), nullable=True),
+    sa.Column('status', sa.Enum('REQUESTED', 'PICKUP_SCHEDULED', 'IN_TRANSIT_RETURN', 'RETURNED_TO_WAREHOUSE', 'REFUNDED', 'CLOSED', name='returnstatus'), nullable=True),
+    sa.Column('reason', sa.Enum('DAMAGED', 'WRONG_ITEM', 'QUALITY_ISSUE', 'CUSTOMER_RETRIEVAL', 'ADDRESS_ERROR', 'DUPLICATE_ORDER', name='returnreason'), nullable=True),
+    sa.Column('reason_detail', sa.Text(), nullable=True),
+    sa.Column('transport_order_id', sa.UUID(), nullable=True),
+    sa.Column('carrier_code', sa.Enum('SF_EXPRESS', 'ZTO', 'YUNDA', 'JD_LOGISTICS', 'EMS', name='carriercode'), nullable=True),
+    sa.Column('return_tracking_number', sa.String(length=100), nullable=True),
+    sa.Column('pickup_address', sa.JSON(), nullable=True),
+    sa.Column('destination_warehouse_id', sa.UUID(), nullable=True),
+    sa.Column('refund_amount', sa.Numeric(precision=18, scale=2), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['destination_warehouse_id'], ['warehouses.id'], ),
+    sa.ForeignKeyConstraint(['transport_order_id'], ['transport_orders.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_return_orders_id'), 'return_orders', ['id'], unique=False)
+    op.create_index(op.f('ix_return_orders_return_no'), 'return_orders', ['return_no'], unique=True)
+    op.create_table('route_plans',
+    sa.Column('transport_order_id', sa.UUID(), nullable=False),
+    sa.Column('type', sa.Enum('AUTO_GEN', 'MANUAL', name='routeplantype'), nullable=True),
+    sa.Column('status', sa.Enum('ROUTE_ACTIVE', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', name='routeplanstatus'), nullable=True),
+    sa.Column('origin_city', sa.String(length=100), nullable=False),
+    sa.Column('destination_city', sa.String(length=100), nullable=False),
+    sa.Column('total_distance_km', sa.Numeric(precision=20, scale=4), nullable=True),
+    sa.Column('total_cost_amount', sa.Numeric(precision=18, scale=2), nullable=True),
+    sa.Column('estimated_transit_hours', sa.Numeric(precision=10, scale=1), nullable=True),
+    sa.Column('plan_json', sa.JSON(), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['transport_order_id'], ['transport_orders.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('transport_order_id')
+    )
+    op.create_index(op.f('ix_route_plans_id'), 'route_plans', ['id'], unique=False)
+    op.create_table('tracking_events',
+    sa.Column('transport_order_id', sa.UUID(), nullable=True),
+    sa.Column('event_type', sa.Enum('CREATED', 'DISPATCHED', 'PICKUP_COMPLETED', 'IN_TRANSIT', 'ARRIVED_HUB', 'SORTING_CENTER', 'OUT_FOR_DELIVERY', 'DELIVERED', 'EXCEPTION_DELAY', 'EXCEPTION_DAMAGED', 'CANCELLED', name='trackingeventtype'), nullable=True),
+    sa.Column('location_code', sa.String(length=50), nullable=True),
+    sa.Column('location_name', sa.String(length=200), nullable=True),
+    sa.Column('latitude', sa.Numeric(precision=10, scale=6), nullable=True),
+    sa.Column('longitude', sa.Numeric(precision=10, scale=6), nullable=True),
+    sa.Column('operator_id', sa.UUID(), nullable=True),
+    sa.Column('remark', sa.Text(), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['operator_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['transport_order_id'], ['transport_orders.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_tracking_events_id'), 'tracking_events', ['id'], unique=False)
+    op.create_index('ix_tracking_events_transport_created', 'tracking_events', ['transport_order_id', 'created_at'], unique=False)
+    op.create_index(op.f('ix_tracking_events_transport_order_id'), 'tracking_events', ['transport_order_id'], unique=False)
+    op.create_table('transport_exceptions',
+    sa.Column('transport_order_id', sa.UUID(), nullable=True),
+    sa.Column('type', sa.Enum('DELAYED', 'DAMAGED_IN_TRANSIT', 'LOST', 'ADDRESS_ISSUE', 'CUSTOMER_UNAVAILABLE', 'WEATHER', name='exceptiontype'), nullable=True),
+    sa.Column('status', sa.Enum('OPEN', 'RESOLVED', 'ESCALATED', name='exceptionstatus'), nullable=True),
+    sa.Column('severity', sa.String(length=20), nullable=True),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('resolution_notes', sa.Text(), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['transport_order_id'], ['transport_orders.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_transport_exceptions_id'), 'transport_exceptions', ['id'], unique=False)
+    op.create_index(op.f('ix_transport_exceptions_transport_order_id'), 'transport_exceptions', ['transport_order_id'], unique=False)
+    op.create_table('transport_segments',
+    sa.Column('transport_order_id', sa.UUID(), nullable=True),
+    sa.Column('segment_no', sa.Integer(), nullable=True),
+    sa.Column('origin_hub_code', sa.String(length=50), nullable=True),
+    sa.Column('dest_hub_code', sa.String(length=50), nullable=True),
+    sa.Column('carrier_code', sa.Enum('SF_EXPRESS', 'ZTO', 'YUNDA', 'JD_LOGISTICS', 'EMS', name='carriercode'), nullable=True),
+    sa.Column('status', sa.Enum('DRAFT', 'DISPATCHED', 'PICKUP', 'IN_TRANSIT', 'TRANSIT_HUB_ARRIVED', 'SORTING_CENTER', 'OUT_FOR_DELIVERY', 'COMPLETED', 'EXCEPTION', 'CANCELLED', name='transportsegmentstatus'), nullable=True),
+    sa.Column('tracking_number', sa.String(length=100), nullable=True),
+    sa.Column('estimated_departure_time', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('actual_departure_time', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('expected_arrival_time', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('actual_arrival_time', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('weight_kg', sa.Numeric(precision=20, scale=4), nullable=True),
+    sa.Column('cost_amount', sa.Numeric(precision=18, scale=2), nullable=True),
+    sa.Column('notes', sa.String(length=500), nullable=True),
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.ForeignKeyConstraint(['transport_order_id'], ['transport_orders.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_transport_segments_id'), 'transport_segments', ['id'], unique=False)
+    op.create_index(op.f('ix_transport_segments_transport_order_id'), 'transport_segments', ['transport_order_id'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index(op.f('ix_transport_segments_transport_order_id'), table_name='transport_segments')
+    op.drop_index(op.f('ix_transport_segments_id'), table_name='transport_segments')
+    op.drop_table('transport_segments')
+    op.drop_index(op.f('ix_transport_exceptions_transport_order_id'), table_name='transport_exceptions')
+    op.drop_index(op.f('ix_transport_exceptions_id'), table_name='transport_exceptions')
+    op.drop_table('transport_exceptions')
+    op.drop_index(op.f('ix_tracking_events_transport_order_id'), table_name='tracking_events')
+    op.drop_index('ix_tracking_events_transport_created', table_name='tracking_events')
+    op.drop_index(op.f('ix_tracking_events_id'), table_name='tracking_events')
+    op.drop_table('tracking_events')
+    op.drop_index(op.f('ix_route_plans_id'), table_name='route_plans')
+    op.drop_table('route_plans')
+    op.drop_index(op.f('ix_return_orders_return_no'), table_name='return_orders')
+    op.drop_index(op.f('ix_return_orders_id'), table_name='return_orders')
+    op.drop_table('return_orders')
+    op.drop_index(op.f('ix_pod_records_id'), table_name='pod_records')
+    op.drop_table('pod_records')
+    op.drop_index(op.f('ix_transport_orders_transport_no'), table_name='transport_orders')
+    op.drop_index('ix_transport_orders_status', table_name='transport_orders')
+    op.drop_index(op.f('ix_transport_orders_id'), table_name='transport_orders')
+    op.drop_index('ix_transport_orders_carrier_code_created_at', table_name='transport_orders')
+    op.drop_table('transport_orders')
+    op.drop_index(op.f('ix_shipments_id'), table_name='shipments')
+    op.drop_table('shipments')
     op.drop_index('ix_inventory_logs_reference_type_reference_id', table_name='inventory_logs')
     op.drop_index(op.f('ix_inventory_logs_is_deleted'), table_name='inventory_logs')
     op.drop_index('ix_inventory_logs_inventory_id_created_at', table_name='inventory_logs')
     op.drop_index(op.f('ix_inventory_logs_inventory_id'), table_name='inventory_logs')
     op.drop_index(op.f('ix_inventory_logs_id'), table_name='inventory_logs')
     op.drop_table('inventory_logs')
-    op.drop_index('ix_sync_logs_started_at_completed_at', table_name='sync_logs')
     op.drop_index(op.f('ix_sync_logs_is_deleted'), table_name='sync_logs')
     op.drop_index(op.f('ix_sync_logs_id'), table_name='sync_logs')
     op.drop_index('ix_sync_logs_device_id_status', table_name='sync_logs')
@@ -440,6 +761,11 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_stock_movements_id'), table_name='stock_movements')
     op.drop_index('ix_stock_movements_gtin', table_name='stock_movements')
     op.drop_table('stock_movements')
+    op.drop_index(op.f('ix_split_child_orders_is_deleted'), table_name='split_child_orders')
+    op.drop_index(op.f('ix_split_child_orders_id'), table_name='split_child_orders')
+    op.drop_table('split_child_orders')
+    op.drop_index(op.f('ix_packing_records_id'), table_name='packing_records')
+    op.drop_table('packing_records')
     op.drop_index('ix_order_status_logs_order_id_created_at', table_name='order_status_logs')
     op.drop_index(op.f('ix_order_status_logs_id'), table_name='order_status_logs')
     op.drop_table('order_status_logs')
@@ -455,6 +781,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_inventory_id'), table_name='inventory')
     op.drop_index(op.f('ix_inventory_gtin'), table_name='inventory')
     op.drop_index(op.f('ix_inventory_batch_no'), table_name='inventory')
+    op.drop_index('ix_inventory_batch_expiry', table_name='inventory')
     op.drop_table('inventory')
     op.drop_index(op.f('ix_device_sessions_token'), table_name='device_sessions')
     op.drop_index(op.f('ix_device_sessions_is_deleted'), table_name='device_sessions')
@@ -480,6 +807,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_orders_is_deleted'), table_name='orders')
     op.drop_index(op.f('ix_orders_id'), table_name='orders')
     op.drop_table('orders')
+    op.drop_index(op.f('ix_merge_groups_is_deleted'), table_name='merge_groups')
+    op.drop_index(op.f('ix_merge_groups_id'), table_name='merge_groups')
+    op.drop_index(op.f('ix_merge_groups_code'), table_name='merge_groups')
+    op.drop_table('merge_groups')
     op.drop_index('ix_locations_warehouse_id_zone', table_name='locations')
     op.drop_index(op.f('ix_locations_is_deleted'), table_name='locations')
     op.drop_index(op.f('ix_locations_id'), table_name='locations')
@@ -494,6 +825,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_users_id'), table_name='users')
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')
+    op.drop_index(op.f('ix_transfer_hubs_id'), table_name='transfer_hubs')
+    op.drop_index(op.f('ix_transfer_hubs_code'), table_name='transfer_hubs')
+    op.drop_index(op.f('ix_transfer_hubs_city'), table_name='transfer_hubs')
+    op.drop_table('transfer_hubs')
     op.drop_index(op.f('ix_skus_sku'), table_name='skus')
     op.drop_index(op.f('ix_skus_is_deleted'), table_name='skus')
     op.drop_index(op.f('ix_skus_id'), table_name='skus')
@@ -514,10 +849,23 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_label_templates_id'), table_name='label_templates')
     op.drop_index(op.f('ix_label_templates_code'), table_name='label_templates')
     op.drop_table('label_templates')
+    op.drop_index(op.f('ix_hub_connections_to_hub_code'), table_name='hub_connections')
+    op.drop_index(op.f('ix_hub_connections_id'), table_name='hub_connections')
+    op.drop_index(op.f('ix_hub_connections_from_hub_code'), table_name='hub_connections')
+    op.drop_table('hub_connections')
+    op.drop_index(op.f('ix_freight_tiers_id'), table_name='freight_tiers')
+    op.drop_table('freight_tiers')
     op.drop_index(op.f('ix_customers_is_deleted'), table_name='customers')
     op.drop_index(op.f('ix_customers_id'), table_name='customers')
     op.drop_index(op.f('ix_customers_code'), table_name='customers')
     op.drop_table('customers')
+    op.drop_index(op.f('ix_carrier_routes_origin_city'), table_name='carrier_routes')
+    op.drop_index(op.f('ix_carrier_routes_id'), table_name='carrier_routes')
+    op.drop_index(op.f('ix_carrier_routes_dest_city'), table_name='carrier_routes')
+    op.drop_index(op.f('ix_carrier_routes_carrier_code'), table_name='carrier_routes')
+    op.drop_table('carrier_routes')
+    op.drop_index(op.f('ix_carrier_configs_id'), table_name='carrier_configs')
+    op.drop_table('carrier_configs')
     op.drop_index(op.f('ix_barcode_records_id'), table_name='barcode_records')
     op.drop_index(op.f('ix_barcode_records_gtin'), table_name='barcode_records')
     op.drop_index(op.f('ix_barcode_records_entity_id'), table_name='barcode_records')

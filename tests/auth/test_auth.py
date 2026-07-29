@@ -1,4 +1,6 @@
 """Tests for auth endpoints — async HTTP integration tests with SQLite in-memory."""
+import uuid
+
 import pytest
 
 
@@ -133,3 +135,73 @@ class TestRoles:
         headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
         resp = await async_client.get("/api/v1/auth/roles", headers=headers)
         assert resp.status_code == 200
+
+
+class TestRoleErrorPaths:
+    async def _login(self, async_client):
+        suf = uuid.uuid4().hex[:6]
+        await async_client.post("/api/v1/auth/register", json={
+            "username": f"err-{suf}", "email": f"err-{suf}@t.com", "password": "p123456",
+        })
+        r = await async_client.post("/api/v1/auth/login", json={
+            "username": f"err-{suf}", "password": "p123456",
+        })
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    async def test_create_role_duplicate_code(self, async_client):
+        h = await self._login(async_client)
+        await async_client.post("/api/v1/auth/roles", json={
+            "name": "First", "code": "ERR-DUP",
+        }, headers=h)
+        resp = await async_client.post("/api/v1/auth/roles", json={
+            "name": "Second", "code": "ERR-DUP",
+        }, headers=h)
+        assert resp.status_code == 422
+
+    async def test_update_role_not_found(self, async_client):
+        h = await self._login(async_client)
+        resp = await async_client.put(f"/api/v1/auth/roles/{uuid.uuid4()}", json={
+            "name": "Nope",
+        }, headers=h)
+        assert resp.status_code == 404
+
+    async def test_delete_role_not_found(self, async_client):
+        h = await self._login(async_client)
+        resp = await async_client.delete(f"/api/v1/auth/roles/{uuid.uuid4()}", headers=h)
+        assert resp.status_code == 404
+
+    async def test_create_permission_duplicate_code(self, async_client):
+        h = await self._login(async_client)
+        await async_client.post("/api/v1/auth/permissions", json={
+            "name": "P1", "code": "P-ERR-DUP", "resource": "t", "action": "r",
+        }, headers=h)
+        resp = await async_client.post("/api/v1/auth/permissions", json={
+            "name": "P2", "code": "P-ERR-DUP", "resource": "t", "action": "w",
+        }, headers=h)
+        assert resp.status_code == 422
+
+    async def test_assign_role_user_not_found(self, async_client):
+        h = await self._login(async_client)
+        resp = await async_client.post(f"/api/v1/auth/users/{uuid.uuid4()}/roles", json={
+            "role_id": str(uuid.uuid4()),
+        }, headers=h)
+        assert resp.status_code == 404
+
+    async def test_remove_role_not_assigned(self, async_client):
+        h = await self._login(async_client)
+        resp = await async_client.delete(
+            f"/api/v1/auth/users/{uuid.uuid4()}/roles/{uuid.uuid4()}", headers=h)
+        assert resp.status_code == 404
+
+    async def test_assign_permission_role_not_found(self, async_client):
+        h = await self._login(async_client)
+        resp = await async_client.post(f"/api/v1/auth/roles/{uuid.uuid4()}/permissions", json={
+            "permission_id": str(uuid.uuid4()),
+        }, headers=h)
+        assert resp.status_code == 404
+
+    async def test_remove_permission_not_assigned(self, async_client):
+        h = await self._login(async_client)
+        resp = await async_client.delete(
+            f"/api/v1/auth/roles/{uuid.uuid4()}/permissions/{uuid.uuid4()}", headers=h)
+        assert resp.status_code == 404

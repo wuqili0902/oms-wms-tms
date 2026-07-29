@@ -1,18 +1,120 @@
 {% extends "admin/base.html" %}
-{% block title %}Returns{% endblock %}
+{% block title %}Returns & Refunds{% endblock %}
+
 {% block content %}
-<h2>Returns & Refunds</h2>
+<div class="page-header">
+  <h2>Returns &amp; Refunds</h2>
+  {% if return_orders | length > 0 %}
+    <a href="/admin/returns/new" class="btn btn-primary">New Return Order</a>
+  {% endif %}
+</div>
+
+<!-- Stats -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-value">{{ total_return_orders }}</div>
+    <div class="stat-label">Total Returns</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ returned_to_warehouse_count }}</div>
+    <div class="stat-label">Returned to Warehouse</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ in_transit_return_count }}</div>
+    <div class="stat-label">In Transit (Return)</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ refunded_count }}</div>
+    <div class="stat-label">Refunded</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ open_return_value }} YUAN</div>
+    <div class="stat-label">Open Return Value</div>
+  </div>
+</div>
+
+<!-- Filter -->
+<form method="GET" action="/admin/returns" style="margin-bottom:1rem;">
+  <select name="status" onchange="this.form.submit()" id="return-status-filter">
+    <option value="">All Statuses</option>
+    {% for st in ['requested','pickup_scheduled','in_transit_return','returned_to_warehouse','refunded','closed'] %}
+      <option value="{{ st }}" {% if filter_status == st %}selected{% endif %}>{{ st }}</option>
+    {% endfor %}
+  </select>
+</form>
+
 <table class="table">
-  <thead><tr><th>No.</th><th>Status</th><th>Reason</th><th>Refund</th></tr></thead>
+  <thead>
+    <tr>
+      <th>No.</th>
+      <th>Status</th>
+      <th>Shipment Status</th>
+      <th>Reason</th>
+      <th>Transport Order</th>
+      <th>Tracking #</th>
+      <th>Refund</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
   <tbody>
     {% for ret in return_orders %}
     <tr>
-      <td>{{ ret.return_no }}</td>
-      <td>{{ ret.status }}</td>
+      <td><a href="/admin/returns/{{ ret.id }}">{{ ret.return_no }}</a></td>
+      <td>
+        <span class="badge badge-{{ _status_badge(ret.status) }}">
+          {{ ret.status }}
+        </span>
+      </td>
+      <td>
+        <span class="badge badge-{{ _shipment_status_badge(ret.shipment_status) }}">
+          {{ ret.shipment_status }}
+        </span>
+      </td>
       <td>{{ ret.reason }}</td>
+      <td><a href="/admin/transport-orders/{{ ret.transport_order_id }}">{{ ret.transport_order_id[:8] if ret.transport_order_id else '-' }}</a></td>
+      <td>{{ ret.return_tracking_number or '—' }}</td>
       <td>{{ ret.refund_amount }} YUAN</td>
+      <td class="actions">
+        {% if ret.shipment_status == 'pending' %}
+          <form method="POST" action="/admin/returns/{{ ret.id }}/mark-in-transit" style="display:inline;">
+            <button type="submit" class="btn btn-sm">Mark In Transit</button>
+          </form>
+        {% elif ret.shipment_status == 'in_transit_return' %}
+          <form method="POST" action="/admin/returns/{{ ret.id }}/mark-received" style="display:inline;">
+            <button type="submit" class="btn btn-sm">Mark Received</button>
+          </form>
+        {% elif ret.shipment_status == 'received_by_carrier' %}
+          <div style="font-size:0.75rem;color:var(--text-muted)">Awaiting Inspection</div>
+        {% endif %}
+
+        {% if ret.status in ['returned_to_warehouse', 'in_transit_return'] %}
+          <a href="/admin/returns/{{ ret.id }}" class="btn btn-sm">Inspect</a>
+        {% endif %}
+
+        {% if ret.status in ['requested', 'pickup_scheduled'] %}
+          <form method="POST" action="/admin/returns/{{ ret.id }}/cancel" style="display:inline;">
+            <button type="submit" class="btn btn-sm btn-danger">Cancel</button>
+          </form>
+        {% endif %}
+
+        {% if ret.shipment_status == 'returned_to_warehouse' and ret.status not in ['refunded', 'closed'] %}
+          <a href="/admin/returns/{{ ret.id }}" class="btn btn-sm btn-primary">Inspect Return</a>
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
+
+    {% if return_orders | length == 0 %}
+    <tr><td colspan="8" class="empty-state">No returns found.</td></tr>
+    {% endif %}
   </tbody>
 </table>
+
+<!-- Pagination placeholder -->
+{% if filter_status %}
+<div style="margin-top:1rem;">
+  <a href="/admin/returns" class="btn">&larr; Clear Filter</a>
+</div>
+{% endif %}
+
 {% endblock %}

@@ -260,3 +260,149 @@ class TestFreightEstimate:
         )
         # SF is typically more expensive than Yunda
         assert float(sf["estimated_cost"]) > float(yunda["estimated_cost"])
+
+
+class TestReturnOrderEdgeCases:
+    """Return order reverse-logistics edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_mark_shipment_received(self, db_session):
+        from src.tms.models import ReturnOrder, ReturnShipmentStatus
+        from sqlalchemy import select
+        ret = await tms_service.create_return_order(db_session, {
+            "reason": "damaged", "pickup_address": {}, "refund_amount": "100",
+        })
+        result = await db_session.execute(
+            select(ReturnOrder).where(ReturnOrder.id == __import__("uuid").UUID(ret["id"]))
+        )
+        ro = result.scalar_one()
+        ro.shipment_status = ReturnShipmentStatus.IN_TRANSIT_RETURN
+        await db_session.commit()
+        updated = await tms_service.mark_shipment_received(db_session, ret["id"])
+        assert updated["shipment_status"] == "received_by_carrier"
+
+    @pytest.mark.asyncio
+    async def test_mark_shipment_received_not_found(self, db_session):
+        with pytest.raises(NotFoundException):
+            await tms_service.mark_shipment_received(db_session, str(uuid.uuid4()))
+
+    @pytest.mark.asyncio
+    async def test_mark_return_inspected_accepted(self, db_session):
+        ret = await tms_service.create_return_order(db_session, {
+            "reason": "wrong_item", "pickup_address": {}, "refund_amount": "200",
+        })
+        await tms_service.update_return_status(db_session, ret["id"], "pickup_scheduled")
+        await tms_service.update_return_status(db_session, ret["id"], "in_transit_return")
+        await tms_service.update_return_status(db_session, ret["id"], "returned_to_warehouse")
+        updated = await tms_service.mark_return_inspected(db_session, ret["id"], accepted=True)
+        assert updated["status"] == "refunded"
+
+    @pytest.mark.asyncio
+    async def test_mark_return_inspected_rejected(self, db_session):
+        ret = await tms_service.create_return_order(db_session, {
+            "reason": "damaged", "pickup_address": {}, "refund_amount": "50",
+        })
+        await tms_service.update_return_status(db_session, ret["id"], "pickup_scheduled")
+        await tms_service.update_return_status(db_session, ret["id"], "in_transit_return")
+        await tms_service.update_return_status(db_session, ret["id"], "returned_to_warehouse")
+        updated = await tms_service.mark_return_inspected(db_session, ret["id"], accepted=False)
+        assert updated["status"] == "closed"
+
+    @pytest.mark.asyncio
+    async def test_mark_return_inspected_invalid_state(self, db_session):
+        ret = await tms_service.create_return_order(db_session, {
+            "reason": "wrong_item", "pickup_address": {},
+        })
+        with pytest.raises(ValidationException, match="Cannot inspect"):
+            await tms_service.mark_return_inspected(db_session, ret["id"])
+
+    @pytest.mark.asyncio
+    async def test_mark_return_inspected_not_found(self, db_session):
+        with pytest.raises(NotFoundException):
+            await tms_service.mark_return_inspected(db_session, str(uuid.uuid4()))
+
+    @pytest.mark.asyncio
+    async def test_cancel_return_order(self, db_session):
+        ret = await tms_service.create_return_order(db_session, {
+            "reason": "wrong_item", "pickup_address": {},
+        })
+        cancelled = await tms_service.cancel_return_order(db_session, ret["id"])
+        assert cancelled["status"] == "closed"
+
+    @pytest.mark.asyncio
+    async def test_cancel_return_order_invalid_state(self, db_session):
+        ret = await tms_service.create_return_order(db_session, {
+            "reason": "damaged", "pickup_address": {},
+        })
+        await tms_service.update_return_status(db_session, ret["id"], "pickup_scheduled")
+        await tms_service.update_return_status(db_session, ret["id"], "in_transit_return")
+        with pytest.raises(ValidationException, match="Cannot cancel"):
+            await tms_service.cancel_return_order(db_session, ret["id"])
+
+    @pytest.mark.asyncio
+    async def test_cancel_return_order_not_found(self, db_session):
+        with pytest.raises(NotFoundException):
+            await tms_service.cancel_return_order(db_session, str(uuid.uuid4()))
+
+    @pytest.mark.asyncio
+    async def test_update_return_status_invalid_transition(self, db_session):
+        ret = await tms_service.create_return_order(db_session, {
+            "reason": "wrong_item", "pickup_address": {},
+        })
+        with pytest.raises(ValidationException, match="Cannot transition return"):
+            await tms_service.update_return_status(db_session, ret["id"], "returned_to_warehouse")
+
+    @pytest.mark.asyncio
+    async def test_update_return_status_not_found(self, db_session):
+        with pytest.raises(NotFoundException):
+            await tms_service.update_return_status(db_session, str(uuid.uuid4()), "pickup_scheduled")
+
+
+class TestFreightService:
+    """Freight tier CRUD and calculation."""
+
+    @pytest.mark.asyncio
+    async def test_create_freight_tier(self, db_session):
+        tier = await tms_service.create_freight_tier(db_session, {
+            "carrier_code": "sf_express",
+            "rule_type": "weight_tiered",
+            "min_value": 0,
+            "max_value": 10.0,
+            "price_per_unit": 8.5,
+        })
+        assert tier["carrier_code"] == "sf_express"
+        assert tier["rule_type"] == "weight_tiered"
+
+    @pytest.mark.asyncio
+    async def test_calculate_freight_success(self, db_session):
+        await tms_service.create_freight_tier(db_session, {
+            "carrier_code": "sf_express",
+            "rule_type": "weight_tiered",
+            "min_value": 0,
+            "max_value": 10.0,
+            "price_per_unit": 8.5,
+        })
+        result = await tms_service.calculate_freight(db_session, {
+            "carrier_code": "sf_express", "weight": 5,
+        })
+        assert float(result["total_freight_yuan"]) > 0
+        assert result["carrier_code"] == "sf_express"
+
+    @pytest.mark.asyncio
+    async def test_calculate_freight_no_tier(self, db_session):
+        with pytest.raises(ValidationException, match="No matching freight tier found"):
+            await tms_service.calculate_freight(db_session, {
+                "carrier_code": "ems", "weight": 5,
+            })
+
+    @pytest.mark.asyncio
+    async def test_calculate_freight_with_express_surcharge(self, db_session):
+        await tms_service.create_freight_tier(db_session, {
+            "carrier_code": "zto", "rule_type": "weight_tiered",
+            "min_value": 0, "max_value": 10.0, "price_per_unit": 8.5,
+            "surcharge_express": 5.0,
+        })
+        result = await tms_service.calculate_freight(db_session, {
+            "carrier_code": "zto", "weight": 5, "express": True,
+        })
+        assert float(result["total_freight_yuan"]) > 42.5

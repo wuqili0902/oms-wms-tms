@@ -1,4 +1,5 @@
 """Alembic migrations environment configuration."""
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import create_engine, engine_from_config, pool
@@ -12,6 +13,11 @@ from alembic import context
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Override sqlalchemy.url from env var DATABASE_SYNC_URL if set (for production)
+db_url = os.environ.get("DATABASE_SYNC_URL")
+if db_url:
+    config.set_main_option("sqlalchemy.url", db_url)
 
 # Import ALL models so Alembic can detect them via Base.metadata
 from src.models import Base  # noqa: F401, E402

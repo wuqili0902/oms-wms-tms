@@ -1,10 +1,12 @@
 """OMS API router."""
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.exceptions import NotFoundException
 from src.core.exceptions import ValidationException as AppValidationException
+from src.oms import merge as merge_service
 from src.oms import service as oms_service
 from src.oms.schemas import (
     OrderCreate,
@@ -98,3 +100,64 @@ async def get_order_history(order_id: str, db=Depends(get_db), current_user: dic
         return await oms_service.get_order_history(db, order_id)
     except NotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# ── Split / Merge ────────────────────────────────────────────────────────────
+
+
+class SplitRequest(BaseModel):
+    splits: list[dict]
+    reason: str = ""
+
+
+class MergeRequest(BaseModel):
+    order_ids: list[str]
+    code: str | None = None
+    warehouse_id: str | None = None
+    note: str = ""
+
+
+@router.post("/{order_id}/split", status_code=status.HTTP_201_CREATED)
+async def split_order(
+    order_id: str,
+    data: SplitRequest,
+    db=Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        children = await merge_service.split_order(
+            db, order_id, data.splits, reason=data.reason,
+        )
+    except (NotFoundException, AppValidationException) as e:
+        status_code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=status_code, detail=str(e))
+    return {"parent_order_id": order_id, "children": children}
+
+
+@router.post("/merge", status_code=status.HTTP_201_CREATED)
+async def merge_orders(
+    data: MergeRequest,
+    db=Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        group = await merge_service.merge_orders(
+            db, data.order_ids, code=data.code,
+            warehouse_id=data.warehouse_id, note=data.note,
+        )
+    except (NotFoundException, AppValidationException) as e:
+        status_code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=status_code, detail=str(e))
+    return group
+
+
+@router.get("/merge/{group_id}")
+async def get_merge_group(
+    group_id: str,
+    db=Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    group = await merge_service.get_merge_group(db, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Merge group not found")
+    return group

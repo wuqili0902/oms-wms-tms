@@ -5,7 +5,6 @@ that keep the system running smoothly.
 """
 import json
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select, text
@@ -119,14 +118,15 @@ async def daily_aggregation(self):
     """
     session = _get_async_session()
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         from sqlalchemy import func
 
         from src.oms.models import Order, OrderStatus
         from src.wms.models import Inventory
 
-        today = datetime.now(timezone.utc).date()
-        start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+        today = datetime.now(UTC).date()
+        start = datetime(today.year, today.month, today.day, tzinfo=UTC)
 
         # Total orders
         total_result = await session.execute(select(func.count()).select_from(Order))
@@ -171,5 +171,39 @@ async def daily_aggregation(self):
         logger.info("Daily aggregation written: %s — %d orders, %d inventory items",
                      today.isoformat(), total, inv_count)
         return stats
+    finally:
+        await session.close()
+
+
+@app.task(base=BaseTask, bind=True, max_retries=2)
+async def compute_abc_xyz_analysis(self):
+    """Daily ABC-XYZ inventory analysis.
+
+    Reads stock movement data, computes the ABC‑XYZ matrix, and writes
+    the result to Redis so the admin dashboard can display it instantly.
+    """
+    session = _get_async_session()
+    try:
+        from src.wms.analysis import compute_abc_xyz_matrix
+
+        matrix = await compute_abc_xyz_matrix(session, months=6)
+
+        try:
+            from src.cache.redis_client import get_redis
+
+            async with get_redis() as r:
+                if r:
+                    await r.setex(
+                        "inventory:abc_xyz_matrix",
+                        86400,  # 24 h TTL
+                        json.dumps(matrix, default=str),
+                    )
+                    logger.info("ABC‑XYZ matrix cached in Redis")
+        except Exception:
+            logger.warning("Redis unavailable — ABC‑XYZ matrix not cached")
+
+        total = sum(len(v) for v in matrix.values())
+        logger.info("ABC‑XYZ analysis completed: %d SKUs classified", total)
+        return {cell: len(items) for cell, items in matrix.items()}
     finally:
         await session.close()

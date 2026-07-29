@@ -86,12 +86,50 @@ class TestMetadata:
             "sync_logs",
             "packing_records",
             "shipments",
+            # tms — route planning (migration eb82912258b2)
+            "transfer_hubs",
+            "carrier_routes",
+            "hub_connections",
+            "transport_segments",
+            "route_plans",
+            # tms — transport (new)
+            "transport_orders",
+            "tracking_events",
+            "pod_records",
+            "return_orders",
+            "transport_exceptions",
+            "freight_tiers",
+            "carrier_configs",
+            # oms — split/merge
+            "merge_groups",
+            "split_child_orders",
+            # outbox
+            "outbox_events",
+            # wms — master data
+            "vendors",
+            "addresses",
+            "purchase_orders",
+            "purchase_order_lines",
+            "invoices",
+            "invoice_lines",
+            "credit_memos",
+            "credit_memo_lines",
+            # core — shared
+            "address_master",
+            # pda
+            "pda_pending_mutations",
+            # notification
+            "notifications",
+            "notification_preferences",
+            # webhooks
+            "webhook_targets",
+            "webhook_delivery_logs",
         }
         missing = expected - tables
         extra = tables - expected
         assert not missing, f"Missing tables: {missing}"
         assert not extra, f"Unexpected tables: {extra}"
-        assert len(tables) >= 24, f"Expected >=24 tables, got {len(tables)}"
+        assert len(tables) >= 48, f"Expected >=48 tables, got {len(tables)}"
 
     def test_primary_keys(self, engine):
         """Every entity table has a PK column named 'id'. Junction tables

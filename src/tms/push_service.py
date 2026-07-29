@@ -2,17 +2,18 @@
 
 Integrates with Firebase Cloud Messaging (FCM) and Apple Push Notification Service (APNs).
 Uses the push_token stored on TerminalDevice to route notifications.
+
+When Firebase is not configured, falls back to logging (safe no-op).
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Optional
+from datetime import datetime
+from enum import StrEnum
 
 logger = logging.getLogger(__name__)
 
 
-class NotificationPriority(str, Enum):
+class NotificationPriority(StrEnum):
     LOW = "low"
     NORMAL = "normal"
     HIGH = "high"
@@ -24,10 +25,66 @@ class PushMessage:
     body: str
     priority: NotificationPriority = NotificationPriority.NORMAL
     data: dict = field(default_factory=dict)
-    topic: Optional[str] = None
-
-    # FCM-specific payload
+    topic: str | None = None
     android_channel_id: str | None = "tms_transport"
+
+
+_firebase_available = False
+_firebase_app = None
+
+
+def _init_firebase():
+    """Initialize Firebase Admin SDK if configured."""
+    global _firebase_available, _firebase_app
+    if _firebase_available or _firebase_app is not None:
+        return True
+    try:
+        from src.config import settings
+
+        if not settings.firebase_credentials_path:
+            logger.info("Firebase not configured — push notifications will be logged only")
+            return False
+        import firebase_admin
+        from firebase_admin import credentials
+
+        cred = credentials.Certificate(settings.firebase_credentials_path)
+        _firebase_app = firebase_admin.initialize_app(cred)
+        _firebase_available = True
+        logger.info("Firebase initialized from %s", settings.firebase_credentials_path)
+        return True
+    except ImportError:
+        logger.info("firebase_admin not installed — push notifications will be logged only")
+        return False
+    except Exception as e:
+        logger.error("Firebase initialization failed: %s", str(e))
+        return False
+
+
+def _send_fcm(message: PushMessage, token: str) -> bool:
+    """Send via Firebase Cloud Messaging."""
+    try:
+        from firebase_admin import messaging
+
+        android_config = None
+        if message.android_channel_id:
+            android_config = messaging.AndroidConfig(
+                notification=messaging.AndroidNotification(
+                    channel_id=message.android_channel_id,
+                    priority="high" if message.priority == NotificationPriority.HIGH else "normal",
+                ),
+            )
+
+        fcm_message = messaging.Message(
+            token=token,
+            notification=messaging.Notification(title=message.title, body=message.body),
+            data={k: str(v) for k, v in message.data.items()},
+            android=android_config,
+        )
+        messaging.send(fcm_message)
+        return True
+    except Exception as e:
+        logger.error("FCM send failed: %s", str(e))
+        return False
 
 
 class PushService:
@@ -36,29 +93,25 @@ class PushService:
     def __init__(self):
         self._sent_count = 0
         self._failed_count = 0
-        # Production: initialize firebase_admin SDK here
-        # from firebase_admin import credentials, messaging
-        # cred = credentials.Certificate("path/to/serviceAccountKey.json")
-        # firebase_admin.initialize_app(cred)
+        self._fcm_ready = _init_firebase()
 
     async def send_to_device(self, push_token: str, message: PushMessage) -> bool:
         """Send a push notification to a single device."""
         try:
-            # Production FCM:
-            # from firebase_admin import messaging
-            # await asyncio.get_running_loop().run_in_executor(
-            #     None,
-            #     lambda: messaging.send(messaging.Message(
-            #         token=push_token,
-            #         notification=messaging.Notification(title=message.title, body=message.body),
-            #         data={k: str(v) for k, v in message.data.items()},
-            #         android=messaging.AndroidConfig(
-            #             notification=messaging.AndroidNotification(channel_id=message.android_channel_id),
-            #         ),
-            #     ))
-            # )
+            if self._fcm_ready:
+                import asyncio
+                success = await asyncio.get_running_loop().run_in_executor(
+                    None, _send_fcm, message, push_token
+                )
+                if success:
+                    self._sent_count += 1
+                    return True
+                self._failed_count += 1
+                return False
+
             logger.info(
-                "Push notification to device: title=%s body=%s priority=%s",
+                "Push notification (no-op): token=%s title=%s body=%s priority=%s",
+                push_token[:16] + "..." if len(push_token) > 16 else push_token,
                 message.title, message.body, message.priority.value,
             )
             self._sent_count += 1
@@ -71,8 +124,25 @@ class PushService:
     async def send_to_topic(self, topic: str, message: PushMessage) -> bool:
         """Send a push notification to a topic (broadcast)."""
         try:
-            # Production FCM: messaging.subscribe_to_topic(token_list, topic)
-            logger.info("Push notification to topic '%s': title=%s body=%s", topic, message.title, message.body)
+            if self._fcm_ready:
+                import asyncio
+                from firebase_admin import messaging
+
+                success = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: messaging.send(messaging.Message(
+                        topic=topic,
+                        notification=messaging.Notification(title=message.title, body=message.body),
+                        data={k: str(v) for k, v in message.data.items()},
+                    )),
+                )
+                if success:
+                    self._sent_count += 1
+                    return True
+                self._failed_count += 1
+                return False
+
+            logger.info("Topic push (no-op) to '%s': title=%s body=%s", topic, message.title, message.body)
             self._sent_count += 1
             return True
         except Exception as e:

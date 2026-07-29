@@ -1,46 +1,42 @@
 import hashlib
+import json
+import logging
 import time
 from collections.abc import Callable
 from functools import wraps
 
-from redis.exceptions import ConnectionError
-
 from src.cache.redis_client import get_redis
 
+logger = logging.getLogger(__name__)
 
-def cached(ttl: int = 300, prefix: str = "cache"):
+
+def cached(ttl: int = 300, prefix: str = "cache", skip_args: int = 0):
     """Cache decorator that stores function results in Redis.
 
     Args:
         ttl (int): Time-to-live for cache entries in seconds.
         prefix (str): Prefix for cache keys to avoid collisions.
-
-    Usage:
-        @cached(ttl=300)
-        async def expensive_operation(x, y):
-            return x + y  # This result will be cached for 5 minutes
+        skip_args (int): Number of leading positional args to exclude from cache key
+                         (useful for skipping db session parameters).
     """
 
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Generate cache key from function name and arguments
-            key = _generate_cache_key(prefix, func.__name__, args, kwargs)
+            key = _generate_cache_key(prefix, func.__name__, args[skip_args:], kwargs)
 
             try:
                 async with get_redis() as redis:
                     cached_value = await redis.get(key)
                     if cached_value is not None:
-                        return cached_value.decode("utf-8")
+                        return json.loads(cached_value.decode("utf-8"))
 
                     result = await func(*args, **kwargs)
-
-                    # Store result in cache
-                    await redis.setex(key, ttl, str(result).encode("utf-8"), ex="nx")
+                    await redis.set(key, json.dumps(result, default=str).encode("utf-8"), ex=ttl)
                     return result
-            except (ConnectionError, Timeout):
-                logger.error("Redis connection error in cached decorator")
-                raise
+            except Exception:
+                logger.warning("Redis unavailable in @cached — executing without cache")
+                return await func(*args, **kwargs)
 
         return wrapper
 
@@ -84,12 +80,14 @@ def rate_limit(max_calls: int = 10, window: int = 60):
                         )
 
                     # Add current timestamp to the sorted set
-                    await redis.zadd(key, now)
+                    await redis.zadd(key, {now: "1"})
 
                     return await func(*args, **kwargs)
-            except (ConnectionError, Timeout):
-                logger.error("Redis connection error in rate_limit decorator")
+            except RateLimitExceeded:
                 raise
+            except Exception:
+                logger.warning("Redis unavailable in @rate_limit — allowing call without rate limit")
+                return await func(*args, **kwargs)
 
         return wrapper
 
@@ -118,7 +116,7 @@ def distributed_lock(key: str, timeout: int = 10):
             try:
                 async with get_redis() as redis:
                     # Try to acquire the lock (non-blocking)
-                    acquired = await redis.setex(lock_key, timeout, "locked", ex="nx")
+                    acquired = await redis.set(lock_key, "locked", ex=timeout, nx=True)
 
                     if not acquired:
                         return None  # Lock not acquired, function won't run
@@ -129,9 +127,9 @@ def distributed_lock(key: str, timeout: int = 10):
                     finally:
                         # Release the lock
                         await redis.delete(lock_key)
-            except (ConnectionError, Timeout):
-                logger.error("Redis connection error in distributed_lock decorator")
-                raise
+            except Exception:
+                logger.warning("Redis unavailable in @distributed_lock — executing without lock")
+                return await func(*args, **kwargs)
 
         return wrapper
 

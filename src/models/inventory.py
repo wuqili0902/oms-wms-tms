@@ -18,15 +18,16 @@ Key concepts:
     InventoryReservation  — pending allocation (order → batch)
     AllocationStrategy  — FIFO / FEFO / LIFO configurable per SKU/warehouse
 """
-from datetime import date, datetime, timedelta, UTC
-from decimal import Decimal
-from enum import Enum
 import uuid as _uuid
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from enum import StrEnum
 
-from sqlalchemy import (
-    Column, DateTime, Date as SA_Date, ForeignKey, Numeric, String, UUID, select, update as sa_update
-)
+from sqlalchemy import UUID, Column, DateTime, ForeignKey, Numeric, String, select, update
+from sqlalchemy import Date as SA_Date
 from sqlalchemy.dialects.postgresql import JSONB
+
+from .base import Base
 
 
 class InsufficientStockError(Exception):
@@ -36,10 +37,7 @@ class InsufficientStockError(Exception):
         super().__init__(f"SKU {sku} at warehouse {warehouse_id}: need {needed}, insufficient stock")
 
 
-from .base import Base
-
-
-class AllocationStrategy(str, Enum):
+class AllocationStrategy(StrEnum):
     """Batch picking strategy."""
 
     FIFO = "fifo"       # First In First Out (earliest received_at)
@@ -47,7 +45,7 @@ class AllocationStrategy(str, Enum):
     LIFO = "lifo"       # Last In First Out (latest received_at)
 
 
-class ReservationStatus(str, Enum):
+class ReservationStatus(StrEnum):
     PENDING = "pending"          # Created but not shipped
     SHIPPED = "shipped"         # Allocated → physically gone
     CANCELLED = "cancelled"     # Reverted back to available
@@ -146,7 +144,7 @@ class AllocationService:
 
     async def allocate(
         self,
-        warehouse_id: uuid.UUID,
+        warehouse_id: _uuid.UUID,
         sku: str,
         quantity_needed: Decimal,
         strategy: AllocationStrategy = AllocationStrategy.FIFO,
@@ -220,7 +218,7 @@ class AllocationService:
 # ── Inventory consumption / release (for order ship/cancel) ───────────────
 
 
-async def consume_reservation(session, reservation_id: uuid.UUID) -> None:
+async def consume_reservation(session, reservation_id: _uuid.UUID) -> None:
     """Mark a reservation as shipped and permanently deduct inventory."""
     res = await session.get(InventoryReservation, reservation_id)
     if not res or res.status != ReservationStatus.PENDING.value:
@@ -244,7 +242,7 @@ async def consume_reservation(session, reservation_id: uuid.UUID) -> None:
     await session.commit()
 
 
-async def release_reservation(session, reservation_id: uuid.UUID) -> None:
+async def release_reservation(session, reservation_id: _uuid.UUID) -> None:
     """Cancel a reservation and restore batch inventory."""
     res = await session.get(InventoryReservation, reservation_id)
     if not res or res.status != ReservationStatus.PENDING.value:
@@ -271,7 +269,7 @@ async def release_reservation(session, reservation_id: uuid.UUID) -> None:
 # ── Batch expiry scan (FEFO compliance) ─────────────────────────────────
 
 
-async def find_expired_batches(session, warehouse_id: uuid.UUID, days_early: int = 7) -> list[InventoryBatch]:
+async def find_expired_batches(session, warehouse_id: _uuid.UUID, days_early: int = 7) -> list[InventoryBatch]:
     """Find batches approaching expiry within `days_early` window.
 
     Used by warehouse operators to run FEFO compliance reports.

@@ -1,6 +1,7 @@
 import logging
 
 from celery import Task as CeleryTask
+from celery.exceptions import Retry as CeleryRetry
 from sqlalchemy.exc import SQLAlchemyError
 
 
@@ -36,11 +37,11 @@ class BaseTask(CeleryTask):
     def on_failure(self, exc=None, *args, **kwargs):
         """Called when the task fails."""
         super().on_failure(exc=exc, *args, **kwargs)
-        if isinstance(exc, CeleryTask.Retry):
+        if isinstance(exc, CeleryRetry):
             self.logger.warning(
                 "Task %s will retry in %d seconds",
                 self.request.id,
-                exc.countdown or 60,
+                getattr(exc, 'countdown', None) or getattr(exc, 'when', None) or 60,
             )
         else:
             self.logger.error(
@@ -80,7 +81,7 @@ class BaseTask(CeleryTask):
 class TaskLogger(logging.Logger):
     """Custom logger for tasks that adds task context to log messages."""
 
-    def __init__(self, name, level=None, *args, **kwargs):
+    def __init__(self, name, level=logging.NOTSET, *args, **kwargs):
         super().__init__(name=name, level=level, *args, **kwargs)
         self.task_id = None
 
@@ -88,12 +89,8 @@ class TaskLogger(logging.Logger):
         """Set the task context for logging."""
         self.task_id = task_id
 
-    def _format(self, record):
-        """Add task ID to log messages if available."""
-        msg = super()._format(record)
-        if self.task_id:
-            return f"[{self.task_id}] {msg}"
-        return msg
+    # Note: Log message formatting is handled by Formatter, not Logger.
+    # Task context injection should be done via a custom logging Filter/Formatter.
 
 
 def get_task_logger(name: str) -> TaskLogger:

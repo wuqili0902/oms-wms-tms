@@ -106,8 +106,17 @@
       <a href="/admin/inventory" class="{% if active == 'inventory' %}active{% endif %}">
         <span class="nav-icon">📦</span><span>Inventory</span>
       </a>
+      <a href="/admin/warehouses" class="{% if active == 'warehouses' %}active{% endif %}">
+        <span class="nav-icon">🏭</span><span>Warehouses</span>
+      </a>
       <a href="/admin/templates" class="{% if active == 'templates' %}active{% endif %}">
         <span class="nav-icon">🏷️</span><span>Labels</span>
+      </a>
+      <a href="/admin/webhooks" class="{% if active == 'webhooks' %}active{% endif %}">
+        <span class="nav-icon">🔗</span><span>Webhooks</span>
+      </a>
+      <a href="/admin/import" class="{% if active == 'import' %}active{% endif %}">
+        <span class="nav-icon">📥</span><span>Import</span>
       </a>
       <a href="/admin/transport-orders" class="{% if active in ('transport_orders', 'route_plans') %}active{% endif %}">
         <span class="nav-icon">🚛</span><span>Transport Orders</span>
@@ -136,4 +145,12 @@
     {% block content %}{% endblock %}
   </div>
 </body>
+<script>
+document.querySelectorAll('form:not([method="get"]):not([method="GET"])').forEach(function(f) {
+  var inp = document.createElement('input');
+  inp.type = 'hidden'; inp.name = 'csrf_token'; inp.value = '{{ csrf_token }}';
+  f.appendChild(inp);
+});
+</script>
+{% block scripts %}{% endblock %}
 </html>

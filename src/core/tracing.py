@@ -1,12 +1,26 @@
 """OpenTelemetry tracing setup for distributed tracing."""
 
 import os
-from opentelemetry import trace
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.sdk.resources import Resource, SERVICE_NAME
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+
+def _safe_import_otel():
+    """Import OpenTelemetry if installed, otherwise return None."""
+    try:
+        from opentelemetry import trace  # noqa: F401
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # noqa: F401
+            OTLPSpanExporter,
+        )
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: F401
+        from opentelemetry.sdk.resources import SERVICE_NAME, Resource  # noqa: F401
+        from opentelemetry.sdk.trace import TracerProvider  # noqa: F401
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor  # noqa: F401
+        return True
+    except ImportError as e:
+        print(f"[otel] OpenTelemetry not available: {e}")
+        return False
+
+
+_otel_available = _safe_import_otel()
 
 from src.config import settings
 
@@ -17,6 +31,16 @@ def setup_tracing() -> None:
     Configures a tracer provider with OTLP HTTP exporter and FastAPI instrumentation.
     Uses the same service name as defined in config (defaults to "oms-wms-tms").
     """
+    if not _otel_available:
+        return  # otel dependencies not installed
+
+    from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
     resource = Resource.create({SERVICE_NAME: settings.app_name})
     provider = TracerProvider(resource=resource)
 
@@ -41,4 +65,4 @@ def setup_tracing() -> None:
         except Exception:
             pass
 
-    tracer = trace.get_tracer(settings.app_name)
+    trace.get_tracer(settings.app_name)

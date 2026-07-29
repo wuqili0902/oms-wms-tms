@@ -8,8 +8,35 @@
   <div class="stat-card"><div class="stat-value">{{ stats.user_count }}</div><div class="stat-label">Users</div></div>
   <div class="stat-card"><div class="stat-value">{{ stats.inventory_count }}</div><div class="stat-label">Inventory Items</div></div>
   <div class="stat-card"><div class="stat-value">{{ stats.warehouse_count }}</div><div class="stat-label">Warehouses</div></div>
-  <div class="stat-card"><div class="stat-value">{{ stats.template_count }}</div><div class="stat-label">Label Templates</div></div>
+  <div class="stat-card"><div class="stat-value">{{ low_stock|length }}</div><div class="stat-label">Low Stock Alerts</div></div>
 </div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+  <div class="card">
+    <h3 style="font-size:0.95rem;margin-bottom:0.75rem;">Orders (30 days)</h3>
+    <canvas id="trendChart" height="180"></canvas>
+  </div>
+  <div class="card">
+    <h3 style="font-size:0.95rem;margin-bottom:0.75rem;">Status Distribution</h3>
+    <canvas id="statusChart" height="180"></canvas>
+  </div>
+</div>
+
+{% if low_stock %}
+<div class="card" style="border-left:3px solid var(--danger);">
+  <h3 style="font-size:0.95rem;margin-bottom:0.75rem;color:var(--danger);">⚠ Low Stock Alerts</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>SKU</th><th>Warehouse</th><th>Qty</th><th>Min Qty</th></tr></thead>
+      <tbody>
+        {% for item in low_stock %}
+        <tr><td>{{ item.sku }}</td><td>{{ item.warehouse }}</td><td>{{ item.quantity }}</td><td>{{ item.min_qty }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 
 <div class="card">
   <h3 style="font-size:0.95rem;margin-bottom:0.75rem;">Recent Orders</h3>
@@ -34,4 +61,26 @@
   <div class="empty-state"><p>No orders yet. Orders will appear here once created via the API.</p></div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+const trendLabels = {{ order_trends_json|safe }};
+const trendData = {{ order_counts_json|safe }};
+new Chart(document.getElementById('trendChart'), {
+  type: 'line',
+  data: { labels: trendLabels, datasets: [{ label: 'Orders', data: trendData, borderColor: '#3b82f6', tension: 0.2, fill: true, backgroundColor: 'rgba(59,130,246,0.1)' }] },
+  options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+});
+
+const statusLabels = {{ status_labels_json|safe }};
+const statusData = {{ status_counts_json|safe }};
+const statusColors = { pending: '#f59e0b', confirmed: '#3b82f6', processing: '#8b5cf6', picking: '#06b6d4', completed: '#22c55e', cancelled: '#ef4444', failed: '#991b1b' };
+new Chart(document.getElementById('statusChart'), {
+  type: 'doughnut',
+  data: { labels: statusLabels, datasets: [{ data: statusData, backgroundColor: statusLabels.map(s => statusColors[s] || '#94a3b8') }] },
+  options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } } } }
+});
+</script>
 {% endblock %}

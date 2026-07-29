@@ -158,6 +158,15 @@ class TestAdminTemplates:
         assert "Admin Label" in resp.text
 
 
+class TestAdminWarehouses:
+    """Warehouse admin page tests."""
+
+    async def test_warehouses_page_renders(self, async_client, auth_headers):
+        resp = await async_client.get("/admin/warehouses", headers=auth_headers)
+        assert resp.status_code == 200
+        assert "Warehouses" in resp.text
+
+
 class TestAdminDevices:
     """TMS device page tests."""
 

@@ -1,10 +1,8 @@
 """TMS schemas — transport orders, tracking, POD, returns, and settlement."""
 
 from decimal import Decimal
-from typing import Optional
 
 from pydantic import BaseModel, Field
-
 
 # ── Transport Order Schemas ──────────────────────────────────────────────────
 
@@ -31,7 +29,7 @@ class TransportOrderCreate(BaseModel):
     pickup_address: AddressPayload | None = None
 
     delivery_name: str | None = "Unknown"  # was required; now defaults to "Unknown" for test flexibility
-    delivery_phone: Optional[str] = None
+    delivery_phone: str | None = None
     delivery_address: AddressPayload | None = None
 
     package_count: int = Field(default=1, ge=1)
@@ -51,13 +49,13 @@ class TransportOrderResponse(BaseModel):
     carrier_code: str
     pickup_warehouse_id: str
     delivery_name: str
-    delivery_phone: Optional[str] = None
+    delivery_phone: str | None = None
     package_count: int
     total_weight_kg: str
-    tracking_number: Optional[str] = None
-    estimated_delivery_date: Optional[str] = None
-    actual_pickup_time: Optional[str] = None
-    actual_delivery_time: Optional[str] = None
+    tracking_number: str | None = None
+    estimated_delivery_date: str | None = None
+    actual_pickup_time: str | None = None
+    actual_delivery_time: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -81,8 +79,8 @@ class TrackingEventCreate(BaseModel):
                 "sorting_center|out_for_delivery|delivered|exception_delay|"
                 "exception_damaged|cancelled)$",
     )
-    location_code: Optional[str] = None
-    location_name: Optional[str] = None
+    location_code: str | None = None
+    location_name: str | None = None
     latitude: Decimal | None = None
     longitude: Decimal | None = None
     remark: str | None = None
@@ -92,11 +90,11 @@ class TrackingEventResponse(BaseModel):
     id: str
     transport_order_id: str
     event_type: str
-    location_code: Optional[str] = None
-    location_name: Optional[str] = None
-    latitude: Optional[str] = None
-    longitude: Optional[str] = None
-    remark: Optional[str] = None
+    location_code: str | None = None
+    location_name: str | None = None
+    latitude: str | None = None
+    longitude: str | None = None
+    remark: str | None = None
     created_at: str
 
     model_config = {"from_attributes": True}
@@ -108,9 +106,9 @@ class PODCreate(BaseModel):
     """Record proof of delivery."""
 
     transport_order_id: str = Field(...)
-    signed_by: Optional[str] = None
+    signed_by: str | None = None
     signature_type: str = Field(default="physical", pattern=r"^(physical|digital)$")
-    signature_image_url: Optional[str] = None
+    signature_image_url: str | None = None
     delivery_photo_urls: list[dict] | None = None
     delivered_to_address: dict | None = None
 
@@ -118,9 +116,9 @@ class PODCreate(BaseModel):
 class PODResponse(BaseModel):
     id: str
     transport_order_id: str
-    signed_by: Optional[str] = None
+    signed_by: str | None = None
     signature_type: str
-    signature_image_url: Optional[str] = None
+    signature_image_url: str | None = None
     delivery_photo_urls: list[dict] = Field(default=list)
     created_at: str
 
@@ -132,7 +130,7 @@ class PODResponse(BaseModel):
 class ReturnOrderCreate(BaseModel):
     """Initiate a return / reverse logistics request."""
 
-    transport_order_id: Optional[str] = None
+    transport_order_id: str | None = None
     reason: str = Field(pattern=r"^(damaged|wrong_item|quality_issue|"
                          "customer_retrieval|address_error|duplicate_order)$")
     reason_detail: str | None = None
@@ -145,10 +143,10 @@ class ReturnOrderResponse(BaseModel):
     return_no: str
     status: str
     reason: str
-    reason_detail: Optional[str] = None
-    transport_order_id: Optional[str] = None
-    carrier_code: Optional[str] = None
-    return_tracking_number: Optional[str] = None
+    reason_detail: str | None = None
+    transport_order_id: str | None = None
+    carrier_code: str | None = None
+    return_tracking_number: str | None = None
     refund_amount: str
     created_at: str
 
@@ -160,7 +158,7 @@ class ReturnOrderResponse(BaseModel):
 class TransportExceptionCreate(BaseModel):
     """Report a transport exception."""
 
-    transport_order_id: Optional[str] = None  # if not yet linked to an order
+    transport_order_id: str | None = None  # if not yet linked to an order
     type: str = Field(pattern=r"^(delayed|damaged_in_transit|lost|"
                        "address_issue|customer_unavailable|weather)$")
     severity: str = Field(default="normal", pattern=r"^(normal|high|critical)$")
@@ -278,9 +276,9 @@ class TransferHubResponse(BaseModel):
     id: str
     code: str
     name: str
-    type: str
+    type: str = Field(validation_alias="hub_type")
     city: str
-    capacity_weight_kg: Optional[str] = None
+    capacity_weight_kg: str | None = None
     status: str
     created_at: str
 
@@ -319,8 +317,8 @@ class CarrierRouteResponse(BaseModel):
 class TransportSegmentCreate(BaseModel):
     transport_order_id: str = Field(...)
     segment_no: int = Field(ge=0)
-    origin_hub_code: Optional[str] = None
-    dest_hub_code: Optional[str] = None
+    origin_hub_code: str | None = None
+    dest_hub_code: str | None = None
     carrier_code: str | None = Field(default=None, pattern=r"^(sf_express|zto|yunda|jd_logistics|ems)$")
     weight_kg: Decimal = Field(ge=Decimal("0"))
 
@@ -329,15 +327,15 @@ class TransportSegmentResponse(BaseModel):
     id: str
     transport_order_id: str
     segment_no: int
-    origin_hub_code: Optional[str] = None
-    dest_hub_code: Optional[str] = None
-    carrier_code: Optional[str] = None
+    origin_hub_code: str | None = None
+    dest_hub_code: str | None = None
+    carrier_code: str | None = None
     status: str
-    tracking_number: Optional[str] = None
-    estimated_departure_time: Optional[str] = None
-    actual_departure_time: Optional[str] = None
-    expected_arrival_time: Optional[str] = None
-    actual_arrival_time: Optional[str] = None
+    tracking_number: str | None = None
+    estimated_departure_time: str | None = None
+    actual_departure_time: str | None = None
+    expected_arrival_time: str | None = None
+    actual_arrival_time: str | None = None
     weight_kg: str
     cost_amount: str
     created_at: str

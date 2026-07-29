@@ -21,6 +21,8 @@ from src.tasks.orders import (  # noqa: F401
     cancel_abandoned_drafts,
     process_stale_orders,
 )
+from src.tasks.outbox import dispatch_outbox_events  # noqa: F401
+from src.tasks.sync import process_pda_sync_queue  # noqa: F401
 
 __all__ = [
     "BaseTask",
@@ -31,6 +33,10 @@ __all__ = [
     # Inventory
     "check_low_stock_alerts",
     "release_locked_inventory_for_cancelled_orders",
+    # Outbox
+    "dispatch_outbox_events",
+    # PDA Sync
+    "process_pda_sync_queue",
     # Maintenance
     "cleanup_expired_tokens",
     "cleanup_old_sync_logs",

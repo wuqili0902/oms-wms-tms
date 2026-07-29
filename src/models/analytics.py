@@ -26,12 +26,12 @@ Safety Stock Formulas:
     AY  → Zα × σ_d × √(LT + LT_lead) / 2   (variable demand — medium buffer)
     AZ  → Zα × σ_d × √(LT + 3*LT_lead)     (erratic — large buffer)
 """
-from datetime import date, timedelta
 import math
+import statistics
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel
-
 
 # ── ABC Classification ───────────────────────────────────────────────────
 
@@ -73,6 +73,16 @@ class SKUSegment(BaseModel):
         return f"{self.category.value}{self.xyz_class.value}"
 
 
+def _compute_safety_stock(avg_demand: float, cv: float, lead_time_days: int) -> float:
+    z_alpha = 1.65
+    demand_std = avg_demand * cv
+    if cv <= 1.0:
+        return z_alpha * demand_std * math.sqrt(lead_time_days)
+    if cv < 2.0:
+        return z_alpha * demand_std * math.sqrt((lead_time_days + lead_time_days) / 2)
+    return z_alpha * demand_std * math.sqrt(lead_time_days + 3 * lead_time_days)
+
+
 class InventoryAnalyticsService(BaseModel):
     """Compute ABC-XYZ segmentation and generate reorder recommendations."""
 
@@ -80,7 +90,88 @@ class InventoryAnalyticsService(BaseModel):
 
     async def compute_segmentation(self, warehouse_id: str) -> list[SKUSegment]:
         """Run full ABC-XYZ analysis for a warehouse. Returns sorted SKUs."""
-        ...
+        from src.core.database import async_session_factory
+        from src.wms.models import StockMovement
+
+        cutoff = datetime.now(UTC) - timedelta(days=365)
+        async with async_session_factory() as session:
+            from sqlalchemy import func, select
+
+            result = await session.execute(
+                select(
+                    StockMovement.sku_id,
+                    func.sum(StockMovement.quantity).label("total_qty"),
+                )
+                .where(
+                    StockMovement.warehouse_id == warehouse_id,
+                    StockMovement.created_at >= cutoff,
+                )
+                .group_by(StockMovement.sku_id)
+            )
+            rows = result.all()
+            if not rows:
+                return self._compute_segmentation_from_stats(warehouse_id)
+
+            total_qty = sum(abs(r.total_qty) for r in rows)
+            sorted_rows = sorted(rows, key=lambda r: abs(r.total_qty), reverse=True)
+
+            cumulative = 0
+            segments: list[SKUSegment] = []
+            for row in sorted_rows:
+                value = abs(row.total_qty)
+                cumulative += value
+                ratio = cumulative / total_qty if total_qty else 0
+                if ratio <= 0.7:
+                    abc = ABCCategory("A")
+                elif ratio <= 0.9:
+                    abc = ABCCategory("B")
+                else:
+                    abc = ABCCategory("C")
+
+                monthly_result = await session.execute(
+                    select(
+                        func.date_trunc("month", StockMovement.created_at).label("month"),
+                        func.sum(StockMovement.quantity).label("month_qty"),
+                    )
+                    .where(StockMovement.sku_id == row.sku_id, StockMovement.created_at >= cutoff)
+                    .group_by("month")
+                )
+                monthly_qtys = [abs(m.month_qty) for m in monthly_result.all() if m.month_qty]
+                demand_cv = (
+                    (statistics.stdev(monthly_qtys) / statistics.mean(monthly_qtys))
+                    if len(monthly_qtys) > 1 and statistics.mean(monthly_qtys) > 0
+                    else 2.0
+                )
+                if demand_cv <= 1.0:
+                    xyz = XYZCategory("X")
+                elif demand_cv < 2.0:
+                    xyz = XYZCategory("Y")
+                else:
+                    xyz = XYZCategory("Z")
+
+                months = len(monthly_qtys) or 12
+                avg_monthly = value / months
+                lead_time = 7
+                safety = int(_compute_safety_stock(avg_monthly, demand_cv, lead_time))
+                segments.append(
+                    SKUSegment(
+                        sku=str(row.sku_id),
+                        category=abc,
+                        xyz_class=xyz,
+                        annual_revenue=value,
+                        monthly_demand_avg=avg_monthly,
+                        demand_cv=demand_cv,
+                        lead_time_days=lead_time,
+                        safety_stock_units=safety,
+                        reorder_point_units=int(avg_monthly * lead_time / 30 + safety),
+                        max_inventory_units=int(avg_monthly * 3),
+                    )
+                )
+        return segments
+
+    def _compute_segmentation_from_stats(self, warehouse_id: str) -> list[SKUSegment]:
+        """Fallback: return empty segmentation when no movement data exists."""
+        return []
 
     async def get_reorder_suggestions(
         self, warehouse_id: str, top_n: int = 100
@@ -92,7 +183,14 @@ class InventoryAnalyticsService(BaseModel):
             2. CZ (erratic + low value — still risky)
             3. AY (variable demand with lead time risk)
         """
-        ...
+        segments = await self.compute_segmentation(warehouse_id)
+        priority = {"CZ": 0, "CY": 1, "BZ": 2, "AZ": 3, "AY": 4, "BY": 5, "BX": 6, "AX": 7, "CX": 8}
+
+        def sort_key(seg: SKUSegment) -> tuple:
+            return (priority.get(seg.cell_label(), 9), -seg.annual_revenue)
+
+        sorted_segs = sorted(segments, key=sort_key)[:top_n]
+        return [(seg.sku, seg.reorder_point_units) for seg in sorted_segs]
 
 
 # ── Dashboard API Endpoints ──────────────────────────────────────────────

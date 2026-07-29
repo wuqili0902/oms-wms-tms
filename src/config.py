@@ -15,7 +15,27 @@ class Settings(BaseSettings):
     app_name: str = "oms-wms-tms"
     app_version: str = "0.1.0"
     debug: bool = False
-    secret_key: str = "change-this-to-a-secure-random-key"
+    secret_key: str = ""
+
+    def model_post_init(self, __context) -> None:
+        if not self.secret_key:
+            raise ValueError(
+                "SECRET_KEY must be set via environment variable or .env file. "
+                "Generate a strong random key with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        if not self.debug and self.secret_key in (
+            "dev-secret-key-change-in-production",
+        ):
+            import warnings
+            warnings.warn(
+                "SECRET_KEY is set to a known default. Set a strong random value in production."
+            )
+        if self.cors_origins == '["*"]' and not self.debug:
+            import warnings
+            warnings.warn(
+                "CORS is configured with wildcard origin ['*'] in production. "
+                "Set CORS_ORIGINS to explicit frontend domain(s) for security."
+            )
 
     # CORS
     cors_origins: str = '["*"]'
@@ -27,6 +47,9 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/oms_wms_tms"
     database_sync_url: str = "postgresql://postgres:postgres@localhost:5432/oms_wms_tms"
+    db_pool_size: int = 20
+    db_max_overflow: int = 10
+    db_pool_pre_ping: bool = True
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
@@ -52,6 +75,28 @@ class Settings(BaseSettings):
 
     # PDA Offline mode (SQLite local DB path)
     pda_local_db_path: str = "wms_pda.db"  # relative to CWD or absolute path
+
+    # SMTP (email notifications)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    smtp_from: str = "noreply@oms-wms-tms.local"
+
+    # Outbox dispatch target (RabbitMQ HTTP API or internal webhook)
+    outbox_dispatch_url: str = "http://localhost:8000/api/v1/events/ingest"
+
+    # Firebase Cloud Messaging (push notifications)
+    firebase_credentials_path: str = ""
+    firebase_enabled: bool = False
+
+    # Carrier API endpoints (JSON dict: {"carrier_code": "https://api.carrier.com/..."})
+    carrier_api_endpoints: str = "{}"
+
+    @property
+    def carrier_api_endpoints_dict(self) -> dict[str, str]:
+        return json.loads(self.carrier_api_endpoints)
 
 
 settings = Settings()

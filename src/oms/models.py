@@ -24,6 +24,13 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
+# Shared models imported from the common module to avoid circular imports.
+from src.models.shared_models import Customer  # noqa: F401,E501
+from src.models.shared_models import OrderItem as _OrderItemBase
+
+# Alias so string references like relationship("OrderItem") resolve correctly, and also expose for backwards compat.
+OrderItem = _OrderItemBase
+
 from src.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDMixin
 
 
@@ -45,28 +52,12 @@ class OrderPriority(Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
-    URGANIC = "urgent"
+    URGENT = "urgent"
 
 
-class Customer(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
-    """Customer information model.
-
-    Stores customer details including contact information and address data.
-    """
-
-    __tablename__ = "customers"
-
-    code: str = Column(String(50), unique=True, index=True)
-    name: str = Column(String(200), nullable=False)
-    contact: str = Column(String(100))
-    phone: str = Column(String(30))
-    address: dict = Column(JSON)
-
-    orders: list = relationship("Order", back_populates="customer")
-
-    def __repr__(self):
-        return f"<Customer {self.code}: {self.name}>"
-
+# ── Shared model definitions ────────────────────────────────────────────
+# Customer and OrderItem are imported above from shared_models to avoid
+# circular imports between OMS, WMS, and TMS subsystems.
 
 class Order(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
     """Order model representing a customer's request for items.
@@ -107,43 +98,6 @@ class Order(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
         return f"<Order {self.order_no}: {self.status.value}>"
 
 
-class OrderItem(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
-    """Individual item within an order.
-
-    Tracks the details of each item requested in an order, including quantity,
-    price, and picking status.
-    """
-
-    __tablename__ = "order_items"
-
-    order_id: UUID = Column(UUID(as_uuid=True), ForeignKey("orders.id"))
-    sku_id: UUID | None = Column(UUID(as_uuid=True), ForeignKey("skus.id"), nullable=True)
-    gtin: str = Column(String(13))
-    name: str = Column(String(200))
-    quantity: int = Column(Integer, default=0)
-    picked_qty: int = Column(Integer, default=0)
-    unit_price: Decimal = Column(Numeric(18, 4))
-    batch_no: str | None = Column(String(50), nullable=True)
-    status: str = Column(String(20), default="pending")
-
-    order: Order = relationship("Order", back_populates="items_list")
-    sku: Optional["SKU"] = relationship("SKU", back_populates="order_items")
-
-    __table_args__ = (
-        Index(
-            "ix_order_items_gtin",
-            "gtin",
-        ),
-        Index(
-            "ix_order_items_order_id_status",
-            "order_id",
-            "status",
-        ),
-    )
-
-    def __repr__(self):
-        return f"<OrderItem {self.name}: qty={self.quantity}>"
-
 
 class OrderStatusLog(Base, UUIDMixin, TimestampMixin):
     """Logs of order status changes.
@@ -166,3 +120,39 @@ class OrderStatusLog(Base, UUIDMixin, TimestampMixin):
 
     def __repr__(self):
         return f"<OrderStatusLog {self.from_status} -> {self.to_status}>"
+
+
+class MergeGroup(Base, UUIDMixin, TimestampMixin):
+    """Group of orders merged for combined fulfilment."""
+
+    __tablename__ = "merge_groups"
+
+    code: str = Column(String(50), unique=True, index=True)
+    warehouse_id: UUID | None = Column(
+        UUID(as_uuid=True), ForeignKey("warehouses.id"), nullable=True
+    )
+    status: str = Column(String(20), default="active")
+    total_items: int = Column(Integer, default=0)
+    total_amount: Decimal = Column(Numeric(18, 2), default=Decimal("0"))
+    notes: str = Column(Text)
+
+    def __repr__(self):
+        return f"<MergeGroup {self.code}: {self.status}>"
+
+
+class SplitChildOrder(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
+    """Link table for split/merge relationships between orders."""
+
+    __tablename__ = "split_child_orders"
+
+    parent_order_id: UUID | None = Column(
+        UUID(as_uuid=True), ForeignKey("orders.id"), nullable=True
+    )
+    child_order_id: UUID = Column(UUID(as_uuid=True), ForeignKey("orders.id"))
+    merge_group_id: UUID | None = Column(
+        UUID(as_uuid=True), ForeignKey("merge_groups.id"), nullable=True
+    )
+    split_reason: str = Column(Text)
+
+    def __repr__(self):
+        return f"<SplitChildOrder {self.parent_order_id} -> {self.child_order_id}>"

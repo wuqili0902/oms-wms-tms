@@ -90,6 +90,19 @@ class TestDemandForecaster:
         assert results[0].confidence_upper is not None
         assert results[0].confidence_lower <= results[0].predicted_orders <= results[0].confidence_upper
 
+    def test_forecast_insufficient_history(self):
+        df = DemandForecaster()
+        df.add_observation(100)
+        results = df.forecast(days=3)
+        assert len(results) == 3
+        assert all(r.predicted_orders == 100.0 for r in results)
+
+    def test_forecast_empty_history(self):
+        df = DemandForecaster()
+        results = df.forecast(days=2)
+        assert len(results) == 2
+        assert all(r.predicted_orders == 0.0 for r in results)
+
     def test_reset(self):
         df = DemandForecaster()
         df.add_observation(100)

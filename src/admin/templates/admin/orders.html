@@ -3,6 +3,20 @@
 {% block content %}
 <div class="page-header"><h2>Orders</h2></div>
 
+<details style="margin-bottom:16px;">
+  <summary style="cursor:pointer;color:var(--accent);font-weight:600;">+ Create Order</summary>
+  <form method="POST" action="/admin/orders" style="margin-top:8px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="form-label">Order No</label>
+    <input class="form-control" name="order_no" required>
+    <label class="form-label">Customer ID</label>
+    <input class="form-control" name="customer_id">
+    <label class="form-label">Total Amount</label>
+    <input class="form-control" name="total_amount" type="number" step="0.01">
+    <button type="submit">Create</button>
+  </form>
+</details>
+
 {% if orders %}
 <div class="card" style="padding:0;">
   <div class="table-wrap">
@@ -13,7 +27,16 @@
         <tr>
           <td><a href="/admin/orders/{{ o.id }}" style="color:var(--accent);text-decoration:none;">{{ o.order_no }}</a></td>
           <td>{{ o.customer_id or '—' }}</td>
-          <td><span class="badge badge-{{ 'success' if o.status == 'completed' else 'warning' if o.status in ('confirmed','processing','picking') else 'danger' if o.status in ('cancelled','failed') else 'info' }}">{{ o.status }}</span></td>
+          <td>
+            <form method="POST" action="/admin/orders/{{ o.id }}/status" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <select name="status" onchange="this.form.submit()">
+                {% for s in ['pending','confirmed','processing','picking','completed','cancelled','failed'] %}
+                <option value="{{ s }}" {{ 'selected' if o.status == s }}>{{ s }}</option>
+                {% endfor %}
+              </select>
+            </form>
+          </td>
           <td>{{ o.total_amount or '0.00' }}</td>
           <td>{{ o["items"]|length if o["items"] else 0 }}</td>
           <td style="white-space:nowrap;">{{ o.created_at[:10] if o.created_at else '—' }}</td>

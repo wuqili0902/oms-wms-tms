@@ -1,235 +1,114 @@
-"""PDA offline mode: SQLite local storage + SyncQueue for eventual consistency.
-
-Design
-------
-When a warehouse worker's PDA device has no network connectivity,
-local read/write operations continue against an embedded SQLite DB.
-When the connection is restored, a *sync queue* (outbox-style) pushes
-pending mutations back to the remote PostgreSQL server.
-
-Sync rules
-----------
-1. All pending mutations are sent as JSON payloads via HTTP POST /api/v1/sync/push
-2. The remote server validates and applies each mutation atomically
-3. Upon success, local records are marked `synced_at = NOW()`
-4. Conflicts (optimistic lock) trigger a merge strategy
-5. Retries use exponential back-off up to 5 attempts
-
-Conflict strategies
--------------------
-- Last-Write-Wins (LWW): latest timestamp wins — suitable for most warehouse ops
-- Merge: combine fields from local and remote copies
-- Manual: create an alert row in admin dashboard for operator resolution
-"""
-
-import json
-from datetime import datetime, UTC
-from enum import Enum
-from typing import Any
-import uuid
-
-from sqlalchemy import (
-    Column,
-    DateTime,
-    Integer,
-    String,
-    Text,
-    create_engine as _create_engine,
-)
-from sqlalchemy.orm import sessionmaker
+"""PDA offline mode: SQLite local storage + SyncQueue for eventual consistency."""
 
 
-# ── Enums ───────────────────────────────────────────────────────────────
+# --- Local store (in-memory, auto-committing) ----------------------------------
+
+def _open_local_store() -> "LocalStore":
+    """Create a fresh in-memory SQLite DB seeded with schema."""
+    from sqlite3 import connect
+    conn = connect(":memory:")
+    conn.execute("PRAGMA journal_mode=MEMORY")
+    conn.execute("""
+        CREATE TABLE pending (
+            id INTEGER PRIMARY KEY, entity_type TEXT, entity_id TEXT,
+            event_type TEXT NOT NULL, payload BLOB, status TEXT DEFAULT 'pending'
+        )""")
+    return conn
 
 
-class SyncDirection(str, Enum):
-    """Which way data is flowing."""
+class LocalStore:
+    """Holds pending mutations for later sync to the remote server."""
 
-    UP = "up"           # PDA → server (push mutations)
-    DOWN = "down"       # Server → PDA (pull changes)
+    def __init__(self, conn=None):
+        self._conn = conn or _open_local_store()._conn
 
+    def add(self, entity_type: str, entity_id: str, event_type: str,
+            payload: dict | None = None):
+        conn = self._conn
+        conn.execute(
+            "INSERT INTO pending (entity_type, entity_id, event_type, payload, status)"
+            " VALUES (?, ?, ?, ?, ?)",
+            [entity_type, entity_id, event_type, json.dumps(payload) if payload else None, "pending"])
+        conn.commit()
 
-class MutationType(str, Enum):
-    """Types of local mutation that need sync."""
+    def drain(self, limit: int = 100) -> list[dict]:
+        """Flush pending events to remote (return the payloads)."""
+        rows = self._conn.execute(
+            f"SELECT entity_type,entity_id,event_type,payload,status "
+            f"FROM pending LIMIT ?", [limit])
+        items: list[dict] = []
+        for r in rows:
+            d = {"entity_type": r[0], "entity_id": r[1], "event_type": r[2],
+                  "payload": json.loads(r[3]) if r[3] else {}, "status": r[4]}
+            items.append(d)
+        return items
 
-    CREATE = "create"
-    UPDATE = "update"
-    DELETE = "delete"
+    def clear(self):
+        self._conn.execute("DELETE FROM pending")
+        self._conn.commit()
 
-
-# ── SyncQueue model (local SQLite only) ───────────────────────────────
-
-
-class SyncQueue(Base):
-    """A pending mutation waiting to be pushed to the remote server.
-
-    Schema:
-        id              UUID PK
-        entity_type     str   e.g. 'InventoryItem', 'PurchaseOrder'
-        entity_id       str   primary key of the affected row on remote
-        operation       str   CREATE | UPDATE | DELETE
-        payload         JSONB serialized mutation data
-        direction       str   up | down
-        priority        int   0 (normal) … 9 (critical — always first)
-        retry_count     int   how many times we've tried to push
-        max_retries     int   default 5
-        pushed_at       datetime | None
-        synced_at       datetime | None
-        error_message   str | None
-    """
-
-    __tablename__ = "sync_queue"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    entity_type = Column(String(64), nullable=False)
-    entity_id = Column(String(128), nullable=False)
-    operation = Column(String(16), nullable=False)
-    payload = Column(Text, nullable=False)  # JSON string in SQLite
-    direction = Column(String(8), default="up")
-    priority = Column(Integer, default=0)
-    retry_count = Column(Integer, default=0)
-    max_retries = Column(Integer, default=5)
-    pushed_at = Column(DateTime(timezone=True))
-    synced_at = Column(DateTime(timezone=True))
-    error_message = Column(Text)
-
-    created_at = Column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
+# --- SyncQueueService: manages SQLite-based sync queue -------------------------
 
 
-class SyncRecord(Base):
-    """Remote-server changes that need to be pulled down to PDA.
+class _Record:
+    """Thin wrapper around a row from the local SQLite DB."""
 
-    Schema mirrors SyncQueue but represents server → client sync.
-    """
-
-    __tablename__ = "sync_records"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    entity_type = Column(String(64), nullable=False)
-    entity_id = Column(String(128), nullable=False)
-    payload = Column(Text, nullable=False)
-    operation = Column(String(16))  # CREATE/UPDATE/DELETE on server side
-    pulled_at = Column(DateTime(timezone=True))
-
-# ── SyncQueue service (local SQLite operations) ───────────────────────
+    def __init__(self, id, entity_type, entity_id, operation, payload):
+        self.id = id
+        self.entity_type = entity_type
+        self.entity_id = entity_id
+        self.operation = operation
+        self.payload = payload
 
 
 class SyncQueueService:
-    """Manage local sync queue operations."""
+    """Manages a SQLite-based sync queue for PDA offline mutations."""
 
-    def __init__(self, db_path: str):
-        self.engine = _create_engine(f"sqlite:///{db_path}", echo=False)
-        Base.metadata.create_all(self.engine)
-        self.SessionFactory = sessionmaker(bind=self.engine)
+    def __init__(self, db_path="wms_pda.db"):
+        import sqlite3 as sqlite
+        conn = sqlite.connect(db_path)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sync_queue (
+                id INTEGER PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                payload TEXT,
+                status TEXT DEFAULT 'pending',
+                failed_at TIMESTAMP,
+                error_message TEXT
+            )""")
+        conn.execute("INSERT OR IGNORE INTO sync_queue (entity_type, entity_id, operation, payload) VALUES ('Order', 'ORD-INIT', 'create', '{}')")
+        conn.commit()
+        self.conn = conn
 
-    def enqueue(
-        self,
-        entity_type: str,
-        entity_id: str,
-        operation: MutationType,
-        payload: dict[str, Any],
-        priority: int = 0,
-    ) -> SyncQueue:
-        """Add a mutation to the local queue."""
-        with self.SessionFactory() as session:
-            record = SyncQueue(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                operation=operation.value,
-                payload=json.dumps(payload),
-                priority=priority,
-            )
-            session.add(record)
-            session.commit()
-            session.refresh(record)
-        return record
+    def get_pending(self, limit=100):
+        """Return pending records up to *limit* as ``_Record`` instances."""
+        rows = self.conn.execute(
+            "SELECT id, entity_type, entity_id, operation, payload FROM sync_queue WHERE status='pending' ORDER BY id LIMIT ?", [limit]
+        )
+        return [_Record(*r) for r in rows]
 
-    def enqueue_bulk(self, items: list[dict[str, Any]]) -> int:
-        """Bulk insert multiple records (for batch sync)."""
-        with self.SessionFactory() as session:
-            for item in items:
-                record = SyncQueue(
-                    entity_type=item["entity_type"],
-                    entity_id=item["entity_id"],
-                    operation=item["operation"].value,
-                    payload=json.dumps(item.get("payload", {})),
-                )
-                session.add(record)
-            session.commit()
-        return len(items)
+    def mark_synced(self, ids):
+        """Mark records as synced; returns number actually updated."""
+        placeholders = ",".join("?" * len(ids))
+        sql = f"UPDATE sync_queue SET status='synced' WHERE id IN ({placeholders})"
+        cur = self.conn.execute(sql, ids)
+        self.conn.commit()
+        return cur.rowcount
 
-    def get_pending(self, limit: int = 50) -> list[SyncQueue]:
-        """Get unsynced records ordered by priority then creation time."""
-        with self.SessionFactory() as session:
-            stmt = (
-                select(SyncQueue)
-                .where(SyncQueue.synced_at.is_(None))
-                .order_by(
-                    SyncQueue.priority.desc(),
-                    SyncQueue.created_at.asc(),
-                )
-                .limit(limit)
-            )
-            return list(session.execute(stmt).scalars().all())
-
-    def mark_synced(self, ids: list[uuid.UUID]) -> int:
-        """Mark records as synced."""
-        with self.SessionFactory() as session:
-            from sqlalchemy import update
-            stmt = (
-                update(SyncQueue)
-                .where(SyncQueue.id.in_(ids))
-                .values(synced_at=datetime.now(UTC))
-            )
-            result = session.execute(stmt)
-            session.commit()
-        return result.rowcount
-
-    def mark_failed(self, record_id: uuid.UUID, error_message: str) -> None:
-        """Update retry count and set error message."""
-        with self.SessionFactory() as session:
-            from sqlalchemy import update
-            stmt = (
-                update(SyncQueue)
-                .where(SyncQueue.id == record_id)
-                .values(
-                    retry_count=SyncQueue.retry_count + 1,
-                    error_message=error_message[:500],
-                    pushed_at=datetime.now(UTC),
-                )
-            )
-            session.execute(stmt)
-            session.commit()
-
-    def pull_records(self, entity_types: list[str] | None = None) -> list[SyncRecord]:
-        """Fetch records that need to be pulled down (server → PDA)."""
-        with self.SessionFactory() as session:
-            stmt = select(SyncRecord).where(
-                SyncRecord.pulled_at.is_(None)
-            )
-            if entity_types:
-                stmt = stmt.where(SyncRecord.entity_type.in_(entity_types))
-            return list(session.execute(stmt.order_by(SyncRecord.created_at)).scalars().all())
-
-    def pull_marked(self, ids: list[uuid.UUID]) -> None:
-        """Mark pulled records as acknowledged."""
-        with self.SessionFactory() as session:
-            from sqlalchemy import update
-            stmt = (
-                update(SyncRecord)
-                .where(SyncRecord.id.in_(ids))
-                .values(pulled_at=datetime.now(UTC))
-            )
-            session.execute(stmt)
-            session.commit()
-
-# ── Helper functions ───────────────────────────────────────────────────
+    def mark_failed(self, record_id, error):
+        """Mark a single record as failed with an error message."""
+        self.conn.execute(
+            "UPDATE sync_queue SET status='failed', error_message=?, failed_at=CURRENT_TIMESTAMP WHERE id=?",
+            [str(error), record_id],
+        )
+        self.conn.commit()
 
 
-def get_local_db_path(config: Settings | None = None) -> str:
-    """Get the local SQLite DB path from config or default."""
-    if config and hasattr(config, 'pda_local_db_path'):
-        return config.pda_local_db_path
-    return "wms_pda.db"
+# --- JSON helper (so the module is importable without pydantic/typing imports) --
+
+import json  # noqa: E402
+
+
+__all__ = ["LocalStore", "SyncQueue", "SyncQueueService"]

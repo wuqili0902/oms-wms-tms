@@ -1,13 +1,11 @@
 """Simple demand forecasting using moving average.
 
-Provides basic time-series forecasting for order volume prediction.
-In production, this would be replaced with a proper ML pipeline
-(e.g., Prophet, ARIMA, or a custom neural network).
+NOTE: This module is superseded by src/tms/ml/forecast.py (OrderForecaster).
+Kept for backward compatibility and reference. Will be removed in a future release.
 """
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Optional
 
 
 @dataclass
@@ -16,8 +14,8 @@ class ForecastResult:
 
     date: str
     predicted_orders: float
-    confidence_lower: Optional[float] = None
-    confidence_upper: Optional[float] = None
+    confidence_lower: float | None = None
+    confidence_upper: float | None = None
 
 
 class DemandForecaster:
@@ -31,7 +29,7 @@ class DemandForecaster:
         self.window_size = window_size
         self.alpha = alpha
         self._history: deque[float] = deque(maxlen=window_size)
-        self._ema: Optional[float] = None
+        self._ema: float | None = None
 
     def add_observation(self, orders: float) -> None:
         """Record a daily order count observation."""
@@ -42,7 +40,7 @@ class DemandForecaster:
             self._ema = self.alpha * orders + (1 - self.alpha) * self._ema
 
     @property
-    def current_forecast(self) -> Optional[float]:
+    def current_forecast(self) -> float | None:
         """Current EMA forecast for the next period."""
         return self._ema
 
@@ -71,10 +69,7 @@ class DemandForecaster:
 
         # Calculate simple trend from recent observations
         recent = history[-3:] if len(history) >= 3 else history
-        if len(recent) >= 2:
-            trend = (recent[-1] - recent[0]) / len(recent)
-        else:
-            trend = 0.0
+        trend = (recent[-1] - recent[0]) / len(recent)
 
         # Calculate standard deviation for confidence intervals
         mean = sum(history) / len(history)

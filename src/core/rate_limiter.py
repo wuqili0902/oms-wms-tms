@@ -41,6 +41,7 @@ class RateLimiter:
                 return True
             else:
                 await self.client.ping()
+                self._connected = True
                 return True
         except Exception as e:
             print(f"Failed to connect to Redis for rate limiting: {e}")
@@ -76,20 +77,21 @@ class RateLimiter:
         try:
             bucket_key = f"rate_limit:{key}"
             current_time = await self.client.time()
+            now_seconds = current_time[0] if isinstance(current_time, (list, tuple)) else int(current_time)
 
             # Use ZRANGE to get tokens in the current window
-            start_window = int(current_time) - window
-            end_window = int(current_time)
+            start_window = now_seconds - window
+            end_window = now_seconds
 
             # Add token for this request and check count
             pipe = self.client.pipeline()
-            pipe.zadd(bucket_key, "1", f"{start_window}:{end_window}")
-            pipe.zrange(bucket_key, start_window, end_window)
+            pipe.zadd(bucket_key, {f"{start_window}:{end_window}": "1"})
+            pipe.zcard(bucket_key)
             results = await pipe.execute()
 
-            if isinstance(results[0], int):
+            if isinstance(results[1], int):
                 # If we got a count, check against limit
-                return results[0] <= requests
+                return results[1] <= requests
             else:
                 # Redis returned an error or unexpected response - allow request
                 return True
@@ -114,12 +116,13 @@ class RateLimiter:
         try:
             bucket_key = f"rate_limit:{key}"
             current_time = await self.client.time()
+            now_seconds = current_time[0] if isinstance(current_time, (list, tuple)) else int(current_time)
 
-            # Get tokens in the window
-            start_window = int(current_time) - 60
-            end_window = int(current_time)
+            # Get token count in the window
+            start_window = now_seconds - 60
+            end_window = now_seconds
 
-            count = await self.client.zrange(bucket_key, start_window, end_window)
+            count = await self.client.zcount(bucket_key, start_window, end_window)
 
             if isinstance(count, int):
                 return {
@@ -185,14 +188,9 @@ def rate_limit(
 
             # Add rate limit headers to response if it's a JSONResponse
             if isinstance(result, JSONResponse):
-                headers = dict(result.headers)
                 rate_headers = await rate_limiter.get_rate_limit_headers(key)
-                headers.update(rate_headers)
-                result = JSONResponse(
-                    content=result.body,
-                    status_code=result.status_code,
-                    headers=headers,
-                )
+                for k, v in rate_headers.items():
+                    result.headers[k] = v
 
             return result
 

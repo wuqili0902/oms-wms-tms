@@ -9,15 +9,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.exceptions import NotFoundException, ValidationException
+from src.models.base import model_to_dict
 from src.wms import service as wms_service
 from src.wms.schemas import (
+    AddressCreate,
+    CreditMemoCreate,
+    CreditMemoResponse,
     InventoryAdjust,
     InventoryResponse,
+    InvoiceCreate,
+    InvoiceResponse,
     LocationCreate,
     LocationResponse,
+    LocationUpdate,
     PickingWaveCreate,
     PickingWaveResponse,
+    PurchaseOrderCreate,
+    PurchaseOrderResponse,
     StockMovementResponse,
+    VendorCreate,
     WarehouseCreate,
     WarehouseResponse,
 )
@@ -185,12 +195,192 @@ async def list_shipments(
     return await wms_service.list_shipments(db, warehouse_id=warehouse_id)
 
 
-@router.get("", response_model=list[WarehouseResponse])
+@router.get("")
 async def list_warehouses(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    return await wms_service.list_warehouses(db)
+    return await wms_service.list_warehouses(db, page=page, page_size=page_size)
+
+
+# ═══ Vendor CRUD ════════════════════════════════════════════════════════
+
+@router.post("/vendors", status_code=status.HTTP_201_CREATED)
+async def create_vendor(
+    data: VendorCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.create_vendor(db, data.model_dump())
+    except ValidationException as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/vendors")
+async def list_vendors(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return await wms_service.list_vendors(db, page=page, page_size=page_size)
+
+
+@router.get("/vendors/{vendor_id}")
+async def get_vendor(
+    vendor_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.get_vendor(db, vendor_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ═══ Address CRUD ═══════════════════════════════════════════════════════
+
+@router.post("/addresses", status_code=status.HTTP_201_CREATED)
+async def create_address(
+    data: AddressCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return await wms_service.create_address(db, data.model_dump())
+
+
+@router.get("/addresses")
+async def list_addresses(
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return await wms_service.list_addresses(db, entity_type=entity_type, entity_id=entity_id)
+
+
+# ═══ Purchase Order CRUD ════════════════════════════════════════════════
+
+@router.post("/purchase-orders", status_code=status.HTTP_201_CREATED, response_model=PurchaseOrderResponse)
+async def create_purchase_order(
+    data: PurchaseOrderCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return await wms_service.create_purchase_order(db, data.model_dump())
+
+
+@router.get("/purchase-orders")
+async def list_purchase_orders(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return await wms_service.list_purchase_orders(db, page=page, page_size=page_size)
+
+
+@router.get("/purchase-orders/{po_id}", response_model=PurchaseOrderResponse)
+async def get_purchase_order(
+    po_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.get_purchase_order(db, po_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/purchase-orders/{po_id}/approve", response_model=PurchaseOrderResponse)
+async def approve_purchase_order(
+    po_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.approve_purchase_order(db, po_id)
+    except (NotFoundException, ValidationException) as e:
+        status_code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=status_code, detail=str(e))
+
+
+@router.post("/purchase-orders/{po_id}/receive", response_model=PurchaseOrderResponse)
+async def receive_goods(
+    po_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.receive_goods(db, po_id)
+    except (NotFoundException, ValidationException) as e:
+        status_code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=status_code, detail=str(e))
+
+
+# ═══ Invoice CRUD ═══════════════════════════════════════════════════════
+
+@router.post("/invoices", status_code=status.HTTP_201_CREATED, response_model=InvoiceResponse)
+async def create_invoice(
+    data: InvoiceCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return await wms_service.create_invoice(db, data.model_dump())
+
+
+@router.get("/invoices", response_model=list[InvoiceResponse])
+async def list_invoices(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return await wms_service.list_invoices(db)
+
+
+@router.get("/invoices/{invoice_id}", response_model=InvoiceResponse)
+async def get_invoice(
+    invoice_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.get_invoice(db, invoice_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ═══ CreditMemo CRUD ════════════════════════════════════════════════════
+
+@router.post("/credit-memos", status_code=status.HTTP_201_CREATED, response_model=CreditMemoResponse)
+async def create_credit_memo(
+    data: CreditMemoCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return await wms_service.create_credit_memo(db, data.model_dump())
+
+
+@router.get("/credit-memos", response_model=list[CreditMemoResponse])
+async def list_credit_memos(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return await wms_service.list_credit_memos(db)
+
+
+@router.get("/credit-memos/{cm_id}", response_model=CreditMemoResponse)
+async def get_credit_memo(
+    cm_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.get_credit_memo(db, cm_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -209,6 +399,35 @@ async def get_warehouse(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.put("/{wh_id}", response_model=WarehouseResponse)
+async def update_warehouse(
+    wh_id: str,
+    data: WarehouseCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        wh = await wms_service.update_warehouse(db, wh_id, data.model_dump())
+        d = model_to_dict(wh)
+        d["type"] = d.pop("warehouse_type", "standard")
+        d["is_active"] = d.get("status") == "active"
+        return d
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.delete("/{wh_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_warehouse(
+    wh_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        await wms_service.delete_warehouse(db, wh_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.post("/{wh_id}/locations", response_model=LocationResponse, status_code=status.HTTP_201_CREATED)
 async def create_location(
     wh_id: str,
@@ -217,7 +436,6 @@ async def create_location(
     current_user: dict = Depends(get_current_user),
 ):
     try:
-        # Inject wh_id from path into data dict
         body = data.model_dump()
         body["warehouse_id"] = wh_id
         return await wms_service.create_location(db, wh_id, body)
@@ -226,10 +444,39 @@ async def create_location(
         raise HTTPException(status_code=code, detail=str(e))
 
 
-@router.get("/{wh_id}/locations", response_model=list[LocationResponse])
+@router.get("/{wh_id}/locations")
 async def list_locations(
     wh_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    return await wms_service.list_locations(db, wh_id=wh_id)
+    return await wms_service.list_locations(db, wh_id=wh_id, page=page, page_size=page_size)
+
+
+@router.put("/{wh_id}/locations/{loc_id}", response_model=LocationResponse)
+async def update_location(
+    wh_id: str,
+    loc_id: str,
+    data: LocationUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return await wms_service.update_location(db, wh_id, loc_id, data.model_dump())
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.delete("/{wh_id}/locations/{loc_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_location(
+    wh_id: str,
+    loc_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        await wms_service.delete_location(db, wh_id, loc_id)
+    except NotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))

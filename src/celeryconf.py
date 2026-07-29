@@ -35,6 +35,18 @@ beat_schedule = {
         "schedule": crontab(minute=0, hour=2),
         "options": {"queue": "default"},
     },
+    # ── Outbox ───────────────────────────────────────────────────────────
+    "dispatch-outbox-every-1m": {
+        "task": "src.tasks.outbox.dispatch_outbox_events",
+        "schedule": crontab(minute="*/1"),
+        "options": {"queue": "default"},
+    },
+    # ── ABC‑XYZ inventory analysis ───────────────────────────────────────
+    "abc-xyz-analysis-daily": {
+        "task": "src.tasks.maintenance.compute_abc_xyz_analysis",
+        "schedule": crontab(minute=0, hour=2),
+        "options": {"queue": "default"},
+    },
     # ── Maintenance ──────────────────────────────────────────────────────
     "health-check-every-5m": {
         "task": "src.tasks.maintenance.health_check",

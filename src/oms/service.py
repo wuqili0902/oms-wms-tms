@@ -3,6 +3,7 @@
 All CRUD functions are async and require an ``AsyncSession``.
 Maps ORM model fields to Pydantic schema field names.
 """
+import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -10,7 +11,10 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+logger = logging.getLogger(__name__)
+
 from src.core.exceptions import NotFoundException, ValidationException
+from src.core.outbox import append_event
 from src.oms.models import Customer, Order, OrderItem, OrderPriority, OrderStatus, OrderStatusLog
 from src.wms.models import SKU
 
@@ -43,7 +47,7 @@ PRIORITY_MAP: dict[str, OrderPriority] = {
     "low": OrderPriority.LOW,
     "medium": OrderPriority.MEDIUM,
     "high": OrderPriority.HIGH,
-    "urgent": OrderPriority.URGANIC,
+    "urgent": OrderPriority.URGENT,
 }
 PRIORITY_REVERSE: dict[OrderPriority, str] = {v: k for k, v in PRIORITY_MAP.items()}
 
@@ -99,22 +103,27 @@ async def _get_or_create_sku(db: AsyncSession, sku_str: str) -> SKU:
     return sku
 
 
-async def _order_to_dict(db: AsyncSession, order: Order) -> dict:
+async def _order_to_dict(db: AsyncSession, order: Order, customer: Customer | None = None) -> dict:
     """Convert Order ORM row to schema dict."""
-    # Fetch customer code for the response
-    customer = await db.get(Customer, order.customer_id)
+    if customer is None:
+        customer = await db.get(Customer, order.customer_id)
     customer_code = customer.code if customer else str(order.customer_id)
 
-    # Fetch items from OrderItem table
     items_result = await db.execute(
         select(OrderItem).where(OrderItem.order_id == order.id).order_by(OrderItem.created_at)
     )
+    order_items = items_result.scalars().all()
+
+    sku_ids = {oi.sku_id for oi in order_items if oi.sku_id}
+    sku_map: dict[uuid.UUID, SKU] = {}
+    if sku_ids:
+        skus_result = await db.execute(select(SKU).where(SKU.id.in_(list(sku_ids))))
+        sku_map = {s.id: s for s in skus_result.scalars().all()}
+
     items = []
-    for oi in items_result.scalars().all():
-        sku_str = ""
-        if oi.sku_id:
-            sku_obj = await db.get(SKU, oi.sku_id)
-            sku_str = sku_obj.sku if sku_obj else ""
+    for oi in order_items:
+        sku_obj = sku_map.get(oi.sku_id) if oi.sku_id else None
+        sku_str = sku_obj.sku if sku_obj else ""
         items.append({
             "gtin": oi.gtin or "",
             "sku": sku_str,
@@ -198,6 +207,20 @@ async def create_order(db: AsyncSession, data: dict) -> dict:
         remark="Order created",
     )
     db.add(log)
+
+    await append_event(
+        db,
+        aggregate_type="Order",
+        aggregate_id=order.id,
+        event_type="order.created",
+        payload={
+            "order_id": str(order.id),
+            "order_no": order_no,
+            "total_amount": str(total),
+            "customer_id": data.get("customer_id", ""),
+        },
+    )
+
     await db.commit()
     await db.refresh(order)
     return await _order_to_dict(db, order)
@@ -240,7 +263,15 @@ async def list_orders(
     offset = (page - 1) * page_size
     stmt = stmt.offset(offset).limit(page_size)
     result = await db.execute(stmt)
-    items = [await _order_to_dict(db, o) for o in result.scalars().all()]
+    orders = result.scalars().all()
+
+    customer_ids = {o.customer_id for o in orders if o.customer_id}
+    customer_map: dict[uuid.UUID, Customer] = {}
+    if customer_ids:
+        cust_result = await db.execute(select(Customer).where(Customer.id.in_(list(customer_ids))))
+        customer_map = {c.id: c for c in cust_result.scalars().all()}
+
+    items = [await _order_to_dict(db, o, customer=customer_map.get(o.customer_id)) for o in orders]
     return items, total
 
 
@@ -268,6 +299,28 @@ async def update_order_status(db: AsyncSession, order_id: str, target: str, oper
     db.add(log)
     await db.commit()
     await db.refresh(order)
+
+    from src.notification.service import notify_order_status_change
+    await notify_order_status_change(
+        order_id=str(order.id), user_id=operator, status=target, order_no=order.order_no, db=db
+    )
+
+    try:
+        from src.webhooks.models import WebhookEvent as WE
+        from src.webhooks.service import dispatch_event
+        await dispatch_event(
+            WE.ORDER_STATUS_CHANGED,
+            {"order_id": str(order.id), "order_no": order.order_no, "from": current, "to": target},
+            db=db,
+        )
+        await dispatch_event(
+            WE.ORDER_CANCELLED if target == "cancelled" else WE.ORDER_CREATED,
+            {"order_id": str(order.id), "order_no": order.order_no, "status": target},
+            db=db,
+        )
+    except Exception as exc:
+        logger.warning("Webhook dispatch failed (non-fatal): %s", exc)
+
     return await _order_to_dict(db, order)
 
 

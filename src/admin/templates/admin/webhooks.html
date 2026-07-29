@@ -1,0 +1,75 @@
+{% extends "admin/base.html" %}
+{% block title %}Webhooks{% endblock %}
+{% block content %}
+<div class="page-header"><h2>Webhook Targets</h2></div>
+
+<div class="card">
+  <h3 style="font-size:0.95rem;margin-bottom:0.75rem;">Add Webhook</h3>
+  <form method="post" action="/admin/webhooks">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" name="name" required placeholder="e.g. Slack Alerts">
+      </div>
+      <div class="form-group">
+        <label>URL</label>
+        <input type="url" name="url" required placeholder="https://hooks.example.com/notify">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Secret (optional)</label>
+        <input type="text" name="secret" placeholder="HMAC signing secret">
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select name="status">
+          <option value="active">Active</option>
+          <option value="paused">Paused</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Events</label>
+      <div style="display:flex;flex-wrap:wrap;gap:0.75rem;padding:0.5rem 0;">
+        {% set all_events = ["order.created","order.status_changed","order.cancelled","inventory.low_stock","transport.status_changed","delivery.confirmed"] %}
+        {% for ev in all_events %}
+        <label style="font-size:0.85rem;display:flex;align-items:center;gap:0.3rem;">
+          <input type="checkbox" name="events" value="{{ ev }}" checked> {{ ev }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Create Webhook</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3 style="font-size:0.95rem;margin-bottom:0.75rem;">Webhook Targets</h3>
+  {% if targets %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>URL</th><th>Events</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for t in targets %}
+        <tr>
+          <td>{{ t.name }}</td>
+          <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ t.url }}</td>
+          <td><span style="font-size:0.75rem;">{{ t.events_display }}</span></td>
+          <td><span class="badge badge-{{ 'success' if t.status == 'active' else 'warning' }}">{{ t.status }}</span></td>
+          <td>{{ t.created_at[:10] if t.created_at else '—' }}</td>
+          <td>
+            <form method="post" action="/admin/webhooks/{{ t.id }}/delete" style="display:inline;">
+              <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this webhook?')">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No webhook targets configured.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

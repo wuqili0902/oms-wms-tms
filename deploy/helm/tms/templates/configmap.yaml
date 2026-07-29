@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tms.fullname" . }}-env
+  labels:
+    {{- include "tms.labels" . | nindent 4 }}
+data:
+  DEBUG: {{ .Values.env.DEBUG | quote }}
+  CORS_ORIGINS: {{ .Values.env.CORS_ORIGINS | quote }}
+  SMTP_HOST: {{ .Values.env.SMTP_HOST | quote }}
+  SMTP_PORT: {{ .Values.env.SMTP_PORT | quote }}
+  SMTP_USER: {{ .Values.env.SMTP_USER | quote }}
+  SMTP_FROM: {{ .Values.env.SMTP_FROM | quote }}

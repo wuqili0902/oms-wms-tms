@@ -1,0 +1,47 @@
+{% extends "admin/base.html" %}
+{% block title %}Import Data{% endblock %}
+{% block content %}
+<div class="page-header"><h2>Import Data</h2></div>
+
+<div class="stats-grid">
+  <div class="card">
+    <h3 style="font-size:0.95rem;margin-bottom:1rem;">📋 Import Orders</h3>
+    <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem;">
+      Upload a CSV file with columns: <code>customer_id</code>, <code>items</code> (JSON array), <code>priority</code>, <code>notes</code>
+    </p>
+    <form method="post" action="/admin/import/orders" enctype="multipart/form-data">
+      <div class="form-group">
+        <label>CSV File</label>
+        <input type="file" name="file" accept=".csv" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Upload Orders</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="font-size:0.95rem;margin-bottom:1rem;">📦 Import Inventory</h3>
+    <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem;">
+      Upload a CSV file with columns: <code>sku_id</code>, <code>warehouse_id</code>, <code>quantity</code>, <code>min_qty</code>
+    </p>
+    <form method="post" action="/admin/import/inventory" enctype="multipart/form-data">
+      <div class="form-group">
+        <label>CSV File</label>
+        <input type="file" name="file" accept=".csv" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Upload Inventory</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="font-size:0.95rem;margin-bottom:0.75rem;">📤 Export Data</h3>
+  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+    <a href="/admin/export/orders" class="btn btn-sm">Orders CSV</a>
+    <a href="/admin/export/inventory" class="btn btn-sm">Inventory CSV</a>
+    <a href="/admin/export/transport-orders" class="btn btn-sm">Transport Orders CSV</a>
+    <a href="/admin/export/returns" class="btn btn-sm">Returns CSV</a>
+    <a href="/admin/export/exceptions" class="btn btn-sm">Exceptions CSV</a>
+    <a href="/admin/export/route-plans" class="btn btn-sm">Route Plans CSV</a>
+  </div>
+</div>
+{% endblock %}
