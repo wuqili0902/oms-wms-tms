@@ -30,6 +30,22 @@ async def enqueue_mutation(
     db.add(mutation)
     await db.commit()
     await db.refresh(mutation)
+
+    # Broadcast the event to all connected PDAs in real-time.
+    from src.pda.ws import _manager  # type: ignore[import-not-found,unused-import]
+
+    broadcast_payload = {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "operation": operation.value,
+        "mutation_id": str(mutation.id),
+    }
+
+    try:
+        await _manager.broadcast(broadcast_payload)
+    except Exception as e:
+        logger.warning("PDA WS broadcast failed for mutation %s: %s", mutation.id, e)
+
     return mutation
 
 
