@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import apiClient from '../../api'
-import type { Device, SessionLog } from '../../types/device'
+import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import apiClient from '@/api'
+import type { Device, SessionLog } from '@/types/device'
 
 export const useDeviceStore = defineStore('device', () => {
   const devices = ref<Device[]>([])
@@ -15,7 +16,9 @@ export const useDeviceStore = defineStore('device', () => {
     try {
       const res = await apiClient.get('/devices')
       devices.value = res.data?.data ?? res.data ?? []
-    } catch { /* ignore */ } finally {
+    } catch (e: any) {
+      console.warn('[device] fetchDevices failed:', e?.response?.data ?? e)
+    } finally {
       loading.value = false
     }
   }
@@ -24,7 +27,9 @@ export const useDeviceStore = defineStore('device', () => {
     try {
       const res = await apiClient.get(`/devices/${id}`)
       selectedDevice.value = res.data?.data ?? res.data
-    } catch { /* ignore */ }
+    } catch (e: any) {
+      console.warn('[device] fetchDeviceById failed:', e?.response?.data ?? e)
+    }
   }
 
   async function fetchSessions(deviceId: string): Promise<SessionLog[]> {
@@ -32,7 +37,10 @@ export const useDeviceStore = defineStore('device', () => {
       const res = await apiClient.get(`/devices/${deviceId}/sessions`)
       sessions.value = res.data?.data ?? res.data ?? []
       return sessions.value
-    } catch { /* ignore */; return [] }
+    } catch (e: any) {
+      console.warn('[device] fetchSessions failed:', e?.response?.data ?? e)
+      return []
+    }
   }
 
   async function fetchSyncLogs(deviceId: string): Promise<any[]> {
@@ -40,13 +48,18 @@ export const useDeviceStore = defineStore('device', () => {
       const res = await apiClient.get(`/devices/${deviceId}/sync`)
       syncLogs.value = res.data?.data ?? res.data ?? []
       return syncLogs.value
-    } catch { /* ignore */; return [] }
+    } catch (e: any) {
+      console.warn('[device] fetchSyncLogs failed:', e?.response?.data ?? e)
+      return []
+    }
   }
 
   async function createSession(deviceId: string): Promise<void> {
     try {
       await apiClient.post(`/devices/${deviceId}/sessions`)
-    } catch { /* ignore */ }
+    } catch (e: any) {
+      ElMessage.error(e?.response?.data?.detail ?? '创建会话失败')
+    }
   }
 
   return {

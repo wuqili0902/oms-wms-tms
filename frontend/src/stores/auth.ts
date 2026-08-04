@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { ElMessage } from 'element-plus'
 import apiClient from '../api'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -24,7 +25,9 @@ export const useAuthStore = defineStore('auth', () => {
       const res = await apiClient.get('/auth/me')
       const me = res.data?.data ?? res.data
       if (me?.username) username.value = me.username
-    } catch { /* ignore */ }
+    } catch (e: any) {
+      console.warn('[auth] fetchMe failed:', e?.response?.data ?? e)
+    }
   }
 
   async function refreshAccessToken(): Promise<boolean> {
@@ -42,14 +45,16 @@ export const useAuthStore = defineStore('auth', () => {
         localStorage.setItem('refresh_token', newRefresh)
       }
       return true
-    } catch {
+    } catch (e: any) {
+      ElMessage.warning('会话已过期，请重新登录')
+      console.warn('[auth] refreshAccessToken failed:', e?.response?.data ?? e)
       logout()
       return false
     }
   }
 
   async function logout() {
-    try { await apiClient.post('/auth/logout') } catch { /* ignore */ }
+    try { await apiClient.post('/auth/logout') } catch (e: any) { console.warn('[auth] logout failed:', e?.response?.data ?? e) }
     token.value = null
     refreshToken.value = null
     username.value = ''

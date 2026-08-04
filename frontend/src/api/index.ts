@@ -70,7 +70,7 @@ apiClient.interceptors.response.use(
     const msg = error.response?.data && typeof error.response.data === 'object' && 'detail' in (error.response.data as object)
       ? (error.response.data as any).detail
       : error.message
-    if (msg !== 'No refresh token') ElMessage.error(msg)
+    ElMessage.error(msg)
     return Promise.reject(error)
   },
 )

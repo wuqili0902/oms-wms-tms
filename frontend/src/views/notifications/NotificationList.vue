@@ -67,7 +67,7 @@ const notifications = ref<any[]>([])
 const showPreferences = ref(false)
 const prefLoading = ref(false)
 const liveBadge = ref(0)
-const ws: any = null
+let ws: any = null
 const { page, pageSize, total, onPageChange, onSizeChange } = usePagination()
 
 function reconnect(): void {
@@ -85,7 +85,7 @@ function reconnect(): void {
       liveBadge.value++
       setTimeout(() => (liveBadge.value -= 1), 3000)
     }
-  } catch { /* WS not available */ }
+    } catch (e: any) { console.warn('[notifications] reconnect failed:', e?.response?.data ?? e) }
 }
 
 function closeWs(): void { ws?.close?.(1006) }
@@ -103,7 +103,7 @@ async function fetchNotifications() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     notifications.value = items
-  } catch { notifications.value = [] }
+  } catch (e: any) { console.warn('[notifications] fetchNotifications failed:', e?.response?.data ?? e); notifications.value = [] }
   loading.value = false
 }
 
@@ -112,7 +112,7 @@ async function markRead(row: any) {
   try {
     await apiClient.post(`/notifications/${row.id}/read`)
     row.is_read = true
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '标记已读失败') }
 }
 
 async function markAllRead() {
@@ -120,7 +120,7 @@ async function markAllRead() {
     await apiClient.post('/notifications/read-all')
     ElMessage.success('已全部标为已读')
     notifications.value.forEach(n => (n.is_read = true))
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '标记全部已读失败') }
 }
 
 async function fetchPreferences() {
@@ -128,7 +128,7 @@ async function fetchPreferences() {
     const res = await apiClient.get('/notifications/preferences')
     const p = res.data?.data ?? res.data
     if (p) Object.assign(prefForm, p)
-  } catch { /* ignore */ }
+  } catch (e: any) { console.warn('[notifications] fetchPreferences failed:', e?.response?.data ?? e) }
 }
 
 function resetPrefForm() { Object.assign(prefForm, { order_updates: true, inventory_alerts: true, transport_exceptions: true, system_notifications: true }) }
@@ -139,7 +139,7 @@ async function submitPreferences() {
     await apiClient.put('/notifications/preferences', prefForm)
     ElMessage.success('偏好设置已保存')
     showPreferences.value = false
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '保存失败') }
   prefLoading.value = false
 }
 

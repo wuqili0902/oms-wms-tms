@@ -161,22 +161,22 @@ const connForm = reactive({ from_hub_code: '', to_hub_code: '', distance_km: 100
 
 async function fetchHubs() {
   hubLoading.value = true
-  try { const res = await apiClient.get('/transfer-hubs'); const d = res.data?.data ?? res.data ?? []; hubs.value = Array.isArray(d) ? d : (d.items ?? []) } catch { hubs.value = [] }
+  try { const res = await apiClient.get('/transfer-hubs'); const d = res.data?.data ?? res.data ?? []; hubs.value = Array.isArray(d) ? d : (d.items ?? []) } catch (e: any) { hubs.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
   hubLoading.value = false
 }
 async function fetchRoutes() {
   routeLoading.value = true
-  try { const res = await apiClient.get('/carrier-routes'); const d = res.data?.data ?? res.data ?? []; carrierRoutes.value = Array.isArray(d) ? d : (d.items ?? []) } catch { carrierRoutes.value = [] }
+  try { const res = await apiClient.get('/carrier-routes'); const d = res.data?.data ?? res.data ?? []; carrierRoutes.value = Array.isArray(d) ? d : (d.items ?? []) } catch (e: any) { carrierRoutes.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
   routeLoading.value = false
 }
 async function fetchConns() {
   connLoading.value = true
-  try { const res = await apiClient.get('/hub-connections'); const d = res.data?.data ?? res.data ?? []; connections.value = Array.isArray(d) ? d : (d.items ?? []) } catch { connections.value = [] }
+  try { const res = await apiClient.get('/hub-connections'); const d = res.data?.data ?? res.data ?? []; connections.value = Array.isArray(d) ? d : (d.items ?? []) } catch (e: any) { connections.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
   connLoading.value = false
 }
 async function submitHub() {
   hubCreating.value = true
-  try { await apiClient.post('/transfer-hubs', hubForm); ElMessage.success('创建成功'); showCreateHub.value = false; fetchHubs() } catch { /* ignore */ }
+  try { await apiClient.post('/transfer-hubs', hubForm); ElMessage.success('创建成功'); showCreateHub.value = false; fetchHubs() } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '枢纽创建失败') }
   hubCreating.value = false
 }
 async function editHub(row: any) {
@@ -187,17 +187,17 @@ async function editHub(row: any) {
 }
 async function submitEditHub() {
   hubUpdating.value = true
-  try { await apiClient.patch(`/transfer-hubs/${editHubId.value}`, hubEditForm); ElMessage.success('已更新'); showEditHub.value = false; fetchHubs() } catch { /* ignore */ }
+  try { await apiClient.patch(`/transfer-hubs/${editHubId.value}`, hubEditForm); ElMessage.success('已更新'); showEditHub.value = false; fetchHubs() } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '枢纽更新失败') }
   hubUpdating.value = false
 }
 async function submitRoute() {
   routeCreating.value = true
-  try { await apiClient.post('/carrier-routes', routeForm); ElMessage.success('创建成功'); showCreateRoute.value = false; fetchRoutes() } catch { /* ignore */ }
+  try { await apiClient.post('/carrier-routes', routeForm); ElMessage.success('创建成功'); showCreateRoute.value = false; fetchRoutes() } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '线路创建失败') }
   routeCreating.value = false
 }
 async function submitConn() {
   connCreating.value = true
-  try { await apiClient.post('/hub-connections', connForm); ElMessage.success('创建成功'); showCreateConn.value = false; fetchConns() } catch { /* ignore */ }
+  try { await apiClient.post('/hub-connections', connForm); ElMessage.success('创建成功'); showCreateConn.value = false; fetchConns() } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '连接创建失败') }
   connCreating.value = false
 }
 onMounted(() => { fetchHubs(); fetchRoutes(); fetchConns() })

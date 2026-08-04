@@ -70,7 +70,10 @@ async function fetchVendors() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     vendors.value = items
-  } catch { vendors.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    vendors.value = []
+  }
   loading.value = false
 }
 
@@ -83,7 +86,9 @@ async function submitCreate() {
     ElMessage.success('创建成功')
     showCreate.value = false
     fetchVendors()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? '供应商创建失败')
+  }
   creating.value = false
 }
 

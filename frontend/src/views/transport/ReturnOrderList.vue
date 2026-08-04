@@ -108,7 +108,7 @@ async function fetchReturns() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     returns.value = items
-  } catch { returns.value = [] }
+  } catch (e: any) { returns.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
   loading.value = false
 }
 
@@ -121,7 +121,9 @@ async function submitCreate() {
     ElMessage.success('创建成功')
     showCreate.value = false
     fetchReturns()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? '退货单创建失败')
+  }
   creating.value = false
 }
 
@@ -133,7 +135,9 @@ async function updateStatus(row: any, status: string) {
     await apiClient.patch(`/return-orders/${row.id}/status`, { status })
     ElMessage.success(`已更新为 ${status}`)
     fetchReturns()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[return-order-list] updateStatus failed:', e?.response?.data ?? e)
+  }
 }
 
 async function viewDetail(row: any) {
@@ -141,7 +145,7 @@ async function viewDetail(row: any) {
   try {
     const res = await apiClient.get(`/return-orders/${row.id}`)
     detail.value = res.data?.data ?? res.data
-  } catch { detail.value = { ...row } }
+  } catch (e: any) { detail.value = { ...row }; ElMessage.error(e?.response?.data?.detail ?? e.message) }
 }
 
 onMounted(fetchReturns)

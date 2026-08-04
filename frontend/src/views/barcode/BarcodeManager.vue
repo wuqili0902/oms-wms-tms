@@ -218,7 +218,7 @@ async function generateBarcode() {
     const res = await apiClient.post('/barcode/generate', genForm)
     genResult.value = res.data?.data ?? res.data
     ElMessage.success('条码生成成功')
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '条码生成失败') }
   genLoading.value = false
 }
 
@@ -228,7 +228,7 @@ async function validateGtin() {
   try {
     const res = await apiClient.post('/barcode/validate', { gtin: validateForm.gtin })
     valResult.value = res.data?.data?.valid ?? res.data?.valid ?? false
-  } catch { valResult.value = false }
+  } catch (e: any) { console.warn('[barcode] validateGtin failed:', e?.response?.data ?? e); valResult.value = false }
   valLoading.value = false
 }
 
@@ -239,7 +239,7 @@ async function submitScan() {
     scanResult.value = true
     ElMessage.success('扫描记录成功')
     scanForm.raw_data = ''
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '扫描记录失败') }
   scanLoading.value = false
 }
 
@@ -248,7 +248,7 @@ async function lookupGtin() {
   try {
     const res = await apiClient.get(`/barcode/${lookupForm.gtin}`)
     lookupResult.value = res.data?.data ?? res.data
-  } catch { lookupResult.value = null }
+  } catch (e: any) { console.warn('[barcode] lookupGtin failed:', e?.response?.data ?? e); lookupResult.value = null }
   lookupDone.value = true
   lookupLoading.value = false
 }
@@ -269,7 +269,7 @@ async function uploadExcel() {
     })
     excelResult.value = res.data ?? res.data?.data ?? res.data
     ElMessage.success('条码生成成功，请点击下载')
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '上传失败') }
   excelUploading.value = false
 }
 
@@ -293,7 +293,7 @@ async function fetchTemplates() {
   try {
     const res = await apiClient.get('/barcode/templates')
     templates.value = res.data?.data ?? res.data ?? []
-  } catch { templates.value = [] }
+  } catch (e: any) { console.warn('[barcode] fetchTemplates failed:', e?.response?.data ?? e); templates.value = [] }
   tmplLoading.value = false
 }
 
@@ -304,7 +304,7 @@ async function submitTemplate() {
     ElMessage.success('模板创建成功')
     showCreateTemplate.value = false
     fetchTemplates()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '创建失败') }
   tmplCreating.value = false
 }
 

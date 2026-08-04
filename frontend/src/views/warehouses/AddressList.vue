@@ -92,7 +92,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { usePagination } from '../../composables/usePagination'
 import apiClient from '../../api'
-import { StatusTag } from '@/components/StatusTag.vue'
+import StatusTag from '@/components/StatusTag.vue'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -111,7 +111,10 @@ async function fetchAddresses() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     addresses.value = items
-  } catch { addresses.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    addresses.value = []
+  }
   loading.value = false
 }
 
@@ -123,7 +126,9 @@ async function submit() {
     await apiClient.post('/warehouses/addresses', form)
     ElMessage.success('保存成功')
     showCreate.value ? (showCreate.value = false, fetchAddresses()) : ((showEdit.value = false), fetchAddresses())
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? '地址保存失败')
+  }
   saving.value = false
 }
 
@@ -136,7 +141,9 @@ async function handleDelete(row: any) {
     await apiClient.delete(`/warehouses/addresses/${row.id}`)
     ElMessage.success('删除成功')
     fetchAddresses()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[address-list] handleDelete failed:', e?.response?.data ?? e)
+  }
 }
 
 async function confirmDelete(row: any) {

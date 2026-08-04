@@ -59,7 +59,7 @@ async function importAmazonOrders() {
     await apiClient.post('/connectors/amazon/orders')
     amzResult.value = 'Amazon 订单导入请求已发送'
     ElMessage.success('导入请求已发送')
-  } catch { amzResult.value = '导入失败，请检查配置' }
+  } catch (e: any) { amzResult.value = '导入失败，请检查配置'; ElMessage.error(e?.response?.data?.detail ?? e.message) }
   amzLoading.value = false
 }
 
@@ -70,7 +70,7 @@ async function syncAmazonTracking() {
     await apiClient.post('/connectors/amazon/tracking')
     amzResult.value = 'Amazon 追踪同步请求已发送'
     ElMessage.success('同步请求已发送')
-  } catch { amzResult.value = '同步失败，请检查配置' }
+  } catch (e: any) { amzResult.value = '同步失败，请检查配置'; ElMessage.error(e?.response?.data?.detail ?? e.message) }
   amzTrackLoading.value = false
 }
 </script>

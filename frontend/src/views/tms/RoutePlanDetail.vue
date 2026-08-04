@@ -76,7 +76,9 @@ async function searchPlan() {
   try {
     const res = await apiClient.get(`/route-plans/${searchForm.plan_id}`)
     plan.value = res.data?.data ?? res.data
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[route-plan-detail] searchPlan failed:', e?.response?.data ?? e)
+  }
   loading.value = false
 }
 
@@ -85,6 +87,8 @@ async function updateSegmentStatus(seg: any, status: string) {
     await apiClient.patch(`/segments/${seg.id}/status`, { status })
     ElMessage.success(`路段已更新为 ${status}`)
     seg.status = status
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[route-plan-detail] updateSegmentStatus failed:', e?.response?.data ?? e)
+  }
 }
 </script>

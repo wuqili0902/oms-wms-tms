@@ -322,7 +322,10 @@ async function fetchWarehouses() {
     const res = await apiClient.get('/warehouses?page=1&page_size=50')
     const body = res.data?.data ?? res.data ?? {}
     warehouses.value = body.items ?? body ?? []
-  } catch { warehouses.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    warehouses.value = []
+  }
   loading.value = false
 }
 
@@ -335,7 +338,10 @@ async function fetchInventory() {
     const res = await apiClient.get(`/warehouses/inventory?${params}`)
     const body = res.data?.data ?? res.data ?? []
     inventory.value = Array.isArray(body) ? body : []
-  } catch { inventory.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    inventory.value = []
+  }
   invLoading.value = false
 }
 
@@ -351,7 +357,10 @@ async function showLocations(row: any) {
     const res = await apiClient.get(`/warehouses/${row.id}/locations?page=1&page_size=100`)
     const body = res.data?.data ?? res.data ?? {}
     locations.value = body.items ?? body ?? []
-  } catch { locations.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    locations.value = []
+  }
   locLoading.value = false
 }
 
@@ -364,7 +373,9 @@ async function submitCreate() {
     ElMessage.success('创建成功')
     showCreate.value = false
     fetchWarehouses()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
   creating.value = false
 }
 
@@ -375,7 +386,9 @@ async function submitLocation() {
     ElMessage.success('库位创建成功')
     showAddLocation.value = false
     showLocations(currentWarehouse.value!)
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
   locCreating.value = false
 }
 
@@ -404,7 +417,9 @@ async function submitAdjust() {
     ElMessage.success('调整成功')
     showAdjust.value = false
     fetchInventory()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
   adjusting.value = false
 }
 
@@ -416,7 +431,10 @@ async function fetchMovements() {
     const res = await apiClient.get(`/warehouses/inventory/movements?${params}`)
     const body = res.data?.data ?? res.data ?? []
     movements.value = Array.isArray(body) ? body : []
-  } catch { movements.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    movements.value = []
+  }
   movLoading.value = false
 }
 
@@ -426,7 +444,10 @@ async function fetchWaves() {
     const res = await apiClient.get('/warehouses/picking-waves?page=1&page_size=50')
     const body = res.data?.data ?? res.data ?? []
     waves.value = Array.isArray(body) ? body : (body.items ?? [])
-  } catch { waves.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    waves.value = []
+  }
   waveLoading.value = false
 }
 
@@ -441,7 +462,9 @@ async function submitWave() {
     ElMessage.success('波次创建成功')
     showCreateWave.value = false
     fetchWaves()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
   waveCreating.value = false
 }
 
@@ -450,7 +473,9 @@ async function startWave(row: any) {
     await apiClient.post(`/warehouses/picking-waves/${row.id}/start`)
     ElMessage.success('波次已开始')
     fetchWaves()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
 }
 
 async function completeWave(row: any) {
@@ -458,7 +483,9 @@ async function completeWave(row: any) {
     await apiClient.post(`/warehouses/picking-waves/${row.id}/complete`)
     ElMessage.success('波次已完成')
     fetchWaves()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
 }
 
 onMounted(() => {

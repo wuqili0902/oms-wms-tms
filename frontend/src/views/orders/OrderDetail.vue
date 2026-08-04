@@ -66,6 +66,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import apiClient from '../../api'
 
@@ -101,14 +102,14 @@ onMounted(async () => {
   try {
     const res = await apiClient.get(`/orders/${id}`)
     order.value = res.data?.data ?? res.data
-  } catch { /* ignore */ }
+  } catch (e: any) { console.error('[OrderDetail] fetch failed:', e?.response?.data ?? e); ElMessage.error('获取订单详情失败') }
   loading.value = false
 
   historyLoading.value = true
   try {
     const res = await apiClient.get(`/orders/${id}/history`)
     history.value = res.data?.data ?? res.data ?? []
-  } catch { history.value = [] }
+  } catch (e: any) { console.warn('[OrderDetail] fetchHistory failed:', e?.response?.data ?? e); history.value = [] }
   historyLoading.value = false
 })
 </script>

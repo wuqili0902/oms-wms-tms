@@ -159,7 +159,7 @@ async function submitEdit() {
     showEdit.value = false
     const res = await apiClient.get(`/warehouses/${route.params.id}`)
     wh.value = res.data?.data ?? res.data
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '保存失败') }
   editLoading.value = false
 }
 
@@ -171,7 +171,7 @@ async function fetchLocations() {
     const res = await apiClient.get(`/warehouses/${whId()}/locations`)
     const d = res.data?.data ?? res.data ?? []
     locations.value = Array.isArray(d) ? d : (d.items ?? [])
-  } catch { locations.value = [] }
+  } catch (e: any) { console.warn('[WarehouseDetail] fetchLocations failed:', e?.response?.data ?? e); locations.value = [] }
   locLoading.value = false
 }
 
@@ -182,7 +182,7 @@ async function submitCreateLoc() {
     ElMessage.success('创建成功')
     showCreateLoc.value = false
     fetchLocations()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '创建失败') }
   locCreating.value = false
 }
 
@@ -202,7 +202,7 @@ async function submitEditLoc() {
     ElMessage.success('保存成功')
     showEditLoc.value = false
     fetchLocations()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '保存失败') }
   locUpdating.value = false
 }
 
@@ -212,7 +212,9 @@ async function deleteLoc(row: any) {
     await apiClient.delete(`/warehouses/${whId()}/locations/${row.id}`)
     ElMessage.success('删除成功')
     fetchLocations()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    if (!e?.response && e !== true) ElMessage.error(e?.response?.data?.detail ?? '删除失败')
+  }
 }
 
 onMounted(async () => {
@@ -226,14 +228,14 @@ onMounted(async () => {
     editForm.address = wh.value?.address ?? ''
     editForm.type = wh.value?.type ?? wh.value?.warehouse_type ?? 'center'
     editForm.is_active = wh.value?.is_active ?? true
-  } catch { /* ignore */ }
+  } catch (e: any) { console.error('[WarehouseDetail] onMounted fetch failed:', e?.response?.data ?? e); ElMessage.error('获取仓库信息失败') }
   loading.value = false
 
   invLoading.value = true
   try {
     const res = await apiClient.get(`/warehouses/inventory?warehouse_id=${id}`)
     inventory.value = (res.data?.data ?? res.data?.items ?? res.data) || []
-  } catch { inventory.value = [] }
+  } catch (e: any) { console.warn('[WarehouseDetail] fetchInventory failed:', e?.response?.data ?? e); inventory.value = [] }
   invLoading.value = false
 
   fetchLocations()

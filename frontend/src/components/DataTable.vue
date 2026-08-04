@@ -1,7 +1,6 @@
 <!-- DataTable.vue — 带 v-loading + empty + pagination 的通用表格 -->
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { usePagination } from '../../composables/usePagination'
 
 const props = defineProps<{ columns: any[]; data?: any[]; loading?: boolean }>()
 
@@ -10,7 +9,7 @@ const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 
-watch([() => props.data, () => props.loading], ([newData, newLoading]) => {
+watch([() => props.data, () => props.loading], ([newData]) => {
   if (Array.isArray(newData)) {
     total.value = newData.length
   } else {
@@ -24,7 +23,7 @@ watch([() => props.data, () => props.loading], ([newData, newLoading]) => {
     <slot name="columns"></slot>
   </el-table>
   <div style="display:flex;justify-content:flex-end;margin-top:12px">
-    <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[10,20,50,100]" layout="total, sizes, prev, pager, next" @current-change="(p) => (page=p)" @size-change="(s) => (pageSize=s)"/>
+    <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" :page-sizes="[10,20,50,100]" layout="total, sizes, prev, pager, next" @current-change="(p: number) => (page=p)" @size-change="(s: number) => (pageSize=s)"/>
   </div>
 </template>
 

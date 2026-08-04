@@ -241,7 +241,7 @@ async function fetchOrders() {
     const body = res.data?.data ?? res.data ?? {}
     orders.value = body.items ?? []
     total.value = body.total ?? 0
-  } catch { orders.value = []; total.value = 0 }
+  } catch (e: any) { orders.value = []; total.value = 0; ElMessage.error(e?.response?.data?.detail ?? e.message) }
   loading.value = false
 }
 
@@ -256,7 +256,7 @@ async function viewTracking(row: any) {
     const res = await apiClient.get(`/transport-orders/${row.id}/tracking`)
     const body = res.data?.data ?? res.data ?? []
     trackingEvents.value = Array.isArray(body) ? body : []
-  } catch { trackingEvents.value = [] }
+  } catch (e: any) { trackingEvents.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
 }
 
 async function viewRoute(row: any) {
@@ -269,7 +269,9 @@ async function viewRoute(row: any) {
       routePlan.value = res.data?.data ?? res.data
       showRouteDialog.value = true
     }
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[transport-order-list] createRoutePlan failed:', e?.response?.data ?? e)
+  }
 }
 
 async function updateStatus(row: any, status: string) {
@@ -280,7 +282,9 @@ async function updateStatus(row: any, status: string) {
     await apiClient.put(`/transport-orders/${row.id}/status?status=${status}`)
     ElMessage.success(`已更新为 ${statusLabel(status)}`)
     fetchOrders()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[transport-order-list] updateStatus failed:', e?.response?.data ?? e)
+  }
 }
 
 async function estimateFreight() {
@@ -289,7 +293,9 @@ async function estimateFreight() {
   try {
     const res = await apiClient.post('/freight-estimate', freightForm)
     freightResult.value = res.data?.data ?? res.data
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[transport-order-list] estimateFreight failed:', e?.response?.data ?? e)
+  }
   freightLoading.value = false
 }
 
@@ -307,7 +313,9 @@ async function submitCreate() {
     ElMessage.success('创建成功')
     showCreate.value = false
     fetchOrders()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? '运单创建失败')
+  }
   creating.value = false
 }
 

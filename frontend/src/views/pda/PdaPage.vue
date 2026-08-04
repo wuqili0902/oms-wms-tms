@@ -109,7 +109,9 @@ async function submitMutation() {
     const res = await apiClient.post('/pda/mutations', payload)
     mutResult.value = res.data ?? null
     ElMessage.success('变动已入队列')
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? '变动提交失败')
+  }
   mutLoading.value = false
 }
 
@@ -123,7 +125,9 @@ async function triggerSync() {
       ElMessage.success(`同步完成，${syncResult.value.accepted} 条处理成功`)
     }
     fetchMutations()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? '同步失败')
+  }
   syncLoading.value = false
 }
 

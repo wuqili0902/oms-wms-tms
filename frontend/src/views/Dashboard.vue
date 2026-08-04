@@ -75,7 +75,9 @@ async function fetchDashboard() {
       ]
       if (d.recent_orders) recentOrders.value = d.recent_orders as Order[]
     }
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[dashboard] fetchStats failed:', e?.response?.data ?? e)
+  }
   loading.value = false
 }
 

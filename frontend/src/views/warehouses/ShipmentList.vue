@@ -94,7 +94,10 @@ async function fetchShipments() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     shipments.value = items
-  } catch { shipments.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    shipments.value = []
+  }
   loading.value = false
 }
 
@@ -108,28 +111,34 @@ async function submitShipment() {
     ElMessage.success('发货单创建成功')
     showCreateShipment.value = false
     fetchShipments()
-  } catch { /* ignore */ }
-  shipCreating.value = false
-}
+   } catch (e: any) {
+      ElMessage.error(e?.response?.data?.detail ?? '发货单创建失败')
+    }
+    shipCreating.value = false
+  }
 
-async function markShipped(row: any) {
-  try {
-    await apiClient.post(`/warehouses/shipments/${row.id}/ship`)
-    ElMessage.success('已标记为已发货')
-    fetchShipments()
-  } catch { /* ignore */ }
-}
+  async function markShipped(row: any) {
+    try {
+      await apiClient.post(`/warehouses/shipments/${row.id}/ship`)
+      ElMessage.success('已标记为已发货')
+      fetchShipments()
+    } catch (e: any) {
+      console.warn('[shipment-list] markShipped failed:', e?.response?.data ?? e)
+    }
+  }
 
-async function submitPacking() {
-  packLoading.value = true
-  packResult.value = null
-  try {
-    const res = await apiClient.post('/warehouses/packing', { wave_id: packForm.wave_id })
-    packResult.value = res.data?.data ?? res.data
-    ElMessage.success('打包记录成功')
-  } catch { /* ignore */ }
-  packLoading.value = false
-}
+  async function submitPacking() {
+    packLoading.value = true
+    packResult.value = null
+    try {
+      const res = await apiClient.post('/warehouses/packing', { wave_id: packForm.wave_id })
+      packResult.value = res.data?.data ?? res.data
+      ElMessage.success('打包记录成功')
+    } catch (e: any) {
+      console.warn('[shipment-list] submitPacking failed:', e?.response?.data ?? e)
+    }
+    packLoading.value = false
+  }
 
 onMounted(fetchShipments)
 </script>

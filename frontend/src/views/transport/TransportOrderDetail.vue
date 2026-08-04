@@ -166,7 +166,9 @@ async function submitPod() {
     showAddPod.value = false
     const res = await apiClient.get(`/transport-orders/${route.params.id}/pod`)
     pod.value = res.data?.data ?? res.data
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[transport-order-detail] submitPod failed:', e?.response?.data ?? e)
+  }
   podLoading.value = false
 }
 
@@ -178,7 +180,9 @@ async function submitEditPod() {
     showEditPod.value = false
     const res = await apiClient.get(`/transport-orders/${route.params.id}/pod`)
     pod.value = res.data?.data ?? res.data
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[transport-order-detail] submitEditPod failed:', e?.response?.data ?? e)
+  }
   podLoading.value = false
 }
 
@@ -190,7 +194,9 @@ async function submitTracking() {
     showAddTracking.value = false
     const res = await apiClient.get(`/transport-orders/${route.params.id}/tracking`)
     trackingEvents.value = (res.data?.data ?? res.data?.items ?? res.data) || []
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[transport-order-detail] submitTracking failed:', e?.response?.data ?? e)
+  }
   trackLoading.value = false
 }
 
@@ -201,18 +207,24 @@ onMounted(async () => {
   try {
     const res = await apiClient.get(`/transport-orders/${id}`)
     order.value = res.data?.data ?? res.data
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[transport-order-detail] loadOrder failed:', e?.response?.data ?? e)
+  }
   loading.value = false
 
   try {
     const res = await apiClient.get(`/transport-orders/${id}/tracking`)
     trackingEvents.value = (res.data?.data ?? res.data?.items ?? res.data) || []
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[transport-order-detail] loadTracking failed:', e?.response?.data ?? e)
+  }
 
   try {
     const res = await apiClient.get(`/transport-orders/${id}/pod`)
     pod.value = res.data?.data ?? res.data
-  } catch { pod.value = null }
+  } catch (e: any) {
+    console.warn('[transport-order-detail] loadPod failed:', e?.response?.data ?? e)
+  }
 })
 </script>
 

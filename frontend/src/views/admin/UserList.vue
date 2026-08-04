@@ -253,7 +253,10 @@ async function fetchUsers() {
   try {
     const res = await apiClient.get('/auth/users')
     users.value = res.data?.data ?? res.data ?? []
-  } catch { users.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    users.value = []
+  }
   loading.value = false
 }
 
@@ -262,7 +265,10 @@ async function fetchRoles() {
   try {
     const res = await apiClient.get('/auth/roles')
     roles.value = res.data?.data ?? res.data ?? []
-  } catch { roles.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    roles.value = []
+  }
   roleLoading.value = false
 }
 
@@ -271,7 +277,10 @@ async function fetchPerms() {
   try {
     const res = await apiClient.get('/auth/permissions')
     permissions.value = res.data?.data ?? res.data ?? []
-  } catch { permissions.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    permissions.value = []
+  }
   permLoading.value = false
 }
 
@@ -284,7 +293,9 @@ async function submitUser() {
     ElMessage.success('创建成功')
     showCreateUser.value = false
     fetchUsers()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
   userCreating.value = false
 }
 
@@ -316,7 +327,9 @@ async function submitAssignRole() {
     if (failed.length === 0) ElMessage.success('角色分配成功')
     else ElMessage.warning(`角色分配部分失败: ${failed.length}/${results.length}`)
     showAssignRole.value = false
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
   assigningRole.value = false
 }
 
@@ -338,7 +351,9 @@ async function submitAssignPerm() {
     if (failed.length === 0) ElMessage.success('权限分配成功')
     else ElMessage.warning(`权限分配部分失败: ${failed.length}/${results.length}`)
     showAssignPerm.value = false
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
   assigningPerm.value = false
 }
 
@@ -358,7 +373,9 @@ async function submitRole() {
     ElMessage.success('角色创建成功')
     showCreateRole.value = false
     fetchRoles()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
   roleCreating.value = false
 }
 
@@ -377,7 +394,9 @@ async function submitEditRole() {
     ElMessage.success('角色已更新')
     showEditRole.value = false
     fetchRoles()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
   roleUpdating.value = false
 }
 
@@ -411,7 +430,9 @@ async function submitPerm() {
     ElMessage.success('权限创建成功')
     showCreatePerm.value = false
     fetchPerms()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+  }
   permCreating.value = false
 }
 

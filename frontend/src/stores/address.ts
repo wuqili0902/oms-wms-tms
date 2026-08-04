@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import apiClient from '../../api'
-import type { Address } from '../../types/address'
-import { usePagination } from '../../composables/usePagination'
+import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import apiClient from '@/api'
+import type { Address } from '@/types/address'
+import { usePagination } from '@/composables/usePagination'
 
 export const useAddressStore = defineStore('address', () => {
   const addresses = ref<Address[]>([])
@@ -30,8 +31,8 @@ export const useAddressStore = defineStore('address', () => {
         total.value = d.total ?? items.length
       }
       addresses.value = items
-    } catch {
-      addresses.value = []
+    } catch (e: any) {
+      addresses.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message)
     } finally {
       loading.value = false
     }
@@ -42,7 +43,8 @@ export const useAddressStore = defineStore('address', () => {
     try {
       await apiClient.post('/warehouses/addresses', payload)
       await fetchAddresses()
-    } catch { /* ignore */ } finally {
+    } catch (e: any) {
+      ElMessage.error(e?.response?.data?.detail ?? '创建失败')
       saving.value = false
     }
   }
@@ -52,7 +54,8 @@ export const useAddressStore = defineStore('address', () => {
     try {
       await apiClient.put(`/warehouses/addresses/${id}`, payload)
       await fetchAddresses()
-    } catch { /* ignore */ } finally {
+    } catch (e: any) {
+      ElMessage.error(e?.response?.data?.detail ?? '更新失败')
       saving.value = false
     }
   }
@@ -61,7 +64,9 @@ export const useAddressStore = defineStore('address', () => {
     try {
       await apiClient.delete(`/warehouses/addresses/${id}`)
       await fetchAddresses()
-    } catch { /* ignore */ }
+    } catch (e: any) {
+      ElMessage.error(e?.response?.data?.detail ?? '删除失败')
+    }
   }
 
   return {

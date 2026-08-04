@@ -124,7 +124,7 @@ async function fetchExceptions() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     exceptions.value = items
-  } catch { exceptions.value = [] }
+  } catch (e: any) { exceptions.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
   loading.value = false
 }
 
@@ -138,7 +138,9 @@ async function submitCreate() {
     ElMessage.success('异常已报告')
     showCreate.value = false
     fetchExceptions()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? '异常报告失败')
+  }
   creating.value = false
 }
 
@@ -155,7 +157,9 @@ async function submitResolve() {
     ElMessage.success('异常已处理')
     showResolve.value = false
     fetchExceptions()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[exception-list] submitResolve failed:', e?.response?.data ?? e)
+  }
   resolving.value = false
 }
 
@@ -165,7 +169,7 @@ async function viewDetail(row: any) {
     const res = await apiClient.get(`/exceptions?exception_id=${row.id}`)
     const items = res.data?.data ?? res.data ?? []
     detail.value = (Array.isArray(items) ? items : (items.items ?? [])).find((e: any) => e.id === row.id) || { ...row }
-  } catch { detail.value = { ...row } }
+  } catch (e: any) { detail.value = { ...row }; ElMessage.error(e?.response?.data?.detail ?? e.message) }
 }
 
 onMounted(fetchExceptions)

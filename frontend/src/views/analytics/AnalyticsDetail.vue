@@ -132,7 +132,7 @@ function statusType(s: string) {
 
 async function fetchTrends() {
   trendLoading.value = true
-  try { const res = await apiClient.get(`/analytics/order-trends?days=${days.value}`); const d = res.data?.data ?? res.data; trends.value = d?.trends ?? [] } catch { /* ignore */ }
+  try { const res = await apiClient.get(`/analytics/order-trends?days=${days.value}`); const d = res.data?.data ?? res.data; trends.value = d?.trends ?? [] } catch (e: any) { console.warn('[analytics-detail] fetchOrderTrends failed:', e?.response?.data ?? e) }
   trendLoading.value = false
 }
 
@@ -142,7 +142,7 @@ async function fetchForecast() {
   try {
     const res = await apiClient.get(`/forecast?key=${fcForm.key}&days=${fcForm.days}`)
     forecast.value = res.data?.data ?? res.data ?? []
-  } catch { /* ignore */ }
+  } catch (e: any) { console.warn('[analytics-detail] fetchForecast failed:', e?.response?.data ?? e) }
   fcLoading.value = false
 }
 
@@ -152,7 +152,7 @@ async function trainForecast() {
     const res = await apiClient.post('/forecast/training', { months: 6 })
     const msg = (res.data?.data ?? res.data)?.message || '模型训练完成'
     ElMessage.success(msg)
-  } catch { /* ignore */ }
+  } catch (e: any) { console.warn('[analytics-detail] trainForecast failed:', e?.response?.data ?? e) }
   fcTraining.value = false
 }
 
@@ -163,18 +163,18 @@ async function recordObservation() {
     ElMessage.success('观测值已记录')
     obsForm.count = 0
     obsForm.date = ''
-  } catch { /* ignore */ }
+  } catch (e: any) { console.warn('[analytics-detail] recordObservation failed:', e?.response?.data ?? e) }
   obsLoading.value = false
 }
 
 onMounted(async () => {
   await fetchTrends()
   distLoading.value = true
-  try { const res = await apiClient.get('/analytics/status-distribution'); const d = res.data?.data ?? res.data ?? []; distribution.value = Array.isArray(d) ? d : [] } catch { /* ignore */ }
+  try { const res = await apiClient.get('/analytics/status-distribution'); const d = res.data?.data ?? res.data ?? []; distribution.value = Array.isArray(d) ? d : [] } catch (e: any) { console.warn('[analytics-detail] fetchStatusDistribution failed:', e?.response?.data ?? e) }
   distLoading.value = false
 
   lowLoading.value = true
-  try { const res = await apiClient.get('/analytics/low-stock'); const d = res.data?.data ?? res.data; lowStock.value = d?.items ?? [] } catch { /* ignore */ }
+  try { const res = await apiClient.get('/analytics/low-stock'); const d = res.data?.data ?? res.data; lowStock.value = d?.items ?? [] } catch (e: any) { console.warn('[analytics-detail] fetchLowStock failed:', e?.response?.data ?? e) }
   lowLoading.value = false
 })
 </script>

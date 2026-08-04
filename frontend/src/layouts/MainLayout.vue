@@ -31,6 +31,9 @@
           <el-menu-item index="/warehouses/purchase-orders">采购单管理</el-menu-item>
           <el-menu-item index="/warehouses/shipments">发货管理</el-menu-item>
           <el-menu-item index="/warehouses/invoices">发票管理</el-menu-item>
+          <el-menu-item index="/stock/in">入库管理</el-menu-item>
+          <el-menu-item index="/stock/out">出库管理</el-menu-item>
+          <el-menu-item index="/stock/adjust">库存调整</el-menu-item>
         </el-sub-menu>
         <el-sub-menu index="transport-section">
           <template #title>
@@ -38,16 +41,23 @@
             <span>运输管理</span>
           </template>
           <el-menu-item index="/transport">运单列表</el-menu-item>
+          <el-menu-item index="/transport/waybills">面单管理</el-menu-item>
+          <el-menu-item index="/transport/batch-print">批量打单</el-menu-item>
+          <el-menu-item index="/transport/freight-quote">运费试算</el-menu-item>
           <el-menu-item index="/transport/returns">退货管理</el-menu-item>
           <el-menu-item index="/transport/exceptions">运输异常</el-menu-item>
           <el-menu-item index="/transport/routes">路线规划</el-menu-item>
           <el-menu-item index="/transport/freight">运费管理</el-menu-item>
           <el-menu-item index="/transport/infrastructure">基础设施</el-menu-item>
         </el-sub-menu>
-        <el-menu-item index="/barcode">
-          <el-icon><PriceTag /></el-icon>
-          <template #title>条码管理</template>
-        </el-menu-item>
+        <el-sub-menu index="barcode-section">
+          <template #title>
+            <el-icon><PriceTag /></el-icon>
+            <span>条码管理</span>
+          </template>
+          <el-menu-item index="/barcode">条码记录</el-menu-item>
+          <el-menu-item index="/barcode/templates">面单模板</el-menu-item>
+        </el-sub-menu>
         <el-menu-item index="/devices">
           <el-icon><Monitor /></el-icon>
           <template #title>设备管理</template>
@@ -132,7 +142,7 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useNetworkStatus } from '../composables/useNetworkStatus'
-import { ElBadge } from 'element-plus'
+import { ElBadge, ElMessage } from 'element-plus'
 import apiClient from '../api'
 import { Odometer, List, HomeFilled, Van, PriceTag, Setting, User, ArrowDown, Expand, Fold, Monitor, Iphone, Bell, Connection, Link, DataAnalysis } from '@element-plus/icons-vue'
 
@@ -160,7 +170,7 @@ async function fetchUnreadCount() {
     const d = res.data?.data ?? res.data ?? {}
     const items = Array.isArray(d) ? d : (d.items ?? [])
     unreadCount.value = d.total ?? items.length ?? 0
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
 }
 
 onMounted(() => {

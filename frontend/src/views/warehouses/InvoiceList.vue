@@ -155,7 +155,10 @@ async function fetchInvoices() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     invoices.value = items
-  } catch { invoices.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    invoices.value = []
+  }
   invLoading.value = false
 }
 
@@ -168,7 +171,10 @@ async function fetchMemos() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     creditMemos.value = items
-  } catch { creditMemos.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    creditMemos.value = []
+  }
   memoLoading.value = false
 }
 
@@ -182,7 +188,9 @@ async function submitInvoice() {
     ElMessage.success('发票创建成功')
     showCreateInvoice.value = false
     fetchInvoices()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? '发票创建失败')
+  }
   invCreating.value = false
 }
 
@@ -193,7 +201,9 @@ async function submitMemo() {
     ElMessage.success('贷项通知单创建成功')
     showCreateMemo.value = false
     fetchMemos()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? '贷项通知单创建失败')
+  }
   memoCreating.value = false
 }
 
@@ -202,7 +212,10 @@ async function viewInvoice(row: any) {
   try {
     const res = await apiClient.get(`/warehouses/invoices/${row.id}`)
     invDetail.value = res.data?.data ?? res.data
-  } catch { invDetail.value = { ...row } }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    invDetail.value = { ...row }
+  }
 }
 
 async function viewMemo(row: any) {
@@ -210,7 +223,10 @@ async function viewMemo(row: any) {
   try {
     const res = await apiClient.get(`/warehouses/credit-memos/${row.id}`)
     memoDetail.value = res.data?.data ?? res.data
-  } catch { memoDetail.value = { ...row } }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    memoDetail.value = { ...row }
+  }
 }
 
 onMounted(() => { fetchInvoices(); fetchMemos() })

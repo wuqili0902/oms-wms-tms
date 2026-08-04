@@ -220,7 +220,7 @@ async function fetchOrders() {
     const data = res.data ?? {}
     orders.value = data.items ?? []
     total.value = data.total ?? 0
-  } catch { orders.value = []; total.value = 0 }
+  } catch (e: any) { orders.value = []; total.value = 0; ElMessage.error(e?.response?.data?.detail ?? e.message) }
   loading.value = false
 }
 
@@ -245,7 +245,7 @@ async function submitCreate() {
     ElMessage.success('创建成功')
     showCreate.value = false
     fetchOrders()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
   creating.value = false
 }
 
@@ -254,7 +254,7 @@ async function handleStatus(row: Order, status: string) {
     await apiClient.put(`/orders/${row.id}/status`, { status })
     ElMessage.success(`订单已${statusLabel(status)}`)
     fetchOrders()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
 }
 
 async function handleCancel(row: Order) {
@@ -289,7 +289,7 @@ async function submitSplit() {
     ElMessage.success('拆单成功')
     showSplit.value = false
     fetchOrders()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
   splitting.value = false
 }
 
@@ -309,7 +309,7 @@ async function submitMerge() {
     ElMessage.success('合并成功')
     showMerge.value = false
     fetchOrders()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
   merging.value = false
 }
 

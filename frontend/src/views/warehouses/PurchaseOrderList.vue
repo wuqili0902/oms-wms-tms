@@ -126,7 +126,10 @@ async function fetchPOs() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     purchaseOrders.value = items
-  } catch { purchaseOrders.value = [] }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    purchaseOrders.value = []
+  }
   loading.value = false
 }
 
@@ -135,7 +138,10 @@ async function viewDetail(row: any) {
   try {
     const res = await apiClient.get(`/warehouses/purchase-orders/${row.id}`)
     detail.value = res.data?.data ?? res.data
-  } catch { detail.value = { ...row } }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    detail.value = { ...row }
+  }
 }
 
 function resetCreateForm() { Object.assign(createForm, { vendor_id: '', warehouse_id: '', lines: [{ sku: '', quantity: 1, unit_price: 0 }] }) }
@@ -149,7 +155,9 @@ async function submitCreate() {
     ElMessage.success('创建成功')
     showCreate.value = false
     fetchPOs()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail ?? '采购单创建失败')
+  }
   creating.value = false
 }
 
@@ -158,7 +166,9 @@ async function approve(row: any) {
     await apiClient.post(`/warehouses/purchase-orders/${row.id}/approve`)
     ElMessage.success('已审批')
     fetchPOs()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[purchase-order-list] approve failed:', e?.response?.data ?? e)
+  }
 }
 
 async function receive(row: any) {
@@ -166,7 +176,9 @@ async function receive(row: any) {
     await apiClient.post(`/warehouses/purchase-orders/${row.id}/receive`)
     ElMessage.success('已收货')
     fetchPOs()
-  } catch { /* ignore */ }
+  } catch (e: any) {
+    console.warn('[purchase-order-list] receive failed:', e?.response?.data ?? e)
+  }
 }
 
 onMounted(fetchPOs)

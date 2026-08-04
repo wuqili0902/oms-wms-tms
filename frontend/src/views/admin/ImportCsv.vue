@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { ElMessage, type UploadProps } from 'element-plus'
+import { ref, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import apiClient from '../../api'
 
 const props = defineProps<{ endpoint: string; title: string }>()
 
@@ -24,16 +25,19 @@ async function handleResult(r: any): Promise<void> {
   }
 }
 
-function getEndpoint(file: File): string {
+function getEndpoint(_file: File): string {
   return props.endpoint.replace('/orders', '/import/orders').replace('/inventory', '/import/inventory')
 }
 
-async function onChange({ file }: { file?: File }): Promise<void> {
+async function onChange(uploadFile: any): Promise<void> {
+  const file = uploadFile?.raw ?? uploadFile
   if (!file || !files.value.length) return
   const url = getEndpoint(file)
   loading.value = true
   try {
-    await handleResult(await apiClient.post(url, {}, { headers: {'Content-Type': 'multipart/form-data'} }, { body: file }))
+    const formData = new FormData()
+    formData.append('file', file)
+    await handleResult(await apiClient.post(url, formData))
   } finally { loading.value = false }
 }
 

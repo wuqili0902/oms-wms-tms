@@ -82,7 +82,7 @@ const tierForm = reactive({ carrier_code: 'sf_express', weight_from: 0, weight_t
 
 async function calculateFreight() {
   calcLoading.value = true; calcResult.value = null
-  try { const res = await apiClient.post('/freight/calculate', calcForm); calcResult.value = res.data?.data ?? res.data } catch { /* ignore */ }
+  try { const res = await apiClient.post('/freight/calculate', calcForm); calcResult.value = res.data?.data ?? res.data } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '运费计算失败') }
   calcLoading.value = false
 }
 
@@ -95,13 +95,13 @@ async function submitTier() {
     const res = await apiClient.get('/freight-tiers?page=1&page_size=50')
     const d = res.data?.data ?? res.data ?? []
     tiers.value = Array.isArray(d) ? d : (d.items ?? [])
-  } catch { /* ignore */ }
+  } catch (e: any) { console.warn('[freight-tier-list] submitTier failed:', e?.response?.data ?? e) }
   tierCreating.value = false
 }
 
 onMounted(async () => {
   tierLoading.value = true
-  try { const res = await apiClient.get('/freight-tiers?page=1&page_size=50'); const d = res.data?.data ?? res.data ?? []; tiers.value = Array.isArray(d) ? d : (d.items ?? []) } catch { /* ignore */ }
+  try { const res = await apiClient.get('/freight-tiers?page=1&page_size=50'); const d = res.data?.data ?? res.data ?? []; tiers.value = Array.isArray(d) ? d : (d.items ?? []) } catch (e: any) { console.warn('[freight-tier-list] fetchTiers failed:', e?.response?.data ?? e) }
   tierLoading.value = false
 })
 </script>

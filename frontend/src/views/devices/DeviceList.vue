@@ -104,7 +104,7 @@ async function fetchDevices() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     devices.value = items
-  } catch { devices.value = [] }
+  } catch (e: any) { devices.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
   loading.value = false
 }
 
@@ -117,7 +117,7 @@ async function submitCreate() {
     ElMessage.success('设备注册成功')
     showCreate.value = false
     fetchDevices()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
   creating.value = false
 }
 
@@ -136,7 +136,7 @@ async function submitEdit() {
     ElMessage.success('设备已更新')
     showEdit.value = false
     fetchDevices()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
   editing.value = false
 }
 
