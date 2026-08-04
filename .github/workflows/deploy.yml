@@ -2,9 +2,9 @@ name: Build, Test, and Deploy
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main]
+    branches: [main, master]
   release:
     types: [published]
 
@@ -51,13 +51,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,otel]"
 
       - name: Run lint
         run: ruff check src/
 
       - name: Run tests
-        run: pytest tests/ --ignore=tests/test_e2e --cov=src --cov-report=term
+        run: pytest tests/ --cov=src --cov-report=term
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/oms_wms_tms
           REDIS_URL: redis://localhost:6379/0
@@ -108,7 +108,7 @@ jobs:
 
   deploy:
     needs: [build-and-push]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Helm deploy
@@ -124,5 +124,4 @@ jobs:
         #       --set image.tag=${{ github.sha }} \
         #       --set env.SECRET_KEY=${{ secrets.SECRET_KEY }} \
         #       --set postgresql.auth.password=${{ secrets.PG_PASSWORD }} \
-        #       --set rabbitmq.auth.password=${{ secrets.RABBITMQ_PASSWORD }} \
         #       --namespace oms-wms-tms --create-namespace

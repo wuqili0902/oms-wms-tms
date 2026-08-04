@@ -6,9 +6,9 @@ echo ║  OMS · WMS · TMS                    ║
 echo ╚══════════════════════════════════════╝
 echo.
 
-:: ── Start infrastructure (Postgres + Redis + RabbitMQ) ──
+:: ── Start infrastructure (Postgres + Redis) ──
 echo [1/3] 启动基础设施...
-docker compose up -d postgres redis rabbitmq
+docker compose up -d postgres redis
 if errorlevel 1 (
     echo ⚠ Docker 未运行，跳过基础设施启动
     echo   请确保 PostgreSQL ^(localhost:5432^) 和 Redis ^(localhost:6379^) 已可用

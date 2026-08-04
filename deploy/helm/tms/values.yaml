@@ -36,14 +36,6 @@ redis:
     persistence:
       size: 5Gi
 
-rabbitmq:
-  enabled: true
-  auth:
-    username: guest
-    password: changeme
-  persistence:
-    size: 5Gi
-
 celery:
   worker:
     replicas: 2

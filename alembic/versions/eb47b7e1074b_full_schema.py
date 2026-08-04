@@ -278,7 +278,7 @@ def upgrade() -> None:
     sa.Column('warehouse_id', sa.UUID(), nullable=True),
     sa.Column('items', sa.JSON(), nullable=True),
     sa.Column('total_amount', sa.Numeric(precision=18, scale=2), nullable=True),
-    sa.Column('priority', sa.Enum('LOW', 'MEDIUM', 'HIGH', 'URGANIC', name='orderpriority'), nullable=True),
+    sa.Column('priority', sa.Enum('LOW', 'MEDIUM', 'HIGH', 'URGENT', name='orderpriority'), nullable=True),
     sa.Column('version', sa.Integer(), nullable=True),
     sa.Column('notes', sa.Text(), nullable=True),
     sa.Column('id', sa.UUID(), nullable=False),

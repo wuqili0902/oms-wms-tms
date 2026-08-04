@@ -46,7 +46,7 @@ with Session() as session:
     )
     session.add(outbox_msg)
 
-# Consumer: poll outbox → publish to Kafka/RabbitMQ → mark consumed
+# Consumer: poll outbox → dispatch (e.g. HTTP POST) → mark dispatched
 ```
 
 #### 3. PDA 离线作业模式 (`src/pda/offline_mode.py`)
@@ -206,7 +206,7 @@ alembic revision -m "add_inventory_batches_table"
 A: 检查 `InsufficientStockError` — 可能是批次过期或未入库。调用 `/api/v1/inventory/expiry-check` 查看预警批次。
 
 **Q: Outbox 消息未消费？**
-A: 检查 consumer 进程是否运行，以及 Kafka/RabbitMQ 连接状态。
+A: 检查 Celery worker (`dispatch_outbox_events`) 是否运行，以及 `OUTBOX_DISPATCH_URL` 端点是否可达。
 
 **PDA 离线模式下数据如何同步？**
 A: SyncQueue 会在网络恢复时自动将 SQLite 缓存推送到主数据库。可通过 `SyncStatus` API 查看同步进度。

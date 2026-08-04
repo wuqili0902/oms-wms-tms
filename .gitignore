@@ -57,6 +57,14 @@ dmypy.json
 # Debug scripts
 __debug_*.py
 debug_*.py
+_check_*.py
+_debug_*.py
+_list_*.py
+fix_*.py
+smoke_test.py
+pyright_out.txt
+ruff_remaining.txt
+temp_cov.txt
 
 # OS
 Thumbs.db

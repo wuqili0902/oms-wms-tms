@@ -17,7 +17,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.create_table('notifications',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column('user_id', sa.String(length=36), nullable=False, index=True),
+        sa.Column('user_id', sa.String(length=36), nullable=False),
         sa.Column('type', sa.Enum('ORDER_STATUS_CHANGE', 'ORDER_CREATED', 'LOW_STOCK_ALERT',
                                   'TRANSPORT_STATUS_CHANGE', 'DELIVERY_CONFIRMED',
                                   'EXCEPTION_OCCURRED', 'SYSTEM_ALERT',
@@ -36,7 +36,7 @@ def upgrade() -> None:
 
     op.create_table('notification_preferences',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column('user_id', sa.String(length=36), nullable=False, index=True),
+        sa.Column('user_id', sa.String(length=36), nullable=False),
         sa.Column('notification_type', sa.Enum('ORDER_STATUS_CHANGE', 'ORDER_CREATED', 'LOW_STOCK_ALERT',
                                                 'TRANSPORT_STATUS_CHANGE', 'DELIVERY_CONFIRMED',
                                                 'EXCEPTION_OCCURRED', 'SYSTEM_ALERT',

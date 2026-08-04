@@ -51,26 +51,6 @@ services:
           cpus: "0.25"
           memory: 256M
 
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    logging: *default-logging
-    deploy:
-      resources:
-        limits:
-          cpus: "1"
-          memory: 512M
-
   app:
     build:
       context: ..
@@ -80,7 +60,6 @@ services:
       DATABASE_URL: postgresql+asyncpg://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
       DATABASE_SYNC_URL: postgresql://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
       REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: "false"
       CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000"]}
@@ -98,8 +77,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     restart: unless-stopped
     logging: *default-logging
@@ -122,7 +99,6 @@ services:
       DATABASE_URL: postgresql+asyncpg://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
       DATABASE_SYNC_URL: postgresql://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
       REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: "false"
       SMTP_HOST: ${SMTP_HOST:-}
@@ -134,8 +110,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     restart: unless-stopped
     logging: *default-logging
@@ -158,7 +132,6 @@ services:
       DATABASE_URL: postgresql+asyncpg://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
       DATABASE_SYNC_URL: postgresql://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
       REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: "false"
       SMTP_HOST: ${SMTP_HOST:-}
@@ -170,8 +143,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     restart: unless-stopped
     logging: *default-logging
@@ -202,4 +173,3 @@ services:
 volumes:
   pg_data:
   redis_data:
-  rabbitmq_data:

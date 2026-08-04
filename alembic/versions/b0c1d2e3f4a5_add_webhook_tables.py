@@ -28,7 +28,7 @@ def upgrade() -> None:
     )
     op.create_table('webhook_delivery_logs',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column('target_id', sa.Integer(), nullable=False, index=True),
+        sa.Column('target_id', sa.Integer(), nullable=False),
         sa.Column('event', sa.String(length=50), nullable=False),
         sa.Column('payload', sa.Text(), nullable=False),
         sa.Column('status', sa.Enum('PENDING', 'SUCCESS', 'FAILED', name='deliverystatus'), nullable=False),
