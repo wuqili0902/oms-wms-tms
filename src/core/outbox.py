@@ -2,16 +2,16 @@
 
 The Outbox pattern ensures that every business transaction that produces
 side effects (e.g. order → payment) is recorded atomically in a local
-database table, and a separate worker eventually publishes these events
-to RabbitMQ — guaranteeing exactly-once delivery without distributed
+database table, and a separate worker eventually dispatches these events
+(e.g. via HTTP POST) — guaranteeing reliable delivery without distributed
 transactions.
 
 Typical flow:
     1. OrderService creates an ORDER row AND appends an OUTBOX event row
        inside the same database transaction.
     2. A background Celery task (or cron) polls `outbox_events` for rows
-       whose `status = 'pending'`, publishes them to RabbitMQ, then marks
-       them `published`.
+       whose `status = 'pending'`, dispatches them, then marks them
+       `dispatched`.
 
 References:
     - Microservices Pattern – Outbox: https://microservices.io/patterns/data/Outbox.html
@@ -27,15 +27,21 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-
+from src.core.database import get_session
 from src.models.base import Base
+
+# Memory cache fallback (used when Redis is unavailable)
+try:
+    from src.cache.redis_client import get_memory_cache  # noqa: F401
+except ImportError:
+    pass
 
 
 class OutboxEventStatus(StrEnum):
     """Outbox event lifecycle states."""
 
     PENDING = "pending"       # committed but not yet dispatched to MQ
-    DISPATCHED = "dispatched"  # sent to RabbitMQ
+    DISPATCHED = "dispatched"  # successfully dispatched
     FAILED = "failed"         # dispatch failed; may retry
 
 
@@ -149,12 +155,10 @@ async def append_event(
 async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
     """Fetch pending events up to ``batch_size`` for Celery worker processing.
 
-    Returns events that are due for dispatch.  The caller should publish
-    each event to RabbitMQ and then call ``mark_dispatched()`` on success
-    or ``mark_failed()`` on failure.
+    Returns events that are due for dispatch.  The caller should dispatch
+    each event and then call ``mark_dispatched()`` on success or
+    ``mark_failed()`` on failure.
     """
-    from src.core.database import get_session
-
     async with get_session() as session:
         stmt = (
             _select(OutboxEvent)
@@ -172,8 +176,6 @@ async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
 
 async def mark_dispatched(event_ids: list[uuid.UUID]) -> int:
     """Mark a batch of events as dispatched (successfully published to MQ)."""
-    from src.core.database import get_session
-
     async with get_session() as session:
         count = await session.execute(
             OutboxEvent.__table__.update()
@@ -190,8 +192,6 @@ async def mark_dispatched(event_ids: list[uuid.UUID]) -> int:
 async def mark_failed(event_id: uuid.UUID, error_message: str) -> None:
     """Mark an event as failed and schedule a retry after 60 seconds."""
     from datetime import timedelta
-
-    from src.core.database import get_session
 
     async with get_session() as session:
         await session.execute(

@@ -3,7 +3,7 @@ from celery import Celery
 from src.config import settings
 
 # Create Celery application instance
-# Uses REDIS_URL by default. Set CELERY_BROKER_URL to switch to RabbitMQ.
+# Celery uses Redis as both broker and result backend (see src/config.redis_url).
 broker_url = settings.redis_url
 result_backend_url = settings.redis_url
 app = Celery(__name__, broker=broker_url, result_backend=result_backend_url)

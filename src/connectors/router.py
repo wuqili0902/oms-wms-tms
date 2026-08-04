@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
-from src.connectors.amazon_mws import parse_amazon_order
+from src.connectors.amazon_sp_api import parse_amazon_order
 from src.connectors.shopify_webhook import verify_webhook
 from src.core.database import get_db
 
@@ -60,7 +60,7 @@ async def import_amazon_order(data: dict, db: AsyncSession = Depends(get_db)):
 @router.post("/amazon/tracking", status_code=status.HTTP_200_OK)
 async def update_amazon_tracking(data: dict):
     """Receive tracking updates to send back to Amazon SP-API."""
-    from src.connectors.amazon_mws import build_tracking_update
+    from src.connectors.amazon_sp_api import build_tracking_update
 
     payload = build_tracking_update(
         amazon_order_id=data.get("amazon_order_id", ""),

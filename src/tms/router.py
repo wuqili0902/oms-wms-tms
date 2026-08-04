@@ -10,13 +10,19 @@ from src.tms import service as tms_service
 from src.tms.schemas import (
     CarrierRouteCreate,
     CarrierRouteResponse,
+    DeviceResponse,
     HubConnectionCreate,
     HubConnectionResponse,
+    PODResponse,
+    ReturnOrderResponse,
     RoutePlanResponse,
+    SessionResponse,
+    SyncLogResponse,
     TrackingEventCreate,
     TrackingEventResponse,
     TransferHubCreate,
     TransferHubResponse,
+    TransportExceptionResponse,
     TransportOrderCreate,
     TransportOrderListResponse,
     TransportOrderResponse,
@@ -112,7 +118,7 @@ async def create_pod(
 
 # ── Return Order Endpoints (Reverse Logistics) ───────────────────────────────
 
-@router.post("/return-orders", response_model=dict, status_code=status.HTTP_201_CREATED)
+@router.post("/return-orders", response_model=ReturnOrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_return_order(
     data: dict,
     db: AsyncSession = Depends(get_db),
@@ -123,7 +129,7 @@ async def create_return_order(
 
 # ── Exception Endpoints ──────────────────────────────────────────────────────
 
-@router.post("/exceptions", response_model=dict, status_code=status.HTTP_201_CREATED)
+@router.post("/exceptions", response_model=TransportExceptionResponse, status_code=status.HTTP_201_CREATED)
 async def create_exception(
     data: dict,
     db: AsyncSession = Depends(get_db),
@@ -132,7 +138,7 @@ async def create_exception(
     return await tms_service.create_exception(db, data)
 
 
-@router.patch("/exceptions/{exception_id}/resolve", response_model=dict)
+@router.patch("/exceptions/{exception_id}/resolve", response_model=TransportExceptionResponse)
 async def resolve_exception(
     exception_id: str,
     db: AsyncSession = Depends(get_db),
@@ -177,7 +183,7 @@ async def register_device(
         raise HTTPException(status_code=422, detail=str(e))
 
 
-@router.get("/devices/{dev_id}", response_model=dict)
+@router.get("/devices/{dev_id}", response_model=DeviceResponse)
 async def get_device(
     dev_id: str,
     db: AsyncSession = Depends(get_db),
@@ -217,7 +223,7 @@ async def heartbeat(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/devices", response_model=list[dict])
+@router.get("/devices", response_model=list[DeviceResponse])
 async def list_devices(
     warehouse_id: str | None = Query(None),
     status: str | None = Query(None),
@@ -256,7 +262,7 @@ async def end_session(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/devices/{dev_id}/sessions", response_model=list[dict])
+@router.get("/devices/{dev_id}/sessions", response_model=list[SessionResponse])
 async def list_sessions(
     dev_id: str,
     db: AsyncSession = Depends(get_db),
@@ -282,7 +288,7 @@ async def record_sync(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/devices/{dev_id}/sync", response_model=list[dict])
+@router.get("/devices/{dev_id}/sync", response_model=list[SyncLogResponse])
 async def list_sync_logs(
     dev_id: str,
     db: AsyncSession = Depends(get_db),
@@ -497,7 +503,7 @@ async def list_tracking_events(
     return await tms_service.list_tracking_events(db, transport_order_id=order_id)
 
 
-@router.get("/transport-orders/{order_id}/pod")
+@router.get("/transport-orders/{order_id}/pod", response_model=PODResponse)
 async def get_pod(
     order_id: str,
     db: AsyncSession = Depends(get_db),
@@ -524,15 +530,16 @@ async def update_pod(
 # Return Order (Reverse Logistics)
 # ═══════════════════════════════════════════════════════════════════════
 
-@router.get("/return-orders")
+@router.get("/return-orders", response_model=list[ReturnOrderResponse])
 async def list_return_orders(
     db: AsyncSession = Depends(get_db),
     status: str = Query(None),
 ):
-    return await tms_service.list_return_orders(db, status=status)
+    items, _total = await tms_service.list_return_orders(db, status=status)
+    return items
 
 
-@router.get("/return-orders/{return_id}")
+@router.get("/return-orders/{return_id}", response_model=ReturnOrderResponse)
 async def get_return_order(return_id: str, db: AsyncSession = Depends(get_db)):
     try:
         return await tms_service.get_return_order(db, return_id=return_id)
@@ -540,7 +547,7 @@ async def get_return_order(return_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.patch("/return-orders/{return_id}/status", response_model=dict)
+@router.patch("/return-orders/{return_id}/status", response_model=ReturnOrderResponse)
 async def update_return_status(return_id: str, data: dict, db: AsyncSession = Depends(get_db)):
     try:
         return await tms_service.update_return_status(db, return_id=return_id, target=data.get("target"))
@@ -552,7 +559,8 @@ async def update_return_status(return_id: str, data: dict, db: AsyncSession = De
 # Transport Exception / Incident
 # ═══════════════════════════════════════════════════════════════════════
 
-@router.post("/transport-orders/{order_id}/exceptions", status_code=status.HTTP_201_CREATED)
+@router.post("/transport-orders/{order_id}/exceptions", response_model=TransportExceptionResponse,
+             status_code=status.HTTP_201_CREATED)
 async def create_order_exception(order_id: str, data: dict, db: AsyncSession = Depends(get_db)):
     try:
         return await tms_service.create_exception(db, {"transport_order_id": order_id, **data})
@@ -560,7 +568,7 @@ async def create_order_exception(order_id: str, data: dict, db: AsyncSession = D
         raise HTTPException(status_code=404 if isinstance(e, NotFoundException) else 422, detail=str(e))
 
 
-@router.get("/exceptions", response_model=list[dict])
+@router.get("/exceptions", response_model=list[TransportExceptionResponse])
 async def list_exceptions(
     db: AsyncSession = Depends(get_db),
     transport_order_id: str = Query(None),
@@ -569,7 +577,7 @@ async def list_exceptions(
     return await tms_service.list_exceptions(db, transport_order_id=transport_order_id, status=status)
 
 
-@router.patch("/exceptions/{exc_id}", response_model=dict)
+@router.patch("/exceptions/{exc_id}", response_model=TransportExceptionResponse)
 async def resolve_exc(exc_id: str, data: dict, db: AsyncSession = Depends(get_db)):
     try:
         return await tms_service.resolve_exception(

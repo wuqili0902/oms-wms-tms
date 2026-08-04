@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.analytics import service as analytics_service
@@ -19,6 +20,7 @@ from src.auth import service as auth_service
 from src.barcode import service as barcode_service
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
+from src.core.exceptions import ValidationException
 from src.core.export import export_inventory, export_orders, stream_csv
 from src.core.import_utils import import_inventory_from_csv, import_orders_from_csv
 from src.models.base import model_to_dict
@@ -109,7 +111,7 @@ async def order_detail(
     try:
         order = await oms_service.get_order(db, order_id)
         history = await oms_service.get_order_history(db, order_id)
-    except Exception:
+    except (ValueError, KeyError, SQLAlchemyError):
         logger.exception("Failed to load order detail for %s", order_id)
         raise HTTPException(status_code=404, detail="Order not found")
     return _render(
@@ -140,7 +142,7 @@ async def create_order(
     }
     try:
         await oms_service.create_order(db, data)
-    except Exception:
+    except (ValueError, KeyError, SQLAlchemyError):
         logger.exception("Failed to create order")
         raise HTTPException(status_code=400, detail="Failed to create order")
     return RedirectResponse(url="/admin/orders", status_code=303)
@@ -157,7 +159,7 @@ async def update_order_status(
     status = form.get("status")
     try:
         await oms_service.update_order_status(db, order_id, status, operator=current_user.get("username", "admin"))
-    except Exception:
+    except (ValueError, KeyError, SQLAlchemyError, ValidationException):
         logger.exception("Failed to update order status for %s", order_id)
         raise HTTPException(status_code=400, detail="Failed to update order status")
     return RedirectResponse(url=f"/admin/orders/{order_id}", status_code=303)
@@ -177,9 +179,11 @@ async def create_user(
         "email": form.get("email"),
         "password": form.get("password"),
     }
+    if not data.get("username") or not data.get("password"):
+        raise HTTPException(status_code=400, detail="Username and password are required")
     try:
         await auth_service.register_user(db, data)
-    except Exception:
+    except (ValueError, IntegrityError, SQLAlchemyError, KeyError, ValidationException):
         logger.exception("Failed to create user")
         raise HTTPException(status_code=400, detail="Failed to create user")
     return RedirectResponse(url="/admin/users", status_code=303)
@@ -233,7 +237,9 @@ async def create_warehouse(
     data = {k: v for k, v in form.items()}
     wh = await wms_service.create_warehouse(db, data)
     return _render(
-        request, "admin/warehouses.html", {"active": "warehouses", "flashes": [("success", f"Warehouse {wh['code']} created")]},
+        request,
+        "admin/warehouses.html",
+        {"active": "warehouses", "flashes": [("success", f"Warehouse {wh['code']} created")]},
     )
 
 
@@ -249,7 +255,9 @@ async def update_warehouse(
     wh = await wms_service.update_warehouse(db, wh_id, data)
     wh_code = wh.code if wh else wh_id
     return _render(
-        request, "admin/warehouses.html", {"active": "warehouses", "flashes": [("success", f"Warehouse {wh_code} updated")]},
+        request,
+        "admin/warehouses.html",
+        {"active": "warehouses", "flashes": [("success", f"Warehouse {wh_code} updated")]},
     )
 
 
@@ -261,7 +269,10 @@ async def delete_warehouse(
     current_user: dict = Depends(get_current_user),
 ):
     await wms_service.delete_warehouse(db, wh_id)
-    return _render(request, "admin/warehouses.html", {"active": "warehouses", "flashes": [("success", f"Warehouse {wh_id} deleted")]},
+    return _render(
+        request,
+        "admin/warehouses.html",
+        {"active": "warehouses", "flashes": [("success", f"Warehouse {wh_id} deleted")]},
     )
 
 

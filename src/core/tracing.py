@@ -22,7 +22,7 @@ def _safe_import_otel():
 
 _otel_available = _safe_import_otel()
 
-from src.config import settings
+from src.config import settings  # noqa: E402  # imported after otel probe
 
 
 def setup_tracing() -> None:
@@ -62,7 +62,7 @@ def setup_tracing() -> None:
                 if hasattr(app, "build_middleware_stack"):
                     FastAPIInstrumentor.instrument_app(app)
                     break
-        except Exception:
+        except (ImportError, AttributeError, RuntimeError):
             pass
 
     trace.get_tracer(settings.app_name)

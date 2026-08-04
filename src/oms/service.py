@@ -13,10 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
-from src.core.exceptions import NotFoundException, ValidationException
-from src.core.outbox import append_event
-from src.oms.models import Customer, Order, OrderItem, OrderPriority, OrderStatus, OrderStatusLog
-from src.wms.models import SKU
+from src.core.exceptions import NotFoundException, ValidationException  # noqa: E402
+from src.core.outbox import append_event  # noqa: E402
+from src.oms.models import Customer, Order, OrderItem, OrderPriority, OrderStatus, OrderStatusLog  # noqa: E402
+from src.wms.models import SKU  # noqa: E402
 
 # ── State machine ──────────────────────────────────────────────────────────
 
@@ -306,15 +306,15 @@ async def update_order_status(db: AsyncSession, order_id: str, target: str, oper
     )
 
     try:
-        from src.webhooks.models import WebhookEvent as WE
+        from src.webhooks.models import WebhookEvent as WebhookEvent
         from src.webhooks.service import dispatch_event
         await dispatch_event(
-            WE.ORDER_STATUS_CHANGED,
+            WebhookEvent.ORDER_STATUS_CHANGED,
             {"order_id": str(order.id), "order_no": order.order_no, "from": current, "to": target},
             db=db,
         )
         await dispatch_event(
-            WE.ORDER_CANCELLED if target == "cancelled" else WE.ORDER_CREATED,
+            WebhookEvent.ORDER_CANCELLED if target == "cancelled" else WebhookEvent.ORDER_CREATED,
             {"order_id": str(order.id), "order_no": order.order_no, "status": target},
             db=db,
         )

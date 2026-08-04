@@ -61,7 +61,14 @@ async def get_status_distribution(db: AsyncSession) -> list[dict]:
         select(Order.status, func.count(Order.id).label("count"))
         .group_by(Order.status)
     )
-    return [{"status": r.status.value if hasattr(r.status, "value") else str(r.status), "count": r.count} for r in result.all()]
+    rows = result.all()
+    return [
+        {
+            "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+            "count": r.count,
+        }
+        for r in rows
+    ]
 
 
 @cached(ttl=600, prefix="analytics", skip_args=1)

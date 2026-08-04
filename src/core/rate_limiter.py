@@ -57,19 +57,23 @@ class RateLimiter:
     async def check_rate_limit(
         self,
         key: str,
-        requests: int = 100,
-        window: int = 60,
+        requests: int | None = None,
+        window: int | None = None,
     ) -> bool:
         """Check if a request is within the rate limit.
 
         Args:
             key (str): Unique identifier for the client (user ID or IP address)
-            requests (int): Maximum number of requests allowed in the time window
-            window (int): Time window in seconds
+            requests (int): Maximum number of requests allowed in the time window.
+                Defaults to ``settings.rate_limit_requests``.
+            window (int): Time window in seconds. Defaults to ``settings.rate_limit_window``.
 
         Returns:
             bool: True if request is allowed, False if rate limit exceeded
         """
+        requests = requests or settings.rate_limit_requests
+        window = window or settings.rate_limit_window
+
         if not self._connected:
             # Graceful degradation - allow all requests if Redis is unavailable
             return True
@@ -113,22 +117,25 @@ class RateLimiter:
         if not self._connected:
             return {}
 
+        requests = settings.rate_limit_requests
+        window = settings.rate_limit_window
+
         try:
             bucket_key = f"rate_limit:{key}"
             current_time = await self.client.time()
             now_seconds = current_time[0] if isinstance(current_time, (list, tuple)) else int(current_time)
 
             # Get token count in the window
-            start_window = now_seconds - 60
+            start_window = now_seconds - window
             end_window = now_seconds
 
             count = await self.client.zcount(bucket_key, start_window, end_window)
 
             if isinstance(count, int):
                 return {
-                    "X-Rate-Limit": "100",
-                    "X-Rate-Remaining": str(max(0, 100 - count)),
-                    "X-Rate-Window": "60",
+                    "X-Rate-Limit": str(requests),
+                    "X-Rate-Remaining": str(max(0, requests - count)),
+                    "X-Rate-Window": str(window),
                     "X-Rate-Reset": str(end_window),
                 }
             else:
@@ -143,15 +150,16 @@ rate_limiter = RateLimiter()
 
 
 def rate_limit(
-    requests: int = 100,
-    window: int = 60,
+    requests: int | None = None,
+    window: int | None = None,
     key_func: Callable | None = None,
 ) -> Callable:
     """Decorator to apply rate limiting to API endpoints.
 
     Args:
-        requests (int): Maximum number of requests allowed in the time window
-        window (int): Time window in seconds
+        requests (int): Maximum number of requests allowed in the time window.
+            Defaults to ``settings.rate_limit_requests``.
+        window (int): Time window in seconds. Defaults to ``settings.rate_limit_window``.
         key_func (Optional[Callable]): Function to extract rate limit key from request
             If None, uses IP address as the key
 
@@ -171,15 +179,19 @@ def rate_limit(
                 key = f"ip:{client_ip}"
 
             # Check rate limit
-            allowed = await rate_limiter.check_rate_limit(key, requests, window)
+            allowed = await rate_limiter.check_rate_limit(
+                key,
+                requests or settings.rate_limit_requests,
+                window or settings.rate_limit_window,
+            )
 
             if not allowed:
                 raise HTTPException(
                     status_code=429,
                     detail="Rate limit exceeded",
                     headers={
-                        "X-Rate-Limit": str(requests),
-                        "X-Rate-Window": str(window),
+                        "X-Rate-Limit": str(requests or settings.rate_limit_requests),
+                        "X-Rate-Window": str(window or settings.rate_limit_window),
                     },
                 )
 
@@ -200,6 +212,6 @@ def rate_limit(
 
 
 # Pre-configured rate limiters for common use cases
-api_rate_limit = rate_limit(requests=1000, window=60)  # 1000 requests per minute
+api_rate_limit = rate_limit()  # uses settings.rate_limit_requests/window
 user_rate_limit = rate_limit(requests=300, window=60)  # 300 requests per minute per user
 write_rate_limit = rate_limit(requests=100, window=60)  # 100 write operations per minute

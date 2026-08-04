@@ -123,9 +123,15 @@ class RateShoppingService(BaseModel):
 
     def _default_carriers(self) -> list[CarrierProfile]:
         return [
-            CarrierProfile(code="FEDEX", service_level=ServiceLevel.NEXT_DAY, cutoff_time_local=17, max_weight_kg=68.0, zone_map={}),
-            CarrierProfile(code="UPS", service_level=ServiceLevel.NEXT_DAY, cutoff_time_local=16, max_weight_kg=68.0, zone_map={}),
-            CarrierProfile(code="DHL", service_level=ServiceLevel.SECOND_DAY, cutoff_time_local=18, max_weight_kg=30.0, zone_map={}),
+            CarrierProfile(
+                code="FEDEX", service_level=ServiceLevel.NEXT_DAY, cutoff_time_local=17, max_weight_kg=68.0, zone_map={}
+            ),
+            CarrierProfile(
+                code="UPS", service_level=ServiceLevel.NEXT_DAY, cutoff_time_local=16, max_weight_kg=68.0, zone_map={}
+            ),
+            CarrierProfile(
+                code="DHL", service_level=ServiceLevel.SECOND_DAY, cutoff_time_local=18, max_weight_kg=30.0, zone_map={}
+            ),
         ]
 
     def _mock_rate(self, carrier: CarrierProfile) -> dict:
@@ -174,8 +180,20 @@ class RouteCache(BaseModel):
         plan = RoutePlan(
             destination_zip=destination_zip,
             eligible_carriers=[
-                CarrierProfile(code="FEDEX", service_level=ServiceLevel.NEXT_DAY, cutoff_time_local=17, max_weight_kg=68.0, zone_map={}),
-                CarrierProfile(code="UPS", service_level=ServiceLevel.NEXT_DAY, cutoff_time_local=16, max_weight_kg=68.0, zone_map={}),
+                CarrierProfile(
+                    code="FEDEX",
+                    service_level=ServiceLevel.NEXT_DAY,
+                    cutoff_time_local=17,
+                    max_weight_kg=68.0,
+                    zone_map={},
+                ),
+                CarrierProfile(
+                    code="UPS",
+                    service_level=ServiceLevel.NEXT_DAY,
+                    cutoff_time_local=16,
+                    max_weight_kg=68.0,
+                    zone_map={},
+                ),
             ],
             computed_at=datetime.now(UTC),
         )

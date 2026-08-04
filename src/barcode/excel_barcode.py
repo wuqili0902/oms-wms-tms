@@ -117,11 +117,11 @@ def generate_barcode_zip(file: UploadFile) -> bytes:
             datetime.now(UTC).isoformat()
 
             # ── PDF label (EAN-13 text + QR) ────────────────
-            from reportlab.lib.pagesizes import A5 as A5size
+            from reportlab.lib.pagesizes import A5 as A5_SIZE  # noqa: N811
             from reportlab.pdfgen.canvas import Canvas
 
             pdf_buf = io.BytesIO()
-            c = Canvas(pdf_buf, pagesize=A5size)
+            c = Canvas(pdf_buf, pagesize=A5_SIZE)
             # SKU header
             c.setFont("Helvetica-Bold", 12)
             c.drawString(30, 760, sku)

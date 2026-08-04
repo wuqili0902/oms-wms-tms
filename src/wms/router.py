@@ -13,6 +13,7 @@ from src.models.base import model_to_dict
 from src.wms import service as wms_service
 from src.wms.schemas import (
     AddressCreate,
+    AddressResponse,
     CreditMemoCreate,
     CreditMemoResponse,
     InventoryAdjust,
@@ -20,14 +21,21 @@ from src.wms.schemas import (
     InvoiceCreate,
     InvoiceResponse,
     LocationCreate,
+    LocationListResponse,
     LocationResponse,
     LocationUpdate,
     PickingWaveCreate,
     PickingWaveResponse,
     PurchaseOrderCreate,
+    PurchaseOrderListResponse,
     PurchaseOrderResponse,
+    ShipmentResponse,
+    StockInItemCreate,
+    StockInResponseWithItems,
     StockMovementResponse,
     VendorCreate,
+    VendorListResponse,
+    VendorResponse,
     WarehouseCreate,
     WarehouseResponse,
 )
@@ -59,6 +67,22 @@ async def adjust_inventory(
 ):
     try:
         return await wms_service.adjust_inventory(db, data.model_dump())
+    except (NotFoundException, ValidationException) as e:
+        code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=code, detail=str(e))
+
+
+@router.post("/inventory/items", response_model=StockInResponseWithItems, status_code=status.HTTP_201_CREATED)
+async def stock_in(
+    warehouse_id: str,
+    data: StockInItemCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """录入商品到仓库（SKU、数量、批次号），返回操作后的实时库存快照"""
+    try:
+        result = await wms_service.stock_in(db, warehouse_id, data.model_dump(), current_user)
+        return result
     except (NotFoundException, ValidationException) as e:
         code = 404 if isinstance(e, NotFoundException) else 422
         raise HTTPException(status_code=code, detail=str(e))
@@ -186,7 +210,7 @@ async def ship_package(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/shipments")
+@router.get("/shipments", response_model=list[ShipmentResponse])
 async def list_shipments(
     warehouse_id: str = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -219,7 +243,7 @@ async def create_vendor(
         raise HTTPException(status_code=422, detail=str(e))
 
 
-@router.get("/vendors")
+@router.get("/vendors", response_model=VendorListResponse)
 async def list_vendors(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
@@ -229,7 +253,7 @@ async def list_vendors(
     return await wms_service.list_vendors(db, page=page, page_size=page_size)
 
 
-@router.get("/vendors/{vendor_id}")
+@router.get("/vendors/{vendor_id}", response_model=VendorResponse)
 async def get_vendor(
     vendor_id: str,
     db: AsyncSession = Depends(get_db),
@@ -252,7 +276,7 @@ async def create_address(
     return await wms_service.create_address(db, data.model_dump())
 
 
-@router.get("/addresses")
+@router.get("/addresses", response_model=list[AddressResponse])
 async def list_addresses(
     entity_type: str | None = None,
     entity_id: str | None = None,
@@ -273,7 +297,7 @@ async def create_purchase_order(
     return await wms_service.create_purchase_order(db, data.model_dump())
 
 
-@router.get("/purchase-orders")
+@router.get("/purchase-orders", response_model=PurchaseOrderListResponse)
 async def list_purchase_orders(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
@@ -444,7 +468,7 @@ async def create_location(
         raise HTTPException(status_code=code, detail=str(e))
 
 
-@router.get("/{wh_id}/locations")
+@router.get("/{wh_id}/locations", response_model=LocationListResponse)
 async def list_locations(
     wh_id: str,
     page: int = Query(1, ge=1),

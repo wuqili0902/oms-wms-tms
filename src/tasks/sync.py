@@ -11,6 +11,7 @@ import httpx
 
 from src.celery_app import app
 from src.config import settings
+from src.core.offline import SyncQueueService
 from src.tasks.base import BaseTask
 
 logger = logging.getLogger(__name__)
@@ -27,8 +28,6 @@ async def process_pda_sync_queue(self, local_db_path: str = "wms_pda.db"):
     each pending mutation to the remote HTTP endpoint
     ``POST /api/v1/sync/push``, and marks them as synced on success.
     """
-    from src.core.offline import SyncQueueService
-
     svc = SyncQueueService(local_db_path)
     pending = svc.get_pending(limit=50)
 

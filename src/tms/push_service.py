@@ -126,6 +126,7 @@ class PushService:
         try:
             if self._fcm_ready:
                 import asyncio
+
                 from firebase_admin import messaging
 
                 success = await asyncio.get_running_loop().run_in_executor(

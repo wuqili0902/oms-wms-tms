@@ -104,6 +104,34 @@ class PickingWavePriority(Enum):
     URGENT = "urgent"
 
 
+# ── Transfer Order ───────────────────────────────────────────────────────────
+
+__ALL_TRANSFER_STATUSES: tuple[str] = (
+    "DRAFT", "CONFIRMED", "IN_TRANSIT", "DELIVERED", "CANCELLED",
+)
+
+
+class TransferStatus(StrEnum):
+    """Transfer order lifecycle states."""
+
+    DRAFT = "DRAFT"
+    CONFIRMED = "CONFIRMED"
+    IN_TRANSIT = "IN_TRANSIT"
+    DELIVERED = "DELIVERED"
+    CANCELLED = "CANCELLED"
+
+
+class TransferItemType(StrEnum):
+    """Types of items that can appear in a transfer order line."""
+
+    SKU = "SKU"
+    LOCATION = "LOCATION"
+    WAREHOUSE = "WAREHOUSE"
+
+
+# ── Warehouse (re-defined below, after all dependencies) ────────────────────
+
+
 class Warehouse(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
     """Warehouse model representing a storage facility.
 
@@ -249,7 +277,7 @@ class InventoryLog(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
     remark: str | None = Column(Text, nullable=True)
 
     inventory: Inventory = relationship("Inventory", back_populates="inventory_logs")
-    operator: Optional["User"] = relationship("User")
+    operator: Optional["User"] = relationship("User")  # noqa: F821
 
     __table_args__ = (
         Index(
@@ -560,3 +588,84 @@ class CreditMemoLine(Base, UUIDMixin):
 
     def __repr__(self):
         return f"<CreditMemoLine {self.description}: qty={self.quantity}>"
+
+
+# ── Transfer Order ───────────────────────────────────────────────────────────
+
+
+class TransferOrder(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
+    """Transfer order header — tracks stock movement between warehouses."""
+
+    __tablename__ = "transfer_orders"
+
+    code: str = Column(String(50), unique=True, index=True)
+    source_warehouse_id: UUID = Column(UUID(as_uuid=True), ForeignKey("warehouses.id"))
+    target_warehouse_id: UUID = Column(UUID(as_uuid=True), ForeignKey("warehouses.id"))
+    type: TransferItemType = Column(SAEnum(TransferItemType))
+    status: TransferStatus = Column(SAEnum(TransferStatus), default=TransferStatus.DRAFT)
+    total_weight_kg: Decimal = Column(Numeric(18, 4), default=Decimal("0"))
+    total_volume_m3: Decimal = Column(Numeric(18, 6), default=Decimal("0"))
+    total_pieces: int = Column(Integer, default=0)
+    ref_no: str | None = Column(String(100), nullable=True)
+    ref_type: str | None = Column(String(50), nullable=True)
+    remarks: str | None = Column(Text, nullable=True)
+
+    source_warehouse: Warehouse = relationship("Warehouse", foreign_keys=[source_warehouse_id])
+    target_warehouse: Warehouse = relationship("Warehouse", foreign_keys=[target_warehouse_id])
+    lines: list = relationship("TransferOrderLine", back_populates="transfer_order")
+    logs: list = relationship("TransferLog", back_populates="transfer_order")
+
+    __table_args__ = (
+        Index("ix_transfer_orders_status_created_at", "status", "created_at"),
+    )
+
+    def __repr__(self):
+        return f"<TransferOrder {self.code}: status={self.status}>"
+
+
+class TransferOrderLine(Base, UUIDMixin):
+    """Line item within a transfer order."""
+
+    __tablename__ = "transfer_order_lines"
+
+    transfer_order_id: UUID = Column(UUID(as_uuid=True), ForeignKey("transfer_orders.id"))
+    item_type: TransferItemType = Column(SAEnum(TransferItemType))
+    sku_id: UUID | None = Column(UUID(as_uuid=True), ForeignKey("skus.id"), nullable=True)
+    location_from_id: UUID | None = Column(UUID(as_uuid=True), nullable=True)
+    location_to_id: UUID | None = Column(UUID(as_uuid=True), nullable=True)
+
+    # Warehouse-level transfer fields (used when item_type == WAREHOUSE)
+    warehouse_id: UUID | None = Column(UUID(as_uuid=True), nullable=True)
+
+    quantity: Decimal = Column(Numeric(20, 4), default=Decimal("0"))
+    available_qty: Decimal = Column(Numeric(20, 4), default=Decimal("0"))
+    picked_qty: Decimal = Column(Numeric(20, 4), default=Decimal("0"))
+    shipped_qty: Decimal = Column(Numeric(20, 4), default=Decimal("0"))
+    received_qty: Decimal = Column(Numeric(20, 4), default=Decimal("0"))
+
+    transfer_order: TransferOrder = relationship("TransferOrder", back_populates="lines")
+    sku: SKU | None = relationship("SKU", foreign_keys=[sku_id])
+
+    def __repr__(self):
+        return f"<TransferLine {self.transfer_order_id}: qty={self.quantity}>"
+
+
+class TransferLog(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
+    """Audit log for transfer order status changes and stock movements."""
+
+    __tablename__ = "transfer_logs"
+
+    transfer_order_id: UUID = Column(UUID(as_uuid=True), ForeignKey("transfer_orders.id"), index=True)
+    operator_id: UUID | None = Column(UUID(as_uuid=True), nullable=True)
+    remark: str | None = Column(Text, nullable=True)
+    from_warehouse_id: UUID | None = Column(UUID(as_uuid=True), nullable=True)
+    to_warehouse_id: UUID | None = Column(UUID(as_uuid=True), nullable=True)
+    from_location_id: UUID | None = Column(UUID(as_uuid=True), nullable=True)
+    to_location_id: UUID | None = Column(UUID(as_uuid=True), nullable=True)
+    quantity_change: Decimal = Column(Numeric(20, 4), default=Decimal("0"))
+
+    transfer_order: TransferOrder = relationship("TransferOrder", back_populates="logs")
+
+    def __repr__(self):
+        return f"<TransferLog {self.transfer_order_id}: qty_chg={self.quantity_change}>"
+

@@ -1,20 +1,19 @@
 """Shared import handler utilities."""
-import csv
-import io
 import logging
-from typing import Any, Callable, Dict, List, Tuple
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 class ImportResult:
     """Structured result for CSV imports."""
-    
-    def __init__(self, success: int = 0, errors: List[Dict[str, Any]] | None = None):
+
+    def __init__(self, success: int = 0, errors: list[dict[str, Any]] | None = None):
         self.success = success
         self.errors = errors or []
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "errors": self.errors,
@@ -24,8 +23,8 @@ class ImportResult:
 async def import_csv_handler(
     content: str | bytes,
     db: Any,  # type: ignore[misc]
-    handler: Callable[[str], Tuple[ImportResult, Exception | None]],
-) -> Dict[str, Any]:
+    handler: Callable[[str], tuple[ImportResult, Exception | None]],
+) -> dict[str, Any]:
     """Generic CSV import handler with validation and error tracking.
 
     Args:

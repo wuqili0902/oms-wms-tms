@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import ValidationException
 
-
 logger = logging.getLogger(__name__)
 
 

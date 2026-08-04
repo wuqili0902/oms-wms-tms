@@ -120,6 +120,8 @@ class PODResponse(BaseModel):
     signature_type: str
     signature_image_url: str | None = None
     delivery_photo_urls: list[dict] = Field(default=list)
+    delivered_to_address: dict | None = None
+    notes: str | None = None
     created_at: str
 
     model_config = {"from_attributes": True}
@@ -142,18 +144,22 @@ class ReturnOrderResponse(BaseModel):
     id: str
     return_no: str
     status: str
+    shipment_status: str
     reason: str
     reason_detail: str | None = None
     transport_order_id: str | None = None
     carrier_code: str | None = None
     return_tracking_number: str | None = None
+    pickup_address: dict | None = None
+    destination_warehouse_id: str | None = None
     refund_amount: str
     created_at: str
+    updated_at: str | None = None
 
     model_config = {"from_attributes": True}
 
 
-# ── Exception Schemas ───────────────────────────────────────────────────────
+# ── Exception Schemas ───────────────────────────────────────────────────
 
 class TransportExceptionCreate(BaseModel):
     """Report a transport exception."""
@@ -163,6 +169,20 @@ class TransportExceptionCreate(BaseModel):
                        "address_issue|customer_unavailable|weather)$")
     severity: str = Field(default="normal", pattern=r"^(normal|high|critical)$")
     description: str | None = None
+
+
+class TransportExceptionResponse(BaseModel):
+    id: str
+    transport_order_id: str | None = None
+    type: str
+    status: str
+    severity: str
+    description: str | None = None
+    resolution_notes: str | None = None
+    created_at: str
+    updated_at: str | None = None
+
+    model_config = {"from_attributes": True}
 
 
 # ── Settlement / Freight Schemas ────────────────────────────────────────────
@@ -255,7 +275,7 @@ class SessionResponse(BaseModel):
     id: str
     device_id: str
     ip_address: str | None = None
-    user_agent: str | None = None
+    status: str
     login_at: str
     logout_at: str | None = None
 

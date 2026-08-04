@@ -31,7 +31,7 @@ from src.models.shared_models import OrderItem as _OrderItemBase
 # Alias so string references like relationship("OrderItem") resolve correctly, and also expose for backwards compat.
 OrderItem = _OrderItemBase
 
-from src.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDMixin
+from src.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDMixin  # noqa: E402  # after shared imports
 
 
 class OrderStatus(Enum):
@@ -80,7 +80,7 @@ class Order(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
     notes: str = Column(Text)
 
     customer: Customer = relationship("Customer", back_populates="orders")
-    warehouse: Optional["Warehouse"] = relationship("Warehouse")
+    warehouse: Optional["Warehouse"] = relationship("Warehouse")  # noqa: F821
     items_list: list = relationship(
         "OrderItem", back_populates="order", uselist=True, overlaps="order",
         collection_class=list,
@@ -114,7 +114,7 @@ class OrderStatusLog(Base, UUIDMixin, TimestampMixin):
     remark: str | None = Column(Text, nullable=True)
 
     order: Order = relationship("Order", back_populates="status_logs")
-    operator: Optional["User"] = relationship("User")
+    operator: Optional["User"] = relationship("User")  # noqa: F821
 
     __table_args__ = (Index("ix_order_status_logs_order_id_created_at", "order_id", "created_at"),)
 

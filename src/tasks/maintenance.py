@@ -7,7 +7,9 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 
+import redis
 from sqlalchemy import delete, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from src.celery_app import app
@@ -49,7 +51,7 @@ async def cleanup_old_sync_logs(self):
         if deleted:
             logger.info("Cleaned up %d sync logs older than 30 days", deleted)
         return {"deleted_sync_logs": deleted}
-    except Exception:
+    except SQLAlchemyError:
         await session.rollback()
         raise
     finally:
@@ -199,7 +201,7 @@ async def compute_abc_xyz_analysis(self):
                         json.dumps(matrix, default=str),
                     )
                     logger.info("ABC‑XYZ matrix cached in Redis")
-        except Exception:
+        except (redis.RedisError, ConnectionError, TimeoutError):
             logger.warning("Redis unavailable — ABC‑XYZ matrix not cached")
 
         total = sum(len(v) for v in matrix.values())

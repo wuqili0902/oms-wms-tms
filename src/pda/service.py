@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import UTC, datetime
 
+from fastapi import WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,7 +44,7 @@ async def enqueue_mutation(
 
     try:
         await _manager.broadcast(broadcast_payload)
-    except Exception as e:
+    except (WebSocketDisconnect, ConnectionError) as e:
         logger.warning("PDA WS broadcast failed for mutation %s: %s", mutation.id, e)
 
     return mutation
@@ -74,7 +75,11 @@ async def process_pending_mutations(db: AsyncSession, batch_size: int = 50) -> d
             )
             m.synced_at = datetime.now(UTC)
             accepted += 1
-        except Exception:
+        except Exception as e:
+            logger.error(
+                "Mutation %s (%s/%s) failed, retrying: %s",
+                m.id, m.entity_type, m.operation, e, exc_info=True,
+            )
             m.retry_count = (m.retry_count or 0) + 1
             failed += 1
     await db.commit()

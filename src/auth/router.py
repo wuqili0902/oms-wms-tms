@@ -21,7 +21,7 @@ from src.auth.schemas import (
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
 from src.core.exceptions import NotFoundException, ValidationException
-from src.core.rate_limiter import rate_limit, rate_limiter
+from src.core.rate_limiter import rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

@@ -4,10 +4,19 @@
 from src.cache.decorators import cached, distributed_lock, rate_limit  # noqa: F401
 from src.cache.redis_client import get_redis, redis_health_check  # noqa: F401
 
+# Memory cache fallback (used when Redis is unavailable)
+try:
+    from src.cache.redis_client import get_memory_cache  # noqa: F401
+except ImportError:
+    pass
+
+
 __all__ = [
     "get_redis",
     "redis_health_check",
     "cached",
     "rate_limit",
     "distributed_lock",
+    "get_memory_cache",
 ]
+

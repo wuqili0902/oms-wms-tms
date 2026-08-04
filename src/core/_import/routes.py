@@ -1,11 +1,11 @@
 """REST API endpoints for CSV imports."""
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.database import get_db
 from src.core._import import import_csv_handler
-from src.core._import.import_orders import handle_orders_import
 from src.core._import.import_inventory import handle_inventory_import
+from src.core._import.import_orders import handle_orders_import
+from src.core.database import get_db
 
 router = APIRouter(prefix="/import", tags=["import"])
 

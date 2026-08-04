@@ -1,6 +1,10 @@
+"""Async Redis client with connection pooling, health checks, and an in-memory fallback cache."""
+
 import logging
+from collections import OrderedDict
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import redis.asyncio as aioredis
 from redis.exceptions import ConnectionError, TimeoutError
@@ -97,3 +101,76 @@ async def redis_health_check() -> bool:
     except (ConnectionError, TimeoutError) as exc:
         logger.error("Redis health check failed: %s", str(exc))
         return False
+
+
+# ── In-memory fallback cache (used when Redis is unavailable) ────────────────
+
+class MemoryCache:
+    """Simple in-memory cache using OrderedDict for LRU eviction."""
+
+    def __init__(self, maxsize: int = 1000):
+        self._cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
+        self.maxsize = maxsize
+
+    def get(self, key: str) -> Any | None:
+        if key not in self._cache:
+            return None
+        value, _ = self._cache[key]
+        # Move to end (most recently used)
+        self._cache.move_to_end(key)
+        return value
+
+    def set(self, key: str, value: Any, expire: float | None = None) -> None:
+        if key in self._cache:
+            self._cache.pop(key)
+        else:
+            if len(self._cache) >= self.maxsize:
+                # Evict oldest entry
+                self._cache.popitem(last=False)
+        self._cache[key] = (value, expire or 0.0)
+
+    def delete(self, key: str) -> bool:
+        return self._cache.pop(key, None) is not None
+
+    def exists(self, key: str) -> bool:
+        return key in self._cache
+
+    def incr(self, key: str, delta: int = 1) -> int:
+        if key not in self._cache:
+            self.set(key, 0)
+        value, _ = self._cache[key]
+        self._cache[key] = (value + delta, self._cache[key][1])
+        return value + delta
+
+    def decr(self, key: str, delta: int = 1) -> int:
+        if key not in self._cache:
+            self.set(key, 0)
+        value, _ = self._cache[key]
+        self._cache[key] = (value - delta, self._cache[key][1])
+        return max(0, value - delta)
+
+    def expire(self, key: str, seconds: float) -> bool:
+        if key not in self._cache:
+            return False
+        _, current_expire = self._cache[key]
+        new_expire = min(current_expire + seconds, 86400 * 30)  # max 30 days
+        self._cache[key] = (self._cache[key][0], new_expire)
+        return True
+
+    def ttl(self, key: str) -> float | None:
+        if key not in self._cache:
+            return -1
+        _, expire = self._cache[key]
+        return max(0.0, expire)
+
+    def flushall(self) -> None:
+        self._cache.clear()
+
+
+# Singleton instance for use throughout the app
+_memory_cache = MemoryCache(maxsize=1000)
+
+
+def get_memory_cache() -> MemoryCache:
+    """Return the global memory cache singleton."""
+    return _memory_cache

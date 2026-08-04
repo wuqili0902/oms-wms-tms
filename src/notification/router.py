@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import UTC, datetime
 
@@ -145,7 +146,7 @@ async def notification_websocket(websocket: WebSocket):
             await websocket.close(code=4001)
             return
         user_id = uid
-    except Exception:
+    except (ValueError, json.JSONDecodeError, KeyError, WebSocketDisconnect):
         await websocket.close(code=4001)
         return
 

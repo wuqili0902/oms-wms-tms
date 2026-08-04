@@ -2,6 +2,7 @@
 import src.auth.models  # noqa: F401
 import src.barcode.models  # noqa: F401
 import src.core.models  # noqa: F401
+import src.logistics.models  # noqa: F401
 import src.notification.models  # noqa: F401
 import src.oms.models  # noqa: F401
 import src.pda.models  # noqa: F401

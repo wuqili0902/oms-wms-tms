@@ -4,16 +4,18 @@ This module provides various middleware classes that can be added to the FastAPI
 to enhance security, observability, and user experience.
 """
 
+import json
 import logging
 import uuid
 from datetime import datetime
 from typing import Any
 
 from fastapi import Request
+from jose import JWTError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from src.core.security import decode_token
+from src.core.security import TokenInvalid, decode_token
 
 # Configure structured logging for middleware
 logger = logging.getLogger("middleware")
@@ -145,7 +147,7 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 payload = decode_token(token)
                 if "sub" in payload:
                     return payload["sub"]
-            except Exception:
+            except (JWTError, TokenInvalid, json.JSONDecodeError, KeyError):
                 pass
         return "anonymous"
 
@@ -162,7 +164,7 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 return [str(item)[:100] for item in body[:20]]  # First 20 items
             else:
                 return str(body)[:500]  # Truncate large bodies
-        except Exception:
+        except (json.JSONDecodeError, RuntimeError):
             return "unable to parse request body"
 
 

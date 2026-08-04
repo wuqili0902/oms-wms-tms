@@ -89,7 +89,12 @@ async def download_barcode_file(
             data = f.read()
         from fastapi.responses import StreamingResponse
 
-        return StreamingResponse(io.BytesIO(data), media_type="application/zip", headers={"Content-Disposition": f"attachment; filename={filename}"})
+        disp = f"attachment; filename={filename}"
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="application/zip",
+            headers={"Content-Disposition": disp},
+        )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
 

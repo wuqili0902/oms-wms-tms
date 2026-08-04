@@ -53,7 +53,7 @@ class OrderItem(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
     status: str = Column(String(20), default="pending")
 
     # One-way relationship — Order has the back-reference via items_list
-    order: Mapped["Order"] | None = relationship("Order", foreign_keys=[order_id])  # type: ignore[name-defined]
+    order: Mapped["Order"] | None = relationship("Order", foreign_keys=[order_id])  # noqa: F821  # type: ignore[name-defined]
 
     __table_args__ = (
         Index("ix_order_items_gtin", "gtin"),
@@ -74,7 +74,7 @@ class OrderItem(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
 def _register_back_references() -> None:
     """Register bidirectional relationships between shared models and module-specific ones."""
     try:
-        from src.models.shared_models import Customer, OrderItem  # noqa: F811
+        from src.models.shared_models import Customer, OrderItem  # noqa: F401,F811
 
         if not hasattr(Customer, "orders"):
             return  # already configured or Owner hasn't loaded yet
@@ -87,7 +87,7 @@ def _register_back_references() -> None:
 def _configure_order_item_sku() -> None:
     """Register OrderItem.sku relationship pointing to WMS SKU model."""
     try:
-        from src.wms.models import SKU  # type: ignore[import-untyped]
+        from src.wms.models import SKU  # noqa: F401  # type: ignore[import-untyped]
 
         if not hasattr(OrderItem, "sku"):
             OrderItem.sku = relationship("SKU", foreign_keys=[OrderItem.sku_id])  # type: ignore[attr-defined]

@@ -54,3 +54,14 @@ class OrderHistoryResponse(BaseModel):
     operator: str
     remark: str
     created_at: str
+
+
+class MergeGroupResponse(BaseModel):
+    id: str
+    code: str
+    status: str
+    total_items: int
+    total_amount: str
+    notes: str
+    child_order_ids: list[str]
+    created_at: str

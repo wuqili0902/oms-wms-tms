@@ -7,6 +7,7 @@ import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from src.celery_app import app
@@ -56,7 +57,7 @@ async def process_stale_orders(self):
             await session.commit()
             logger.info("Flagged %d stale orders", count)
         return {"stale_orders_flagged": count}
-    except Exception:
+    except SQLAlchemyError:
         await session.rollback()
         raise
     finally:
@@ -100,7 +101,7 @@ async def auto_complete_picked_orders(self):
             await session.commit()
             logger.info("Auto-completed %d picked orders", completed)
         return {"orders_completed": completed}
-    except Exception:
+    except SQLAlchemyError:
         await session.rollback()
         raise
     finally:
@@ -140,7 +141,7 @@ async def cancel_abandoned_drafts(self):
             await session.commit()
             logger.info("Cancelled %d abandoned draft orders", cancelled)
         return {"orders_cancelled": cancelled}
-    except Exception:
+    except SQLAlchemyError:
         await session.rollback()
         raise
     finally:

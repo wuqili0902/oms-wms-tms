@@ -54,13 +54,14 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # RabbitMQ
-    rabbitmq_url: str = "amqp://guest:guest@localhost:5672/"
-
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
     workers: int = 4
+
+    # Rate limiting
+    rate_limit_requests: int = 100
+    rate_limit_window: int = 60
 
     # Logging
     log_level: str = "info"
@@ -84,7 +85,7 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     smtp_from: str = "noreply@oms-wms-tms.local"
 
-    # Outbox dispatch target (RabbitMQ HTTP API or internal webhook)
+    # Outbox dispatch target (internal webhook endpoint)
     outbox_dispatch_url: str = "http://localhost:8000/api/v1/events/ingest"
 
     # Firebase Cloud Messaging (push notifications)

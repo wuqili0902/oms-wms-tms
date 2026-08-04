@@ -9,6 +9,7 @@ from src.core.exceptions import ValidationException as AppValidationException
 from src.oms import merge as merge_service
 from src.oms import service as oms_service
 from src.oms.schemas import (
+    MergeGroupResponse,
     OrderCreate,
     OrderHistoryResponse,
     OrderListResponse,
@@ -151,7 +152,7 @@ async def merge_orders(
     return group
 
 
-@router.get("/merge/{group_id}")
+@router.get("/merge/{group_id}", response_model=MergeGroupResponse)
 async def get_merge_group(
     group_id: str,
     db=Depends(get_db),

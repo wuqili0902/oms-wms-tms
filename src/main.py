@@ -20,6 +20,7 @@ from src.auth import auth_router as auth_router
 from src.barcode.router import router as barcode_router
 from src.config import settings
 from src.connectors.router import router as connectors_router
+from src.core._import.routes import router as import_routes
 from src.core.csrf import CsrfMiddleware
 from src.core.database import engine
 from src.core.exceptions import (
@@ -34,13 +35,14 @@ from src.core.middleware import AuditLogMiddleware, RequestIDMiddleware, Request
 from src.core.rate_limiter import rate_limiter
 from src.core.response import error_response
 from src.core.tracing import setup_tracing
+from src.logistics.router import router as logistics_router
 from src.notification.router import router as notification_router
 from src.oms.router import router as oms_router
 from src.pda.router import router as pda_router
+from src.stock.router import router as stock_router
 from src.tms.router import router as tms_router
 from src.webhooks.router import router as webhooks_router
 from src.wms.router import router as wms_router
-from src.core._import.routes import router as import_routes
 
 # Configure logging
 log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
@@ -144,6 +146,7 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(oms_router, prefix="/api/v1")
 app.include_router(wms_router, prefix="/api/v1")
 app.include_router(barcode_router, prefix="/api/v1")
+app.include_router(logistics_router, prefix="/api/v1")
 app.include_router(tms_router, prefix="/api/v1")
 app.include_router(mobile_router, prefix="/api/v1")
 app.include_router(connectors_router, prefix="/api/v1")
@@ -151,6 +154,7 @@ app.include_router(notification_router)
 app.include_router(analytics_router)
 app.include_router(admin_router)  # no /api/v1 prefix — these are HTML pages, not REST
 app.include_router(import_routes, prefix="/api/v1")
+app.include_router(stock_router, prefix="/api/v1")
 app.include_router(pda_router)
 app.include_router(webhooks_router)
 

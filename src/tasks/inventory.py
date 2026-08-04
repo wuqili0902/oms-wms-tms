@@ -8,7 +8,7 @@ from sqlalchemy import select
 from src.celery_app import celery
 from src.core.database import async_session_factory
 from src.oms.models import Order as _Order
-from src.oms.models import OrderStatus as _order_status
+from src.oms.models import OrderStatus as _order_status  # noqa: N813
 from src.tms.models import SyncLog, SyncLogStatus, SyncLogType
 from src.wms.models import Inventory as WMS_Inventory
 
@@ -111,7 +111,8 @@ async def cancel_expired_orders(self) -> int:
 
     async with async_session_factory() as session:
         result = await session.execute(select(_Order).where(_Order.status == _order_status.PENDING))
-        old_orders = [o for o in result.scalars().all() if (datetime.now(UTC).replace(tzinfo=None) - o.created_at.replace(tzinfo=None)).days > 7]
+        now = datetime.now(UTC).replace(tzinfo=None)
+        old_orders = [o for o in result.scalars().all() if (now - o.created_at.replace(tzinfo=None)).days > 7]
 
         count = 0
         for order in old_orders:
@@ -133,7 +134,8 @@ async def process_pending_orders(self) -> dict:
     async with async_session_factory() as session:
         result = await session.execute(select(_Order).where(
             _Order.status == _order_status.PENDING))
-        ready = [o for o in result.scalars().all() if (datetime.now(UTC).replace(tzinfo=None) - o.created_at.replace(tzinfo=None)).days >= 1]
+        now2 = datetime.now(UTC).replace(tzinfo=None)
+        ready = [o for o in result.scalars().all() if (now2 - o.created_at.replace(tzinfo=None)).days >= 1]
 
         count = 0
         for order in ready:

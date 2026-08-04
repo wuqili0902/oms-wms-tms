@@ -4,7 +4,7 @@ All CRUD functions are async and require an ``AsyncSession``.
 Maps ORM model fields to schema/Pydantic response field names.
 """
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -19,6 +19,8 @@ from src.wms.models import (
     CreditMemo,
     CreditMemoLine,
     Inventory,
+    InventoryChangeType,
+    InventoryLog,
     Invoice,
     InvoiceLine,
     Location,
@@ -191,7 +193,9 @@ def _loc_to_dict(loc: Location) -> dict:
     return d
 
 
-async def list_locations(db: AsyncSession, wh_id: str | None = None, page: int | None = None, page_size: int | None = None) -> list[dict] | dict:
+async def list_locations(
+    db: AsyncSession, wh_id: str | None = None, page: int | None = None, page_size: int | None = None
+) -> list[dict] | dict:
     """List locations with optional warehouse filter."""
     stmt = select(Location)
     if wh_id:
@@ -788,7 +792,11 @@ async def get_purchase_order(db: AsyncSession, po_id: str) -> dict:
     return model_to_dict(po)
 
 
-async def list_purchase_orders(db: AsyncSession, page: int | None = None, page_size: int | None = None) -> list[dict] | dict:
+async def list_purchase_orders(
+    db: AsyncSession,
+    page: int | None = None,
+    page_size: int | None = None,
+) -> list[dict] | dict:
     stmt = select(PurchaseOrder).order_by(PurchaseOrder.created_at.desc())
     if page is not None and page_size is not None:
         result = await paginate(stmt, db, page=page, page_size=page_size)
@@ -922,3 +930,253 @@ async def get_credit_memo(db: AsyncSession, cm_id: str) -> dict:
 async def list_credit_memos(db: AsyncSession) -> list[dict]:
     result = await db.execute(select(CreditMemo).order_by(CreditMemo.created_at.desc()))
     return [model_to_dict(cm) for cm in result.scalars().all()]
+
+
+# ── Stock In / Out (入库/出库) ───────────────────────────────────────────────
+
+async def stock_in(
+    db: AsyncSession,
+    warehouse_id: str,
+    data: dict,
+    current_user: dict,
+) -> dict:
+    """录入商品到仓库（SKU、数量、批次号），返回操作后的实时库存快照。
+
+    调用方传入单个 SKU 入库项：
+      - sku: 商品编码
+      - quantity: 入库数量
+      - batch_no / expiry_date / manufacturing_date: 批次信息（可选）
+
+    系统会：
+      1. 校验仓库存在且状态为 active
+      2. 自动创建/更新库存记录（按批次号匹配，无则新建）
+      3. 写入 InventoryLog 审计日志
+      4. 返回该 SKU 在该仓库的最新库存快照
+
+    注意：本函数只处理单 SKU 入库。如需批量入库，调用方应多次调用或自行聚合后一次性提交。
+    """
+    wh_id = _to_uuid(warehouse_id)
+
+    # 1. 校验仓库存在且状态为 active
+    wh_result = await db.execute(select(Warehouse).where(Warehouse.id == wh_id))
+    wh = wh_result.scalar_one_or_none()
+    if not wh:
+        raise NotFoundException(message=f"Warehouse {wh_id} not found")
+    if wh.status != WarehouseStatus.ACTIVE.value:
+        raise ValidationException(message=f"Warehouse {wh.code} is inactive (status={wh.status})")
+
+    # 2. 解析入库项数据
+    sku_str = data["sku"]
+    qty = Decimal(str(data["quantity"]))
+    batch_no = data.get("batch_no", "DEFAULT")
+    expiry_date = data.get("expiry_date")
+    manufacturing_date = data.get("manufacturing_date")
+
+    # 3. 查找或创建 SKU
+    sku_result = await db.execute(select(SKU).where(SKU.sku == sku_str))
+    sku = sku_result.scalar_one_or_none()
+    if not sku:
+        sku = SKU(id=uuid.uuid4(), sku=sku_str, name=sku_str)
+        db.add(sku)
+        await db.flush()
+
+    # 4. 查找现有库存记录（按仓库 +SKU+ 批次号）
+    inv_result = await db.execute(
+        select(Inventory).where(
+            Inventory.warehouse_id == wh_id,
+            Inventory.sku_id == sku.id,
+            Inventory.batch_no == batch_no,
+        )
+    )
+    inv = inv_result.scalar_one_or_none()
+
+    now = _now()
+
+    if qty > 0:
+        # ── 入库（增加库存） ───────────────────────────────────────────────────
+        if inv:
+            new_qty = Decimal(str(inv.quantity)) + qty
+            inv.quantity = new_qty
+            inv.updated_at = now
+            if expiry_date and not inv.expiry_date:
+                inv.expiry_date = expiry_date
+            if manufacturing_date and not inv.manufacturing_date:
+                inv.manufacturing_date = manufacturing_date
+        else:
+            # 新建库存记录
+            inv = Inventory(
+                id=uuid.uuid4(),
+                warehouse_id=wh_id,
+                sku_id=sku.id,
+                gtin="",
+                batch_no=batch_no,
+                expiry_date=expiry_date,
+                manufacturing_date=manufacturing_date,
+                received_at=now,
+                quantity=qty,
+                locked_qty=Decimal(0),
+                min_qty=Decimal(0),
+                max_qty=Decimal(0),
+            )
+            db.add(inv)
+
+        # 写入审计日志（入库）
+        log = InventoryLog(
+            id=uuid.uuid4(),
+            inventory_id=inv.id,
+            change_type=InventoryChangeType.INBOUND,
+            quantity_change=qty,
+            quantity_before=float(inv.quantity) - qty if inv else 0.0,
+            quantity_after=float(inv.quantity),
+            reference_type="stock_in",
+            reference_id=str(inv.id),
+            operator_id=_to_uuid(current_user.get("id")) if current_user.get("id") else None,
+            remark=data.get("remark"),
+        )
+        db.add(log)
+
+    else:
+        # ── 出库（减少库存） ───────────────────────────────────────────────────
+        need = abs(qty)
+        batches = await _pick_batches(
+            db, wh_id, inv.location_id if inv else None, sku.id, need,
+            strategy=data.get("picking_strategy", "fefo"),
+        )
+        if not batches or sum(b["available"] for b in batches) < need:
+            raise ValidationException(message="Insufficient stock")
+
+        # 扣减第一个批次（FEFO）
+        inv = batches[0]["inv"]
+        inv.quantity = Decimal(str(inv.quantity)) + qty  # qty is negative
+        inv.updated_at = now
+
+        # 写入审计日志（出库）
+        log = InventoryLog(
+            id=uuid.uuid4(),
+            inventory_id=inv.id,
+            change_type=InventoryChangeType.OUTBOUND,
+            quantity_change=qty,
+            quantity_before=float(inv.quantity) - qty if inv else 0.0,
+            quantity_after=float(inv.quantity),
+            reference_type="stock_in",
+            reference_id=str(inv.id),
+            operator_id=_to_uuid(current_user.get("id")) if current_user.get("id") else None,
+            remark=data.get("remark"),
+        )
+        db.add(log)
+
+    # 5. 提交事务并返回库存快照
+    await db.commit()
+    await db.refresh(inv)
+    return _inv_to_dict(inv, sku_str)
+
+
+async def stock_out(
+    db: AsyncSession,
+    warehouse_id: str,
+    data: dict,
+    current_user: dict,
+) -> dict:
+    """出库（减少库存），返回操作后的实时库存快照。
+
+    调用方传入单个 SKU 出库项：
+      - sku: 商品编码
+      - quantity: 出库数量（正数）
+      - picking_strategy: 拣货策略（默认"fefo"）
+      - remark: 备注
+
+    系统会按 FEFO/FIFO 自动选择批次扣减库存，并写入审计日志。
+    """
+    wh_id = _to_uuid(warehouse_id)
+
+    # 1. 校验仓库存在且状态为 active
+    wh_result = await db.execute(select(Warehouse).where(Warehouse.id == wh_id))
+    wh = wh_result.scalar_one_or_none()
+    if not wh:
+        raise NotFoundException(message=f"Warehouse {wh_id} not found")
+    if wh.status != WarehouseStatus.ACTIVE.value:
+        raise ValidationException(message=f"Warehouse {wh.code} is inactive (status={wh.status})")
+
+    # 2. 解析出库项数据
+    sku_str = data["sku"]
+    qty = Decimal(str(data["quantity"]))
+    strategy = data.get("picking_strategy", "fefo")
+
+    # 3. 查找或创建 SKU
+    sku_result = await db.execute(select(SKU).where(SKU.sku == sku_str))
+    sku = sku_result.scalar_one_or_none()
+    if not sku:
+        sku = SKU(id=uuid.uuid4(), sku=sku_str, name=sku_str)
+        db.add(sku)
+        await db.flush()
+
+    # 4. 查找现有库存记录（按仓库 +SKU）
+    inv_result = await db.execute(
+        select(Inventory).where(
+            Inventory.warehouse_id == wh_id,
+            Inventory.sku_id == sku.id,
+            Inventory.quantity > 0,
+        )
+    )
+    inventory_rows = inv_result.scalars().all()
+
+    if not inventory_rows:
+        raise ValidationException(message="No stock available for this SKU in this warehouse")
+
+    # 5. 按策略排序并扣减
+    batches = []
+    for inv in inventory_rows:
+        available = Decimal(str(inv.quantity)) - Decimal(str(inv.locked_qty))
+        if available > 0:
+            batches.append({"inv": inv, "available": available})
+
+    # 应用策略排序（FEFO / FIFO / BATCH）
+    if strategy == "fefo":
+
+        def sort_fefo(b):  # noqa: D103
+            return (b["inv"].expiry_date or date.max, b["inv"].received_at or datetime.min)
+
+        batches.sort(key=sort_fefo)
+    elif strategy == "fifo":
+
+        def sort_fifo(b):  # noqa: D103
+            return (b["inv"].received_at or datetime.min, b["inv"].batch_no or "")
+
+        batches.sort(key=sort_fifo)
+    else:  # batch
+        batches.sort(key=lambda b: b["inv"].batch_no or "", reverse=True)
+
+    need = qty
+    total_available = sum(b["available"] for b in batches)
+    if total_available < need:
+        raise ValidationException(message="Insufficient stock")
+
+    # 扣减库存（从第一个批次开始）
+    remaining = need
+    for batch in batches:
+        inv = batch["inv"]
+        take = min(remaining, Decimal(str(inv.quantity)) - Decimal(str(inv.locked_qty)))
+        if take > 0:
+            inv.quantity = Decimal(str(inv.quantity)) - take
+            inv.updated_at = _now()
+            remaining -= take
+
+    # 6. 写入审计日志（出库）
+    log = InventoryLog(
+        id=uuid.uuid4(),
+        inventory_id=batches[0]["inv"].id,
+        change_type=InventoryChangeType.OUTBOUND,
+        quantity_change=-qty,
+        quantity_before=float(batches[0]["inv"].quantity) + qty,
+        quantity_after=float(batches[0]["inv"].quantity),
+        reference_type="stock_out",
+        operator_id=_to_uuid(current_user.get("id")) if current_user.get("id") else None,
+        remark=data.get("remark"),
+    )
+    db.add(log)
+
+    # 7. 提交事务并返回库存快照
+    await db.commit()
+    await db.refresh(batches[0]["inv"])
+    return _inv_to_dict(batches[0]["inv"], sku_str)
+
