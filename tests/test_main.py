@@ -26,7 +26,6 @@ from src.main import (
     lifespan,
 )
 
-
 # ── Exception handler tests (direct function calls) ──────────────────────
 # We test handlers as callables (not through HTTP) because Starlette's
 # BaseHTTPMiddleware re-raises exceptions even after ExceptionMiddleware
@@ -131,7 +130,7 @@ async def test_sentry_init():
     with patch("src.main.settings.sentry_dsn", "https://key@sentry.io/proj"), \
          patch("src.main.settings.environment", "production"), \
          patch("src.main.sentry_sdk.init") as mock_init:
-        mod = importlib.reload(importlib.import_module("src.main"))
+        _ = importlib.reload(importlib.import_module("src.main"))
     mock_init.assert_called_once()
 
 

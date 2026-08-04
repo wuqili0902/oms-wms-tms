@@ -1,8 +1,6 @@
 """Tests for src.core.models — AddressMaster and resolve_address."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 
 class TestAddressMaster:

@@ -1,5 +1,4 @@
 import json
-import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -8,8 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from src.core.database import get_db
 from src.main import app
 from src.webhooks.models import WebhookEvent, WebhookStatus, WebhookTarget
-from src.webhooks.service import dispatch_event, _do_dispatch
-from src.webhooks.router import WebhookCreate
+from src.webhooks.service import _do_dispatch, dispatch_event
 from tests.conftest import _SharedSession
 
 
@@ -95,8 +93,9 @@ async def test_dispatch_event_delivery_failure(sqlite_engine, db_session):
         mock_httpx.return_value.__aenter__.return_value = mock_client
         await _do_dispatch(db_session, WebhookEvent.ORDER_CREATED, {"test": True})
 
-    from src.webhooks.models import DeliveryStatus, WebhookDeliveryLog
     from sqlalchemy import select
+
+    from src.webhooks.models import DeliveryStatus, WebhookDeliveryLog
     logs = (await db_session.execute(
         select(WebhookDeliveryLog).where(WebhookDeliveryLog.target_id == target.id)
     )).scalars().all()
@@ -234,8 +233,8 @@ async def test_webhook_delete_not_found(sqlite_engine):
 @pytest.mark.asyncio
 async def test_dispatch_event_no_db_session(sqlite_engine, db_session):
     """Test the code path where dispatch_event() creates its own session."""
+    from src.webhooks.models import WebhookStatus, WebhookTarget
     from src.webhooks.service import dispatch_event
-    from src.webhooks.models import WebhookTarget, WebhookStatus
 
     target = WebhookTarget(
         name="Auto Session Target",
@@ -307,8 +306,9 @@ async def test_webhook_update_invalid_event(sqlite_engine):
     from src.core.security import create_access_token
     token = create_access_token({"sub": "testuser", "uid": uid})
 
-    from src.webhooks.models import WebhookStatus, WebhookTarget
     import json
+
+    from src.webhooks.models import WebhookStatus, WebhookTarget
     target = WebhookTarget(name="Update Target", url="http://x.com",
                            events=json.dumps(["order.created"]), status=WebhookStatus.ACTIVE)
     shared.session.add(target)
@@ -341,8 +341,9 @@ async def test_webhook_update_partial_fields(sqlite_engine):
     from src.core.security import create_access_token
     token = create_access_token({"sub": "testuser", "uid": uid})
 
-    from src.webhooks.models import WebhookStatus, WebhookTarget
     import json
+
+    from src.webhooks.models import WebhookStatus, WebhookTarget
     target = WebhookTarget(name="Partial", url="http://x.com",
                            events=json.dumps(["order.created"]), status=WebhookStatus.ACTIVE)
     shared.session.add(target)

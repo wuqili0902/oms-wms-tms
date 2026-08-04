@@ -5,7 +5,7 @@ import pytest
 # --- carrier code validation -------------------------------------------------
 
 def test_validate_carrier_valid():
-    from src.logistics.carriers import validate_carrier, CarrierCode
+    from src.logistics.carriers import CarrierCode, validate_carrier
     assert validate_carrier("sf") is CarrierCode.SF
     assert validate_carrier("SF") is CarrierCode.SF
     assert validate_carrier("zto") is CarrierCode.ZTO
@@ -23,13 +23,13 @@ def test_validate_carrier_invalid():
 # --- tracking number generation ----------------------------------------------
 
 def test_generate_tracking_number_sf():
-    from src.logistics.carriers import generate_tracking_number, CarrierCode
+    from src.logistics.carriers import CarrierCode, generate_tracking_number
     n = generate_tracking_number(CarrierCode.SF, "order-abc")
     assert len(n) == 16 and n.startswith("SF")
 
 
 def test_generate_tracking_number_zto():
-    from src.logistics.carriers import generate_tracking_number, CarrierCode
+    from src.logistics.carriers import CarrierCode, generate_tracking_number
     n = generate_tracking_number(CarrierCode.ZTO, "xyz")
     assert len(n) == 16 and n.startswith("ZT")
 
@@ -37,14 +37,14 @@ def test_generate_tracking_number_zto():
 # --- tracking URL -------------------------------------------------------------
 
 def test_get_tracking_url_sf():
-    from src.logistics.carriers import get_tracking_url, CarrierCode
+    from src.logistics.carriers import CarrierCode, get_tracking_url
     url = get_tracking_url(CarrierCode.SF, "nu123")
     # SF uses path-segment form: /waybill-detail/nu123 (no query param)
     assert "/waybill-detail/nu123" in url
 
 
 def test_get_tracking_url_zto():
-    from src.logistics.carriers import get_tracking_url, CarrierCode
+    from src.logistics.carriers import CarrierCode, get_tracking_url
     url = get_tracking_url(CarrierCode.ZTO, "AB12")
     # ZTO uses query-param form: /track/?nu=...
     assert "/?nu=" in url
@@ -82,7 +82,7 @@ def test_mock_tracking_all_buckets(tracking, expected_status):
 
 
 def test_generate_tracking_number_without_order_id():
-    from src.logistics.carriers import generate_tracking_number, CarrierCode
+    from src.logistics.carriers import CarrierCode, generate_tracking_number
     n = generate_tracking_number(CarrierCode.JD)
     assert len(n) == 16 and n.startswith("JD")
 
@@ -95,7 +95,7 @@ def test_get_tracking_url_empty_template():
 
 @pytest.mark.asyncio
 async def test_estimate_shipping_mock():
-    from src.logistics.carriers import estimate_shipping, CarrierCode
+    from src.logistics.carriers import CarrierCode, estimate_shipping
     d = await estimate_shipping(CarrierCode.ZTO, origin="上海", destination="北京", weight_kg=5.0)
     # base=8.0 + (5-1)*5 = 8+20 = 28
     assert d["estimated_cost_yuan"] == 28.0
@@ -107,7 +107,7 @@ async def test_estimate_shipping_mock():
 
 @pytest.mark.asyncio
 async def test_estimate_shipping_mock_1kg():
-    from src.logistics.carriers import estimate_shipping, CarrierCode
+    from src.logistics.carriers import CarrierCode, estimate_shipping
     d = await estimate_shipping(CarrierCode.SF, weight_kg=1.0)
     assert d["estimated_cost_yuan"] == 18.0  # base rate, no weight surcharge
     assert d["estimated_days"] == 2
@@ -115,7 +115,7 @@ async def test_estimate_shipping_mock_1kg():
 
 @pytest.mark.asyncio
 async def test_estimate_shipping_default_carrier():
-    from src.logistics.carriers import estimate_shipping, CarrierCode
+    from src.logistics.carriers import estimate_shipping
 
     class _FakeCarrier:
         value = "unknown"
@@ -127,8 +127,9 @@ async def test_estimate_shipping_default_carrier():
 
 @pytest.mark.asyncio
 async def test_query_tracking_real_api():
-    from src.logistics.carriers import query_tracking, CarrierCode
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
+    from src.logistics.carriers import CarrierCode, query_tracking
 
     endpoints = {"zto": "https://mock-api.zto.com/track"}
     with patch("src.logistics.carriers._get_carrier_endpoints", return_value=endpoints):
@@ -150,8 +151,9 @@ async def test_query_tracking_real_api():
 
 @pytest.mark.asyncio
 async def test_query_tracking_real_api_fallback():
-    from src.logistics.carriers import query_tracking, CarrierCode
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
+    from src.logistics.carriers import CarrierCode, query_tracking
 
     endpoints = {"zto": "https://mock-api.zto.com/track"}
     with patch("src.logistics.carriers._get_carrier_endpoints", return_value=endpoints):
@@ -167,8 +169,9 @@ async def test_query_tracking_real_api_fallback():
 
 @pytest.mark.asyncio
 async def test_estimate_shipping_real_api():
-    from src.logistics.carriers import estimate_shipping, CarrierCode
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
+    from src.logistics.carriers import CarrierCode, estimate_shipping
 
     endpoints = {"zto": "https://mock-api.zto.com/estimate"}
     with patch("src.logistics.carriers._get_carrier_endpoints", return_value=endpoints):
@@ -187,8 +190,9 @@ async def test_estimate_shipping_real_api():
 
 @pytest.mark.asyncio
 async def test_estimate_shipping_real_api_fallback():
-    from src.logistics.carriers import estimate_shipping, CarrierCode
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
+    from src.logistics.carriers import CarrierCode, estimate_shipping
 
     endpoints = {"zto": "https://mock-api.zto.com/estimate"}
     with patch("src.logistics.carriers._get_carrier_endpoints", return_value=endpoints):
@@ -203,8 +207,9 @@ async def test_estimate_shipping_real_api_fallback():
 
 
 def test_get_carrier_endpoints_with_settings():
-    from src.logistics.carriers import _get_carrier_endpoints
     from unittest.mock import patch
+
+    from src.logistics.carriers import _get_carrier_endpoints
 
     class FakeSettings:
         carrier_api_endpoints_dict = {"sf": "https://api.sf.com/track"}
@@ -215,8 +220,9 @@ def test_get_carrier_endpoints_with_settings():
 
 
 def test_get_carrier_endpoints_error():
+    from unittest.mock import MagicMock, patch
+
     from src.logistics.carriers import _get_carrier_endpoints
-    from unittest.mock import patch, MagicMock
 
     fake = MagicMock()
     del fake.carrier_api_endpoints_dict

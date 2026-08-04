@@ -1,14 +1,13 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+﻿from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.main import app
 from src.core.database import get_db
+from src.main import app
 from src.pda.models import PendingMutation, SyncOperation
 from src.pda.service import enqueue_mutation, process_pending_mutations
-from src.pda.router import create_mutation, sync_mutations
 
 
 @pytest.fixture
@@ -109,7 +108,7 @@ class TestProcessPendingMutations:
         mock_db.commit = AsyncMock()
 
         with patch("src.core.outbox.append_event", new_callable=AsyncMock):
-            result = await process_pending_mutations(mock_db, batch_size=2)
+            await process_pending_mutations(mock_db, batch_size=2)
 
         call_args = mock_db.execute.call_args[0][0]
         qs = str(call_args)
@@ -160,7 +159,7 @@ class TestProcessPdaSyncQueue:
         """When there are no pending mutations, returns pushed=0."""
         mock_svc = MagicMock()
         mock_svc.get_pending.return_value = []
-        monkeypatch.setattr("src.core.offline.SyncQueueService", lambda path: mock_svc)
+        monkeypatch.setattr("src.tasks.sync.SyncQueueService", lambda path: mock_svc)
 
         from src.tasks.sync import process_pda_sync_queue as _t  # noqa: F811
         result = await _t(local_db_path=":memory:")
@@ -176,7 +175,7 @@ class TestProcessPdaSyncQueue:
                                   "entity_id": "INV-001", "operation": "update",
                                   "payload": '{"qty": 5}'})()
         mock_svc.get_pending.return_value = [r1, r2]
-        monkeypatch.setattr("src.core.offline.SyncQueueService", lambda path: mock_svc)
+        monkeypatch.setattr("src.tasks.sync.SyncQueueService", lambda path: mock_svc)
 
         class FakeResp:
             status_code = 200
@@ -204,7 +203,7 @@ class TestProcessPdaSyncQueue:
 
         async def mock_post(*args, **kwargs):
             return fake_response
-        
+
         class FakeClient:
             def __init__(self, timeout=None): pass
             async def __aenter__(self): return self
@@ -220,15 +219,15 @@ class TestProcessPdaSyncQueue:
             def get_pending(self, limit=50): return [record]
             def mark_failed(self, rid, reason): self.failed_records.append((rid, reason))
             def mark_synced(self, ids): pass
-        
-        monkeypatch.setattr("src.core.offline.SyncQueueService", FakeSvc)
+
+        monkeypatch.setattr("src.tasks.sync.SyncQueueService", FakeSvc)
 
         from src.tasks.sync import process_pda_sync_queue as _t  # noqa: F811
         result = await _t(local_db_path="wms_pda.db")
         assert result == {"pushed": 0, "failed": 1}
 
     async def test_process_pda_sync_queue_partial_success(self, monkeypatch):
-        """Mix of successes and failures — only successful ones marked synced."""
+        """Mix of successes and failures 鈥?only successful ones marked synced."""
         r1 = type("_Record", (), {"id": 4, "entity_type": "Order", "entity_id": "ORD-003",
                                   "operation": "create", "payload": "{}"})()
         r2 = type("_Record", (), {"id": 5, "entity_type": "Inventory", "entity_id": "INV-002",
@@ -265,7 +264,7 @@ class TestProcessPdaSyncQueue:
             def mark_synced(self, ids): return len(ids) if isinstance(ids, list) else 0
 
         monkeypatch.setattr("src.tasks.sync.httpx.AsyncClient", FakeClient2)
-        monkeypatch.setattr("src.core.offline.SyncQueueService", FakeSvc2)
+        monkeypatch.setattr("src.tasks.sync.SyncQueueService", FakeSvc2)
 
         from src.tasks.sync import process_pda_sync_queue as _t  # noqa: F811
         result = await _t(local_db_path=":memory:")
@@ -274,7 +273,7 @@ class TestProcessPdaSyncQueue:
         assert captured["failed_records"] == [(5, 'timeout')]
 
     async def test_process_pda_sync_queue_multiple_failures(self, monkeypatch):
-        """All items fail — no pushed count, only failures."""
+        """All items fail 鈥?no pushed count, only failures."""
         records = [
             type("_Record", (), {"id": i, "entity_type": "Order",
                                   "entity_id": f"ORD-{i}", "operation": "create",
@@ -309,11 +308,13 @@ class TestProcessPdaSyncQueue:
             def mark_synced(self, ids): pass
 
         monkeypatch.setattr("src.tasks.sync.httpx.AsyncClient", FakeClient3)
-        monkeypatch.setattr("src.core.offline.SyncQueueService", FakeSvc3)
+        monkeypatch.setattr("src.tasks.sync.SyncQueueService", FakeSvc3)
 
         from src.tasks.sync import process_pda_sync_queue as _t  # noqa: F811
         result = await _t(local_db_path="wms_pda.db")
         assert result["pushed"] == 0
         assert result["failed"] == len(records)
         # All 5 items should be in failed_records
-        assert captured["failed_records"] == [(10, "timeout"), (11, "timeout"), (12, "timeout"), (13, "timeout"), (14, "timeout")]
+        assert captured["failed_records"] == [
+            (10, "timeout"), (11, "timeout"), (12, "timeout"), (13, "timeout"), (14, "timeout")
+        ]

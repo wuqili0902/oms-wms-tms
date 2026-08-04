@@ -1,14 +1,15 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from httpx import AsyncClient, ASGITransport
+
+import pytest
+from fastapi import WebSocket
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.main import app
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
-from src.notification.models import Notification, NotificationPreference, NotificationType, NotificationChannel
+from src.main import app
+from src.notification.models import Notification, NotificationChannel, NotificationPreference, NotificationType
 from src.notification.router import notification_websocket
-from fastapi import WebSocket
 
 
 @pytest.fixture

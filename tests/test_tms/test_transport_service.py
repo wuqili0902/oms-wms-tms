@@ -1,6 +1,5 @@
 """Tests for new TMS transport order functionality."""
 import uuid
-from datetime import date, timedelta
 
 import pytest
 
@@ -267,8 +266,9 @@ class TestReturnOrderEdgeCases:
 
     @pytest.mark.asyncio
     async def test_mark_shipment_received(self, db_session):
-        from src.tms.models import ReturnOrder, ReturnShipmentStatus
         from sqlalchemy import select
+
+        from src.tms.models import ReturnOrder, ReturnShipmentStatus
         ret = await tms_service.create_return_order(db_session, {
             "reason": "damaged", "pickup_address": {}, "refund_amount": "100",
         })

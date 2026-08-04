@@ -8,7 +8,6 @@ import pytest
 
 from src.core.exceptions import NotFoundException, ValidationException
 from src.wms import service as wms_service
-from src.wms.models import WarehouseType
 
 
 class TestWarehouseCRUD:
@@ -366,8 +365,12 @@ class TestAddressCRUD:
     @pytest.mark.asyncio
     async def test_list_addresses_filter(self, db_session):
         eid = str(uuid.uuid4())
-        await wms_service.create_address(db_session, {"entity_type": "vendor", "entity_id": eid, "address_type": "billing"})
-        await wms_service.create_address(db_session, {"entity_type": "customer", "entity_id": eid, "address_type": "shipping"})
+        await wms_service.create_address(
+            db_session, {"entity_type": "vendor", "entity_id": eid, "address_type": "billing"}
+        )
+        await wms_service.create_address(
+            db_session, {"entity_type": "customer", "entity_id": eid, "address_type": "shipping"}
+        )
         filtered = await wms_service.list_addresses(db_session, entity_type="vendor")
         assert len(filtered) == 1
 
@@ -431,7 +434,7 @@ class TestAdjustInventoryBranches:
     async def test_adjust_with_expiry_date_on_existing(self, db_session):
         wh = await wms_service.create_warehouse(db_session, {"code": "WH-EXP", "name": "Exp"})
         loc = await wms_service.create_location(db_session, wh["id"], {"zone": "Z"})
-        from datetime import datetime, timedelta, date
+        from datetime import datetime, timedelta
 
         await wms_service.adjust_inventory(db_session, {
             "warehouse_id": wh["id"], "location_id": loc["id"], "sku": "SKU-EXP", "quantity": "10",
@@ -534,8 +537,12 @@ class TestInvoiceCRUD:
 
     @pytest.mark.asyncio
     async def test_list_invoices(self, db_session):
-        await wms_service.create_invoice(db_session, {"invoice_number": "INV-L1", "entity_type": "purchase_order", "amount": "10"})
-        await wms_service.create_invoice(db_session, {"invoice_number": "INV-L2", "entity_type": "purchase_order", "amount": "20"})
+        await wms_service.create_invoice(
+            db_session, {"invoice_number": "INV-L1", "entity_type": "purchase_order", "amount": "10"}
+        )
+        await wms_service.create_invoice(
+            db_session, {"invoice_number": "INV-L2", "entity_type": "purchase_order", "amount": "20"}
+        )
         lst = await wms_service.list_invoices(db_session)
         assert len(lst) >= 2
 
@@ -669,6 +676,7 @@ class TestWmsModelRepr:
     @pytest.mark.asyncio
     async def test_inventory_repr(self):
         import uuid
+
         from src.wms.models import Inventory
         inv = Inventory(sku_id=uuid.uuid4(), batch_no="B001", quantity=10)
         assert "B001" in repr(inv)
@@ -676,7 +684,8 @@ class TestWmsModelRepr:
     @pytest.mark.asyncio
     async def test_inventory_log_repr(self):
         import uuid
-        from src.wms.models import InventoryLog, InventoryChangeType
+
+        from src.wms.models import InventoryChangeType, InventoryLog
         log = InventoryLog(inventory_id=uuid.uuid4(), change_type=InventoryChangeType.INBOUND, quantity_change=5)
         assert "inbound" in repr(log)
 
@@ -689,6 +698,7 @@ class TestWmsModelRepr:
     @pytest.mark.asyncio
     async def test_stock_movement_repr(self):
         import uuid
+
         from src.wms.models import StockMovement, StockMovementType
         sm = StockMovement(
             source_warehouse_id=uuid.uuid4(), target_warehouse_id=uuid.uuid4(),
@@ -706,6 +716,7 @@ class TestWmsModelRepr:
     @pytest.mark.asyncio
     async def test_packing_record_repr(self):
         import uuid
+
         from src.wms.models import PackingRecord
         pr = PackingRecord(picking_wave_id=uuid.uuid4(), box_count=3)
         assert "PackingRecord" in repr(pr)
@@ -713,6 +724,7 @@ class TestWmsModelRepr:
     @pytest.mark.asyncio
     async def test_shipment_repr(self):
         import uuid
+
         from src.wms.models import Shipment
         sh = Shipment(order_id=uuid.uuid4(), warehouse_id=uuid.uuid4(), tracking_number="SHP-R")
         assert "SHP-R" in repr(sh)
@@ -738,6 +750,7 @@ class TestWmsModelRepr:
     @pytest.mark.asyncio
     async def test_purchase_order_line_repr(self):
         import uuid
+
         from src.wms.models import PurchaseOrderLine
         pol = PurchaseOrderLine(purchase_order_id=uuid.uuid4(), description="POL R")
         assert "POL R" in repr(pol)
@@ -751,6 +764,7 @@ class TestWmsModelRepr:
     @pytest.mark.asyncio
     async def test_invoice_line_repr(self):
         import uuid
+
         from src.wms.models import InvoiceLine
         il = InvoiceLine(invoice_id=uuid.uuid4(), description="Line R")
         assert "Line R" in repr(il)
@@ -764,6 +778,7 @@ class TestWmsModelRepr:
     @pytest.mark.asyncio
     async def test_credit_memo_line_repr(self):
         import uuid
+
         from src.wms.models import CreditMemoLine
         cml = CreditMemoLine(credit_memo_id=uuid.uuid4(), description="CM Line R")
         assert "CM Line R" in repr(cml)

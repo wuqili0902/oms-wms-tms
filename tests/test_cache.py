@@ -235,7 +235,7 @@ class TestGetRedis:
              patch.object(real_client, "initialize",
                           side_effect=ConnectionError("down")):
             with pytest.raises(ConnectionError):
-                async with get_redis() as r:
+                async with get_redis():
                     pass
 
     async def test_get_redis_raises_on_timeout_error(self):
@@ -245,7 +245,7 @@ class TestGetRedis:
              patch.object(real_client, "initialize",
                           side_effect=TimeoutError("timeout")):
             with pytest.raises(TimeoutError):
-                async with get_redis() as r:
+                async with get_redis():
                     pass
 
 

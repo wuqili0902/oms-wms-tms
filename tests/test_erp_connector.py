@@ -1,12 +1,9 @@
 """Tests for ERP/EDI connector models and services."""
 
 import importlib.util
-import json
 import sys
 import uuid
-from datetime import UTC, datetime
-
-import pytest
+from datetime import datetime
 
 # Import directly via file to avoid src.models.__init__ bcrypt chain
 _spec = importlib.util.spec_from_file_location(
@@ -367,7 +364,6 @@ class TestOrderSyncService:
 
     async def test_handle_ack_with_order(self, monkeypatch):
         svc = _mod.OrderSyncService()
-        import types
 
         class FakeOrder:
             def __init__(self):
@@ -392,7 +388,12 @@ class TestOrderSyncService:
 
         monkeypatch.setattr("src.core.database.async_session_factory", fake_factory)
 
-        msg = ERPMessage(msg_type=MessageType.ORDRESP, sender_id="ERP", receiver_id="WMS", payload={"order_id": "ORD-001"})
+        msg = ERPMessage(
+            msg_type=MessageType.ORDRESP,
+            sender_id="ERP",
+            receiver_id="WMS",
+            payload={"order_id": "ORD-001"},
+        )
         await svc.handle_ack(msg)
         assert fake_order.status is not None
 

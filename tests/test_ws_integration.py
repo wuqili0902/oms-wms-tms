@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import WebSocketDisconnect
 
-
 # -- shared mutable state so broadcast_impl always sees the SAME _active dict --
 _manager_state = {
     "_active": {},       # device_id -> list[WebSocket]
@@ -74,7 +73,7 @@ class TestWsIntegration:
 
         response = await async_client.post("/pda/mutations", json={
             "device_id": "dev-1",
-            "entity_type": "Order",
+            "entity_type": "inventory",  # lowercase matches production PDA form values
             "entity_id": "oid-99",
             "operation": "create",
             "payload": {"sku": "X7"},
@@ -95,7 +94,7 @@ class TestWsIntegration:
 
         await async_client.post("/pda/mutations", json={
             "device_id": "dev-1",
-            "entity_type": "Order",
+            "entity_type": "inventory",  # lowercase matches production PDA form values
             "entity_id": "oid-99",
             "operation": "create",
             "payload": {"sku": "X7"},
@@ -106,6 +105,6 @@ class TestWsIntegration:
         device_id_arg, sent = _manager_state["sent_messages"][0]
         assert device_id_arg == "dev-1"
         assert isinstance(sent, dict)
-        assert sent["entity_type"] == "Order"
+        assert sent["entity_type"] == "inventory"
         assert sent["entity_id"] == "oid-99"
         assert sent["operation"] == "create"

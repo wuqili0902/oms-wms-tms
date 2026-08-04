@@ -4,9 +4,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.main import app
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
+from src.main import app
 
 API = "/api/v1"
 
@@ -218,7 +218,16 @@ class TestMergeOrders:
 class TestGetMergeGroup:
     async def test_gets_merge_group(self, client):
         with patch("src.oms.router.merge_service.get_merge_group", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = {"id": "grp-1", "order_ids": ["ord-1", "ord-2"]}
+            mock_get.return_value = {
+                "id": "grp-1",
+                "code": "MG-001",
+                "status": "merged",
+                "total_items": 2,
+                "total_amount": "100.00",
+                "notes": "",
+                "child_order_ids": ["ord-1", "ord-2"],
+                "created_at": "2026-01-01T00:00:00",
+            }
             resp = await client.get(f"{API}/orders/merge/grp-1")
         assert resp.status_code == 200
         assert resp.json()["id"] == "grp-1"

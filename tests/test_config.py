@@ -86,7 +86,6 @@ class TestSettings:
             cors_origins='["a"]',
             database_url="postgresql://u:p@h:5432/d",
             redis_url="redis://r:6379/1",
-            rabbitmq_url="amqp://u:p@h:5672/vh",
             host="127.0.0.1",
             port=9000,
             workers=2,

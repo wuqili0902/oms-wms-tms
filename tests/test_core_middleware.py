@@ -1,6 +1,5 @@
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-import pytest
 from starlette.requests import Request
 
 
@@ -63,7 +62,13 @@ class TestAuditLogGetUserId:
 class TestAuditLogExtractRequestBody:
     @staticmethod
     def _make_request(body_bytes: bytes) -> Request:
-        scope = {"type": "http", "method": "POST", "path": "/admin/", "headers": [(b"content-type", b"application/json")], "query_string": b""}
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/admin/",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+        }
         req = Request(scope)
         object.__setattr__(req, "_body", body_bytes)
         return req
@@ -125,8 +130,9 @@ async def _minimal_asgi(scope, receive, send):
 
 class TestTraceContext:
     def test_injects_trace_id_from_traceparent(self):
-        from src.core.middleware import TraceContext
         from starlette.testclient import TestClient
+
+        from src.core.middleware import TraceContext
 
         mw = TraceContext(_minimal_asgi)
         client = TestClient(mw)
@@ -136,8 +142,9 @@ class TestTraceContext:
         assert resp.headers.get("x-trace-id") == "0af7651916cd43dd8448eb211c80319c"
 
     def test_default_trace_id_without_headers(self):
-        from src.core.middleware import TraceContext
         from starlette.testclient import TestClient
+
+        from src.core.middleware import TraceContext
 
         mw = TraceContext(_minimal_asgi)
         client = TestClient(mw)
@@ -145,8 +152,9 @@ class TestTraceContext:
         assert resp.headers.get("x-trace-id") == "0" * 32
 
     def test_short_trace_id_padded_to_32_chars(self):
-        from src.core.middleware import TraceContext
         from starlette.testclient import TestClient
+
+        from src.core.middleware import TraceContext
 
         mw = TraceContext(_minimal_asgi)
         client = TestClient(mw)
@@ -155,8 +163,9 @@ class TestTraceContext:
         assert len(tid) == 32
 
     def test_non_http_scope_skips_processing(self):
-        from src.core.middleware import TraceContext
         from starlette.testclient import TestClient
+
+        from src.core.middleware import TraceContext
 
         mw = TraceContext(_minimal_asgi)
         client = TestClient(mw)
@@ -166,8 +175,9 @@ class TestTraceContext:
 
 class TestRequestIDMiddleware:
     def test_generates_request_id(self):
-        from src.core.middleware import RequestIDMiddleware
         from starlette.testclient import TestClient
+
+        from src.core.middleware import RequestIDMiddleware
 
         mw = RequestIDMiddleware(_minimal_asgi)
         client = TestClient(mw)
@@ -176,8 +186,9 @@ class TestRequestIDMiddleware:
         assert rid is not None
 
     def test_uses_existing_request_id(self):
-        from src.core.middleware import RequestIDMiddleware
         from starlette.testclient import TestClient
+
+        from src.core.middleware import RequestIDMiddleware
 
         mw = RequestIDMiddleware(_minimal_asgi)
         client = TestClient(mw)
@@ -188,8 +199,10 @@ class TestRequestIDMiddleware:
 class TestRequestLoggingMiddleware:
     def test_logs_request_info(self):
         from unittest.mock import patch
-        from src.core.middleware import RequestLoggingMiddleware, logger
+
         from starlette.testclient import TestClient
+
+        from src.core.middleware import RequestLoggingMiddleware, logger
 
         mw = RequestLoggingMiddleware(_minimal_asgi)
         client = TestClient(mw)
@@ -203,8 +216,10 @@ class TestRequestLoggingMiddleware:
 
     def test_logs_status_code(self):
         from unittest.mock import patch
-        from src.core.middleware import RequestLoggingMiddleware, logger
+
         from starlette.testclient import TestClient
+
+        from src.core.middleware import RequestLoggingMiddleware, logger
 
         mw = RequestLoggingMiddleware(_minimal_asgi)
         client = TestClient(mw)
@@ -220,8 +235,10 @@ class TestRequestLoggingMiddleware:
 class TestAuditLogMiddlewareCall:
     def test_get_does_not_log_audit(self):
         from unittest.mock import patch
-        from src.core.middleware import AuditLogMiddleware, logger
+
         from starlette.testclient import TestClient
+
+        from src.core.middleware import AuditLogMiddleware, logger
 
         mw = AuditLogMiddleware(_minimal_asgi)
         client = TestClient(mw)
@@ -233,8 +250,10 @@ class TestAuditLogMiddlewareCall:
 
     def test_post_logs_audit(self):
         from unittest.mock import patch
-        from src.core.middleware import AuditLogMiddleware, logger
+
         from starlette.testclient import TestClient
+
+        from src.core.middleware import AuditLogMiddleware, logger
 
         mw = AuditLogMiddleware(_minimal_asgi)
         client = TestClient(mw)
@@ -246,8 +265,10 @@ class TestAuditLogMiddlewareCall:
 
     def test_put_logs_audit(self):
         from unittest.mock import patch
-        from src.core.middleware import AuditLogMiddleware, logger
+
         from starlette.testclient import TestClient
+
+        from src.core.middleware import AuditLogMiddleware, logger
 
         mw = AuditLogMiddleware(_minimal_asgi)
         client = TestClient(mw)
@@ -259,8 +280,10 @@ class TestAuditLogMiddlewareCall:
 
     def test_delete_logs_audit(self):
         from unittest.mock import patch
-        from src.core.middleware import AuditLogMiddleware, logger
+
         from starlette.testclient import TestClient
+
+        from src.core.middleware import AuditLogMiddleware, logger
 
         mw = AuditLogMiddleware(_minimal_asgi)
         client = TestClient(mw)
@@ -272,8 +295,10 @@ class TestAuditLogMiddlewareCall:
 
     def test_patch_logs_audit(self):
         from unittest.mock import patch
-        from src.core.middleware import AuditLogMiddleware, logger
+
         from starlette.testclient import TestClient
+
+        from src.core.middleware import AuditLogMiddleware, logger
 
         mw = AuditLogMiddleware(_minimal_asgi)
         client = TestClient(mw)
@@ -285,9 +310,11 @@ class TestAuditLogMiddlewareCall:
 
     def test_post_logs_user_id_from_token(self):
         from unittest.mock import patch
+
+        from starlette.testclient import TestClient
+
         from src.core.middleware import AuditLogMiddleware, logger
         from src.core.security import create_access_token
-        from starlette.testclient import TestClient
 
         mw = AuditLogMiddleware(_minimal_asgi)
         token = create_access_token({"sub": "user-123"})

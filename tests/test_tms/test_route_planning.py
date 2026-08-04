@@ -71,8 +71,12 @@ class TestTransferHubCRUD:
 
     @pytest.mark.asyncio
     async def test_list_hubs_by_type(self, db_session):
-        await tms_service.create_hub(db_session, {"code": _uniq("WH"), "name": "武汉", "city": "武汉", "type": "primary"})
-        await tms_service.create_hub(db_session, {"code": _uniq("LZ"), "name": "柳州", "city": "柳州", "type": "secondary"})
+        await tms_service.create_hub(
+            db_session, {"code": _uniq("WH"), "name": "武汉", "city": "武汉", "type": "primary"}
+        )
+        await tms_service.create_hub(
+            db_session, {"code": _uniq("LZ"), "name": "柳州", "city": "柳州", "type": "secondary"}
+        )
         hubs = await tms_service.list_hubs(db_session, hub_type="secondary")
         assert len(hubs) == 1
         assert hubs[0]["hub_type"] == "secondary"
@@ -307,8 +311,12 @@ class TestRoutePlanningAlgorithm:
         """Helper: create a simple direct hub network."""
         o_code = _uniq("ORIG")
         d_code = _uniq("DEST")
-        await tms_service.create_hub(db_session, {"code": o_code, "name": origin_city, "city": origin_city, "type": "primary"})
-        await tms_service.create_hub(db_session, {"code": d_code, "name": dest_city, "city": dest_city, "type": "secondary"})
+        await tms_service.create_hub(
+            db_session, {"code": o_code, "name": origin_city, "city": origin_city, "type": "primary"}
+        )
+        await tms_service.create_hub(
+            db_session, {"code": d_code, "name": dest_city, "city": dest_city, "type": "secondary"}
+        )
         await tms_service.add_hub_connection(db_session, {
             "from_hub_code": o_code, "to_hub_code": d_code, "distance_km": 800, "transit_hours": 10,
         })
@@ -338,9 +346,15 @@ class TestRoutePlanningAlgorithm:
     @pytest.mark.asyncio
     async def test_find_best_route_plan_multi_segment(self, db_session):
         """Multi-segment through intermediate hub."""
-        await tms_service.create_hub(db_session, {"code": _uniq("A"), "name": "武汉", "city": "武汉", "type": "primary"})
-        await tms_service.create_hub(db_session, {"code": _uniq("B"), "name": "长沙", "city": "长沙", "type": "secondary"})
-        await tms_service.create_hub(db_session, {"code": _uniq("C"), "name": "柳州", "city": "柳州", "type": "secondary"})
+        await tms_service.create_hub(
+            db_session, {"code": _uniq("A"), "name": "武汉", "city": "武汉", "type": "primary"}
+        )
+        await tms_service.create_hub(
+            db_session, {"code": _uniq("B"), "name": "长沙", "city": "长沙", "type": "secondary"}
+        )
+        await tms_service.create_hub(
+            db_session, {"code": _uniq("C"), "name": "柳州", "city": "柳州", "type": "secondary"}
+        )
         # get hub codes by city
         hubs = await tms_service.list_hubs(db_session, city="武汉")
         wh_code = hubs[0]["code"]

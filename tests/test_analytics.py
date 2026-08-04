@@ -1,24 +1,21 @@
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-
-from src.core.database import get_db
-from src.main import app
-from src.oms.models import Order, OrderItem, OrderStatus, OrderPriority, Customer
-from tests.conftest import _SharedSession
 
 from src.analytics.service import (
     get_dashboard_stats,
-    get_order_trends,
-    get_status_distribution,
     get_low_stock_items,
+    get_order_trends,
     get_recent_orders,
+    get_status_distribution,
 )
-from src.wms.models import Inventory, SKU, Warehouse
+from src.core.database import get_db
+from src.main import app
+from src.oms.models import Customer, Order, OrderStatus
+from src.wms.models import SKU, Inventory, Warehouse
+from tests.conftest import _SharedSession
 
 
 @pytest.mark.asyncio

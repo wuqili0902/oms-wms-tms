@@ -1,6 +1,6 @@
 """Tests for src.core.export — export_orders, export_inventory (mocked DB)."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
@@ -68,8 +68,8 @@ class TestExportOrders:
 
     async def test_export_orders_status_mapping(self):
         from src.core.export import export_orders
-        from src.oms.service import STATUS_REVERSE
         from src.oms.models import OrderStatus
+        from src.oms.service import STATUS_REVERSE
 
         confirmed = _make_mock_row(
             order_no="ORD-002",
@@ -106,8 +106,22 @@ class TestExportOrders:
     async def test_export_orders_multiple(self):
         from src.core.export import export_orders
 
-        o1 = _make_mock_row(order_no="A", status="a", customer_id=UUID(int=1), total_amount=None, created_at=None, updated_at=None)
-        o2 = _make_mock_row(order_no="B", status="b", customer_id=UUID(int=2), total_amount=None, created_at=None, updated_at=None)
+        o1 = _make_mock_row(
+            order_no="A",
+            status="a",
+            customer_id=UUID(int=1),
+            total_amount=None,
+            created_at=None,
+            updated_at=None,
+        )
+        o2 = _make_mock_row(
+            order_no="B",
+            status="b",
+            customer_id=UUID(int=2),
+            total_amount=None,
+            created_at=None,
+            updated_at=None,
+        )
         db = AsyncMock()
         _mock_db_execute(db, [o1, o2])
 

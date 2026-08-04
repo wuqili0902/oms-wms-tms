@@ -79,6 +79,7 @@ async def test_process_pending_mutations_failure(db_session, clean_pda):
 @pytest.mark.asyncio
 async def test_pda_create_mutation_api(sqlite_engine):
     from httpx import ASGITransport, AsyncClient
+
     from src.core.database import get_db
     from src.main import app
     from tests.conftest import _SharedSession
@@ -112,9 +113,10 @@ async def test_pda_create_mutation_api(sqlite_engine):
 @pytest.mark.asyncio
 async def test_pda_list_mutations_api(sqlite_engine):
     from httpx import ASGITransport, AsyncClient
+
     from src.core.database import get_db
     from src.main import app
-    from src.pda.models import PendingMutation, SyncOperation
+    from src.pda.models import SyncOperation
     from src.pda.service import enqueue_mutation
     from tests.conftest import _SharedSession
 
@@ -148,9 +150,10 @@ async def test_pda_list_mutations_api(sqlite_engine):
 @pytest.mark.asyncio
 async def test_pda_sync_mutations_api(sqlite_engine):
     from httpx import ASGITransport, AsyncClient
+
     from src.core.database import get_db
     from src.main import app
-    from src.pda.models import PendingMutation, SyncOperation
+    from src.pda.models import SyncOperation
     from src.pda.service import enqueue_mutation
     from tests.conftest import _SharedSession
 
@@ -183,8 +186,10 @@ async def test_pda_sync_mutations_api(sqlite_engine):
 @pytest.mark.asyncio
 async def test_pda_ws_endpoint_no_client_id():
     from unittest.mock import AsyncMock, MagicMock
-    from src.pda.router import ws_endpoint
+
     from fastapi import WebSocket
+
+    from src.pda.router import ws_endpoint
 
     ws = MagicMock(spec=WebSocket)
     ws.accept = AsyncMock()
@@ -196,12 +201,11 @@ async def test_pda_ws_endpoint_no_client_id():
 
 @pytest.mark.asyncio
 async def test_pda_ws_endpoint_with_client_id():
-    from unittest.mock import AsyncMock, MagicMock
-    from src.pda.router import ws_endpoint
-    from src.pda.ws import PdaConnectionManager, _manager
+    from unittest.mock import AsyncMock, MagicMock, patch
+
     from fastapi import WebSocket
 
-    from unittest.mock import patch
+    from src.pda.router import ws_endpoint
     ws = MagicMock(spec=WebSocket)
     ws.accept = AsyncMock()
     ws.receive_text = AsyncMock()

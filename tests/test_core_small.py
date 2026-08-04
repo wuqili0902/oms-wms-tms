@@ -1,14 +1,8 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from unittest.mock import patch
-
-import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import (
@@ -96,7 +90,8 @@ class TestPaginate:
         mock_db.execute = fake_execute
 
         # Build a real-ish select statement using sqlalchemy
-        from sqlalchemy import Column, Integer, Table, MetaData, select as sa_select
+        from sqlalchemy import Column, Integer, MetaData, Table
+        from sqlalchemy import select as sa_select
         meta = MetaData()
         t = Table("test", meta, Column("id", Integer))
         stmt = sa_select(t)
@@ -127,7 +122,8 @@ class TestPaginate:
 
         mock_db.execute = fake_execute
 
-        from sqlalchemy import Column, Integer, Table, MetaData, select as sa_select
+        from sqlalchemy import Column, Integer, MetaData, Table
+        from sqlalchemy import select as sa_select
         meta = MetaData()
         t = Table("test", meta, Column("id", Integer))
         result = await paginate(sa_select(t), mock_db)
@@ -247,7 +243,12 @@ class TestAddressMaster:
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [a]
         mock_db.execute.return_value = mock_result
-        result = await resolve_address(mock_db, "order", entity_id="550e8400-e29b-41d4-a716-446655440000", address_type="shipping")
+        result = await resolve_address(
+            mock_db,
+            "order",
+            entity_id="550e8400-e29b-41d4-a716-446655440000",
+            address_type="shipping",
+        )
         assert len(result) == 1
         assert result[0]["label"] == "Home"
 

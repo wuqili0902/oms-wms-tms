@@ -9,7 +9,7 @@ import pytest
 from src.core.exceptions import NotFoundException, ValidationException
 from src.oms import merge as oms_merge
 from src.oms import service as oms_service
-from src.oms.models import Order, OrderStatus
+from src.oms.models import Order
 
 
 class TestValidateTransition:
@@ -117,7 +117,10 @@ class TestCreateOrder:
     async def test_create_order_reuses_customer(self, db_session):
         data1 = {"customer_id": "CUST-D", "items": []}
         await oms_service.create_order(db_session, data1)
-        data2 = {"customer_id": "CUST-D", "items": [{"gtin": "B1", "product_name": "X", "quantity": 1, "unit_price": "1.00"}]}
+        data2 = {
+            "customer_id": "CUST-D",
+            "items": [{"gtin": "B1", "product_name": "X", "quantity": 1, "unit_price": "1.00"}],
+        }
         order2 = await oms_service.create_order(db_session, data2)
         assert order2["customer_id"] == "CUST-D"
 
@@ -172,8 +175,9 @@ class TestListOrders:
 
     @pytest.mark.asyncio
     async def test_list_filter_by_customer(self, db_session):
-        from src.oms.models import Customer
         from sqlalchemy import select
+
+        from src.oms.models import Customer
         await oms_service.create_order(db_session, {"customer_id": "CUST-FILTER", "items": []})
         result = await db_session.execute(select(Customer).where(Customer.code == "CUST-FILTER"))
         customer = result.scalar_one()

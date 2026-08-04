@@ -91,7 +91,11 @@ class TestSyncLogs:
     @pytest.mark.asyncio
     async def test_record_sync(self, db_session):
         created = await tms_service.register_device(db_session, {"code": "DEV-SY", "name": "Sync"})
-        log = await tms_service.record_sync(db_session, created["id"], {"sync_type": "upload", "status": "completed", "records_count": 10})
+        log = await tms_service.record_sync(
+            db_session,
+            created["id"],
+            {"sync_type": "upload", "status": "completed", "records_count": 10},
+        )
         assert log["sync_type"] == "upload"
 
     @pytest.mark.asyncio
@@ -223,7 +227,10 @@ class TestTrackingEvent:
     async def _setup(self, db_session):
         from src.wms.service import create_warehouse
         TestTrackingEvent._counter += 1
-        wh = await create_warehouse(db_session, {"code": f"WH-TRK-{TestTrackingEvent._counter}", "name": "Tracking WH", "type": "center"})
+        wh = await create_warehouse(
+            db_session,
+            {"code": f"WH-TRK-{TestTrackingEvent._counter}", "name": "Tracking WH", "type": "center"},
+        )
         self.order = await tms_service.create_transport_order(db_session, {
             "pickup_warehouse_id": wh["id"], "delivery_name": "Tracking Test",
         })
@@ -256,7 +263,10 @@ class TestExceptionService:
     async def _setup(self, db_session):
         from src.wms.service import create_warehouse
         TestExceptionService._counter += 1
-        wh = await create_warehouse(db_session, {"code": f"WH-EXC-{TestExceptionService._counter}", "name": "Exception WH", "type": "center"})
+        wh = await create_warehouse(
+            db_session,
+            {"code": f"WH-EXC-{TestExceptionService._counter}", "name": "Exception WH", "type": "center"},
+        )
         self.order = await tms_service.create_transport_order(db_session, {
             "pickup_warehouse_id": wh["id"], "delivery_name": "Exception Test",
         })

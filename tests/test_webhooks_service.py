@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.webhooks.models import WebhookEvent, WebhookTarget, WebhookStatus
+from src.webhooks.models import WebhookEvent, WebhookStatus, WebhookTarget
 from src.webhooks.service import dispatch_event
 
 

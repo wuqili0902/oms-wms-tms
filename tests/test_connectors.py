@@ -5,9 +5,8 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
 
-from src.connectors.amazon_mws import build_tracking_update, parse_amazon_order
+from src.connectors.amazon_sp_api import build_tracking_update, parse_amazon_order
 from src.connectors.shopify_webhook import (
     handle_shopify_webhook,
     parse_fulfillment,
@@ -76,7 +75,9 @@ def test_parse_shopify_fulfillment():
     payload = {
         "id": 12345,
         "fulfillment_status": "fulfilled",
-        "fulfillments": [{"tracking_company": "SF", "tracking_number": "SF123456", "created_at": "2026-01-01T00:00:00Z"}],
+        "fulfillments": [
+            {"tracking_company": "SF", "tracking_number": "SF123456", "created_at": "2026-01-01T00:00:00Z"},
+        ],
     }
     msg = parse_fulfillment(payload)
     assert msg.msg_type.value == "DESADV"

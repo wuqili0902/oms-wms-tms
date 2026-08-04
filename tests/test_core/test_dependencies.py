@@ -1,13 +1,13 @@
 """Tests for core dependencies — auth & permission utilities."""
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth.models import Permission, Role, User, UserRole, RolePermission
+from src.auth.models import Permission, Role, RolePermission, User, UserRole
 from src.core.dependencies import (
     _get_user_permissions,
     get_current_user,

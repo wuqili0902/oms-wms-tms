@@ -13,7 +13,6 @@ from sqlalchemy import insert
 from src.wms.analysis import _abc_category, _cv_category, compute_abc_analysis
 from src.wms.models import SKU, StockMovement
 
-
 # ── Pure unit tests (no DB needed) ────────────────────────────────────────────
 
 class TestABCCategory:
@@ -125,8 +124,9 @@ class TestComputeABC:
 class TestComputeXYZ:
     @pytest.mark.asyncio
     async def test_empty_db(self):
-        from src.wms.analysis import compute_xyz_analysis
         from unittest.mock import AsyncMock, MagicMock
+
+        from src.wms.analysis import compute_xyz_analysis
 
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
@@ -135,9 +135,10 @@ class TestComputeXYZ:
 
     @pytest.mark.asyncio
     async def test_classification(self):
-        from src.wms.analysis import compute_xyz_analysis
-        from unittest.mock import AsyncMock, MagicMock
         import uuid
+        from unittest.mock import AsyncMock, MagicMock
+
+        from src.wms.analysis import compute_xyz_analysis
 
         sku_id = str(uuid.uuid4())
         mock_rows = [
@@ -157,9 +158,10 @@ class TestComputeXYZ:
 
     @pytest.mark.asyncio
     async def test_stable_demand(self):
-        from src.wms.analysis import compute_xyz_analysis
-        from unittest.mock import AsyncMock, MagicMock
         import uuid
+        from unittest.mock import AsyncMock, MagicMock
+
+        from src.wms.analysis import compute_xyz_analysis
 
         sku_id = str(uuid.uuid4())
         mock_rows = [
@@ -178,9 +180,10 @@ class TestComputeXYZ:
 
     @pytest.mark.asyncio
     async def test_top_n(self):
-        from src.wms.analysis import compute_xyz_analysis
-        from unittest.mock import AsyncMock, MagicMock
         import uuid
+        from unittest.mock import AsyncMock, MagicMock
+
+        from src.wms.analysis import compute_xyz_analysis
 
         sku_id = str(uuid.uuid4())
         mock_rows = [
@@ -197,9 +200,10 @@ class TestComputeXYZ:
 
     @pytest.mark.asyncio
     async def test_single_month_skipped(self):
-        from src.wms.analysis import compute_xyz_analysis
-        from unittest.mock import AsyncMock, MagicMock
         import uuid
+        from unittest.mock import AsyncMock, MagicMock
+
+        from src.wms.analysis import compute_xyz_analysis
 
         mock_rows = [
             MagicMock(sku_id=uuid.uuid4(), monthly_qty=-100),
@@ -214,8 +218,9 @@ class TestComputeXYZ:
 class TestComputeABCXYZMatrix:
     @pytest.mark.asyncio
     async def test_matrix_returns_nine_cells(self):
+        from unittest.mock import AsyncMock, patch
+
         from src.wms.analysis import compute_abc_xyz_matrix
-        from unittest.mock import patch, AsyncMock
 
         abc_result = [
             {"sku_id": "111", "sku_code": "A1", "sku_name": "Alpha",
@@ -246,8 +251,9 @@ class TestComputeABCXYZMatrix:
 
     @pytest.mark.asyncio
     async def test_matrix_fills_empty_cells(self):
+        from unittest.mock import AsyncMock, patch
+
         from src.wms.analysis import compute_abc_xyz_matrix
-        from unittest.mock import patch, AsyncMock
 
         with patch("src.wms.analysis.compute_abc_analysis", new=AsyncMock(return_value=[])):
             with patch("src.wms.analysis.compute_xyz_analysis", new=AsyncMock(return_value=[])):

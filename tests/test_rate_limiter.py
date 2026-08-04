@@ -285,6 +285,7 @@ class TestRateLimitDecorator:
 
     async def test_rate_limit_exceeded_raises_429(self):
         from fastapi import HTTPException
+
         from src.core.rate_limiter import rate_limit
 
         @rate_limit(requests=5, window=10)

@@ -1,7 +1,5 @@
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 class TestSafeImportOtel:
     def test_safe_import_otel_import_error(self):
@@ -39,7 +37,10 @@ class TestSetupTracing:
 
         with (
             patch("opentelemetry.sdk.trace.TracerProvider", return_value=mock_provider),
-            patch("opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app", return_value=None) as mock_inst,
+            patch(
+                "opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app",
+                return_value=None,
+            ) as mock_inst,
             patch.object(otel_trace, "_TRACER_PROVIDER", mock_provider),
         ):
             t.setup_tracing()

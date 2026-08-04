@@ -1,8 +1,6 @@
 """Tests for auth endpoints — async HTTP integration tests with SQLite in-memory."""
 import uuid
 
-import pytest
-
 
 class TestRegister:
     async def test_register(self, async_client):

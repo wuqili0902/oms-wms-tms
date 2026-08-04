@@ -68,7 +68,7 @@ class TestTMSSyncServiceOrderSync:
     def test_order_sync_property_creates_lazy(self, sap_mock):
         from src.tms.connectors.erp import TMSSyncService
 
-        with patch("src.tms.connectors.erp.OrderSyncService") as MockOS:
+        with patch("src.tms.connectors.erp.OrderSyncService") as MockOS:  # noqa: N806
             mock_instance = MagicMock()
             MockOS.return_value = mock_instance
             svc = TMSSyncService(sap_connector=sap_mock)
@@ -163,7 +163,12 @@ class TestHandleInboundRateUpdate:
         from src.tms.connectors.erp import TMSSyncService
 
         svc = TMSSyncService()
-        msg = ERPMessage(msg_type=MessageType.ORDERS, sender_id="ERP", receiver_id="TMS", payload={"carrier_code": "UPS"})
+        msg = ERPMessage(
+            msg_type=MessageType.ORDERS,
+            sender_id="ERP",
+            receiver_id="TMS",
+            payload={"carrier_code": "UPS"},
+        )
         result = await svc.handle_inbound_rate_update(msg)
         assert result == 0
 

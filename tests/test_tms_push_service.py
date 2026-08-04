@@ -1,7 +1,5 @@
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from src.tms.push_service import NotificationPriority, PushMessage, PushService
 
@@ -188,7 +186,7 @@ class TestSendFcm:
     """Covers _send_fcm() edge cases."""
 
     async def test_send_fcm_success(self):
-        from src.tms.push_service import PushMessage, NotificationPriority, _send_fcm
+        from src.tms.push_service import NotificationPriority, PushMessage, _send_fcm
         msg = PushMessage(title="T", body="B", priority=NotificationPriority.HIGH, android_channel_id="test_ch")
         mock_messaging = MagicMock()
         mock_messaging.send.return_value = "ok"

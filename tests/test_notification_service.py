@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.notification.models import NotificationChannel, NotificationType
 from src.notification import service as notification_service
+from src.notification.models import NotificationChannel, NotificationType
 
 
 class TestCheckEnabled:
@@ -17,26 +17,44 @@ class TestCheckEnabled:
 
     def test_enabled_matching_pref(self):
         prefs = [self.make_pref(NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET, True)]
-        assert notification_service._check_enabled(prefs, NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET) is True
+        result = notification_service._check_enabled(
+            prefs, NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET
+        )
+        assert result is True
 
     def test_disabled_pref(self):
         prefs = [self.make_pref(NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET, False)]
-        assert notification_service._check_enabled(prefs, NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET) is False
+        result = notification_service._check_enabled(
+            prefs, NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET
+        )
+        assert result is False
 
     def test_no_matching_pref_returns_true(self):
         prefs = [self.make_pref(NotificationType.LOW_STOCK_ALERT, NotificationChannel.EMAIL, False)]
-        assert notification_service._check_enabled(prefs, NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET) is True
+        result = notification_service._check_enabled(
+            prefs, NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET
+        )
+        assert result is True
 
     def test_empty_prefs_returns_true(self):
-        assert notification_service._check_enabled([], NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET) is True
+        result = notification_service._check_enabled(
+            [], NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET
+        )
+        assert result is True
 
     def test_multiple_prefs_matches_correct(self):
         prefs = [
             self.make_pref(NotificationType.LOW_STOCK_ALERT, NotificationChannel.EMAIL, False),
             self.make_pref(NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET, True),
         ]
-        assert notification_service._check_enabled(prefs, NotificationType.LOW_STOCK_ALERT, NotificationChannel.EMAIL) is False
-        assert notification_service._check_enabled(prefs, NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET) is True
+        r1 = notification_service._check_enabled(
+            prefs, NotificationType.LOW_STOCK_ALERT, NotificationChannel.EMAIL
+        )
+        assert r1 is False
+        r2 = notification_service._check_enabled(
+            prefs, NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET
+        )
+        assert r2 is True
 
 
 class TestSendNotification:
@@ -48,7 +66,16 @@ class TestSendNotification:
             "u1", NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.PUSH,
             "Title", "Body", data={"k": "v"}, user_email="a@b.com", db=db,
         )
-        mock_do_send.assert_awaited_once_with(db, "u1", NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.PUSH, "Title", "Body", {"k": "v"}, "a@b.com")
+        mock_do_send.assert_awaited_once_with(
+            db,
+            "u1",
+            NotificationType.ORDER_STATUS_CHANGE,
+            NotificationChannel.PUSH,
+            "Title",
+            "Body",
+            {"k": "v"},
+            "a@b.com",
+        )
         assert result is True
 
     @patch("src.notification.service.get_db_session")

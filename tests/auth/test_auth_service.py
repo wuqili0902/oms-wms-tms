@@ -4,7 +4,7 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth.models import Permission, Role, RolePermission, User, UserRole
+from src.auth.models import Permission, Role, User
 from src.auth.service import (
     assign_permission_to_role,
     assign_role_to_user,
@@ -16,7 +16,6 @@ from src.auth.service import (
     list_permissions,
     list_roles,
     list_users,
-    refresh_tokens,
     register_user,
     remove_permission_from_role,
     remove_role_from_user,
@@ -81,13 +80,14 @@ class TestUserService:
 
     async def test_authenticate_inactive_user(self, db_session: AsyncSession, monkeypatch):
         suffix = uuid.uuid4().hex[:6]
-        from src.auth.service import register_user, authenticate_user
+        from src.auth.service import authenticate_user, register_user
         await register_user(db_session, {
             "username": f"inact-{suffix}",
             "email": f"inact-{suffix}@t.com",
             "password": "test123456",
         })
         from sqlalchemy import select
+
         from src.auth.models import User
         result = await db_session.execute(select(User).where(User.username == f"inact-{suffix}"))
         user = result.scalar_one()
@@ -166,8 +166,9 @@ class TestRoleService:
             "name": f"SysRole-{suffix}",
             "code": f"SYS_{suffix}",
         })
-        from src.auth.models import Role
         from sqlalchemy import select
+
+        from src.auth.models import Role
         result = await db_session.execute(select(Role).where(Role.id == uuid.UUID(role["id"])))
         db_role = result.scalar_one()
         db_role.is_system = True

@@ -35,6 +35,7 @@ class TestGetMeCoverage:
 
     async def test_get_me_user_not_found(self, async_client, auth, db_session):
         from sqlalchemy import delete
+
         from src.auth.models import User
         uid = uuid.UUID(auth["user"]["id"])
         await db_session.execute(delete(User).where(User.id == uid))

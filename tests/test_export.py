@@ -1,6 +1,5 @@
 """Tests for src.core.export — CSV streaming and data export."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

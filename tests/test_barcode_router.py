@@ -4,9 +4,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.main import app
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
+from src.main import app
 
 API = "/api/v1/barcode"
 
@@ -105,7 +105,13 @@ class TestExcelUpload:
             mock_zip.return_value = b"zipdata"
             resp = await client.post(
                 f"{API}/excel/upload",
-                files={"file": ("test.xlsx", b"data", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                files={
+                    "file": (
+                        "test.xlsx",
+                        b"data",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
             )
         assert resp.status_code == 200
         data = resp.json()
@@ -116,7 +122,13 @@ class TestExcelUpload:
         with patch("src.barcode.router.generate_barcode_zip", side_effect=Exception("bad file")):
             resp = await client.post(
                 f"{API}/excel/upload",
-                files={"file": ("test.xlsx", b"data", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                files={
+                    "file": (
+                        "test.xlsx",
+                        b"data",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
             )
         assert resp.status_code == 422
 
@@ -160,7 +172,19 @@ class TestTemplates:
 
     async def test_lists_templates(self, client):
         with patch("src.barcode.router.barcode_service.list_templates", new_callable=AsyncMock) as mock_lt:
-            mock_lt.return_value = [{"id": "tpl-1", "name": "L1", "code": "L1", "format": "zpl", "width_mm": 100, "height_mm": 50, "content": {}, "is_default": False, "created_at": "2026-01-01T00:00:00"}]
+            mock_lt.return_value = [
+                {
+                    "id": "tpl-1",
+                    "name": "L1",
+                    "code": "L1",
+                    "format": "zpl",
+                    "width_mm": 100,
+                    "height_mm": 50,
+                    "content": {},
+                    "is_default": False,
+                    "created_at": "2026-01-01T00:00:00",
+                }
+            ]
             resp = await client.get(f"{API}/templates")
         assert resp.status_code == 200
         assert len(resp.json()) == 1

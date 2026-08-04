@@ -1,8 +1,6 @@
 """Tests for src.core.pagination — paginate and PaginatedResponse."""
 
-from unittest.mock import AsyncMock, MagicMock, PropertyMock
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 
 class TestPaginatedResponse:

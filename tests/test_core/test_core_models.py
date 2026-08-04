@@ -5,7 +5,6 @@ import pytest
 
 from src.core.models import AddressMaster, resolve_address
 
-
 pytestmark = pytest.mark.asyncio
 
 

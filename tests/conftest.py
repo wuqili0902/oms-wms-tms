@@ -10,15 +10,14 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
-from sqlalchemy.ext.asyncio import (AsyncSession, create_async_engine)
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 # Patch JSONB -> JSON for SQLite BEFORE any model imports
 setattr(SQLiteTypeCompiler, "visit_JSONB", lambda self, type_, **kw: "JSON")
 
-from src.core.database import get_db
-from src.main import app
-from src.models import Base
-
+from src.core.database import get_db  # noqa: E402
+from src.main import app  # noqa: E402
+from src.models import Base  # noqa: E402
 
 _DB_FILE = os.path.join(tempfile.gettempdir(), "oms_wms_tms_test.sqlite")
 

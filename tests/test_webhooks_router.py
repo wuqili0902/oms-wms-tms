@@ -5,10 +5,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.main import app
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
-from src.webhooks.models import WebhookTarget, WebhookStatus, WebhookEvent
+from src.main import app
+from src.webhooks.models import WebhookStatus, WebhookTarget
 
 
 @pytest.fixture

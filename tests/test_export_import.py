@@ -4,10 +4,10 @@ import uuid
 
 import pytest
 
-from src.core.export import stream_csv, export_orders, export_inventory
-from src.core.import_utils import import_orders_from_csv, import_inventory_from_csv
-from src.oms.models import Order, OrderStatus, Customer, OrderItem
-from src.wms.models import Inventory, SKU, Warehouse
+from src.core.export import export_inventory, export_orders, stream_csv
+from src.core.import_utils import import_inventory_from_csv, import_orders_from_csv
+from src.oms.models import Customer, Order, OrderStatus
+from src.wms.models import SKU, Inventory, Warehouse
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ class TestImportCsvHandler:
 
     @pytest.mark.asyncio
     async def test_import_csv_handler_success(self):
-        from src.core._import import import_csv_handler, ImportResult
+        from src.core._import import ImportResult, import_csv_handler
 
         async def mock_handler(csv_text):
             return ImportResult(success=3), None
@@ -87,7 +87,7 @@ class TestImportCsvHandler:
 
     @pytest.mark.asyncio
     async def test_import_csv_handler_with_error(self):
-        from src.core._import import import_csv_handler, ImportResult
+        from src.core._import import ImportResult, import_csv_handler
 
         async def mock_handler(csv_text):
             return ImportResult(success=0, errors=[{"row": 1, "error": "bad"}] ), None
@@ -120,7 +120,7 @@ class TestImportCsvHandler:
 
     @pytest.mark.asyncio
     async def test_import_csv_handler_handler_error(self):
-        from src.core._import import import_csv_handler, ImportResult
+        from src.core._import import ImportResult, import_csv_handler
 
         async def mock_handler(csv_text):
             return ImportResult(success=0), RuntimeError("handler failed")
@@ -134,7 +134,9 @@ class TestHandleOrdersImport:
 
     @pytest.mark.asyncio
     async def test_orders_import_success(self):
-        import csv, io
+        import csv
+        import io
+
         from src.core._import.import_orders import handle_orders_import
         buf = io.StringIO()
         w = csv.writer(buf)

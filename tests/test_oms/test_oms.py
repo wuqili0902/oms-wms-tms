@@ -56,22 +56,38 @@ class TestOrderStateMachine:
         oid = resp.json()["id"]
 
         # draft → confirmed
-        resp = await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "confirmed"}, headers=auth_headers)
+        resp = await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "confirmed"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         assert resp.json()["status"] == "confirmed"
 
         # confirmed → processing
-        resp = await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "processing"}, headers=auth_headers)
+        resp = await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "processing"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         assert resp.json()["status"] == "processing"
 
         # processing → picking
-        resp = await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "picking"}, headers=auth_headers)
+        resp = await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "picking"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         assert resp.json()["status"] == "picking"
 
         # picking → completed
-        resp = await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "completed"}, headers=auth_headers)
+        resp = await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "completed"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         assert resp.json()["status"] == "completed"
 
@@ -84,7 +100,11 @@ class TestOrderStateMachine:
         oid = resp.json()["id"]
 
         # draft → processing (invalid: skip confirmed)
-        resp = await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "processing"}, headers=auth_headers)
+        resp = await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "processing"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 422
 
     async def test_cancel_from_draft(self, async_client, auth_headers):
@@ -95,12 +115,20 @@ class TestOrderStateMachine:
         }, headers=auth_headers)
         oid = resp.json()["id"]
 
-        resp = await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "cancelled"}, headers=auth_headers)
+        resp = await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "cancelled"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         assert resp.json()["status"] == "cancelled"
 
         # terminal state — cannot transition
-        resp = await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "confirmed"}, headers=auth_headers)
+        resp = await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "confirmed"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 422
 
 
@@ -127,7 +155,11 @@ class TestListOrders:
                        "quantity": 1, "unit_price": "10.00", "subtotal": "10.00"}],
         }, headers=auth_headers)
         oid = resp.json()["id"]
-        await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "cancelled"}, headers=auth_headers)
+        await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "cancelled"},
+            headers=auth_headers,
+        )
 
         resp = await async_client.get("/api/v1/orders?status=cancelled", headers=auth_headers)
         assert len(resp.json()["items"]) == 1
@@ -142,7 +174,11 @@ class TestOrderHistory:
         }, headers=auth_headers)
         oid = resp.json()["id"]
 
-        await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "cancelled"}, headers=auth_headers)
+        await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "cancelled"},
+            headers=auth_headers,
+        )
 
         resp = await async_client.get(f"/api/v1/orders/{oid}/history", headers=auth_headers)
         assert resp.status_code == 200
@@ -203,7 +239,11 @@ class TestOrderErrorPaths:
         }, headers=auth_headers)
         oid = resp.json()["id"]
 
-        resp = await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "cancelled"}, headers=auth_headers)
+        resp = await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "cancelled"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
 
         oid2_resp = await async_client.post("/api/v1/orders", json={
@@ -256,7 +296,11 @@ class TestSplitMerge:
         }, headers=auth_headers)
         oid = resp.json()["id"]
 
-        resp = await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "confirmed"}, headers=auth_headers)
+        resp = await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "confirmed"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
 
         resp = await async_client.post(f"/api/v1/orders/{oid}/split", json={
@@ -277,7 +321,11 @@ class TestSplitMerge:
         }, headers=auth_headers)
         oid = resp.json()["id"]
 
-        resp = await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": "confirmed"}, headers=auth_headers)
+        resp = await async_client.put(
+            f"/api/v1/orders/{oid}/status",
+            json={"status": "confirmed"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
 
         resp = await async_client.post(f"/api/v1/orders/{oid}/split", json={
@@ -321,7 +369,11 @@ class TestSplitMerge:
         oid = resp.json()["id"]
         # Complete the order → terminal state, cannot be deleted
         for s in ("confirmed", "processing", "picking", "completed"):
-            await async_client.put(f"/api/v1/orders/{oid}/status", json={"status": s}, headers=auth_headers)
+            await async_client.put(
+                f"/api/v1/orders/{oid}/status",
+                json={"status": s},
+                headers=auth_headers,
+            )
 
         resp = await async_client.delete(f"/api/v1/orders/{oid}", headers=auth_headers)
         assert resp.status_code == 422
@@ -350,6 +402,7 @@ class TestModelRepr:
 
     async def test_split_child_order_repr(self):
         import uuid
+
         from src.oms.models import SplitChildOrder
         sco = SplitChildOrder(
             parent_order_id=uuid.uuid4(),

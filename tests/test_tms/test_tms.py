@@ -3,8 +3,6 @@ import uuid as uuid_mod
 
 import pytest
 
-from src.tms import service as tms_service
-
 
 @pytest.fixture
 async def auth_headers(async_client):
@@ -118,7 +116,9 @@ class TestHeartbeat:
         assert "heartbeat" in resp.text.lower()
 
     async def test_heartbeat_not_found(self, async_client, auth_headers):
-        resp = await async_client.post("/api/v1/devices/00000000-0000-0000-0000-000000000000/heartbeat", headers=auth_headers)
+        resp = await async_client.post(
+            "/api/v1/devices/00000000-0000-0000-0000-000000000000/heartbeat", headers=auth_headers
+        )
         assert resp.status_code == 404
 
 

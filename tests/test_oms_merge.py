@@ -1,7 +1,6 @@
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
-
-from decimal import Decimal
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,8 +76,8 @@ class TestSplitOrder:
         mock_db.commit.assert_awaited()
 
     async def test_order_not_found(self, mock_db):
-        from src.oms.merge import split_order
         from src.core.exceptions import NotFoundException
+        from src.oms.merge import split_order
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
@@ -124,7 +123,6 @@ class TestMergeOrders:
 
         o1 = _mock_order(order_no="ORD-001", total_amount=Decimal("100"))
         o2 = _mock_order(order_no="ORD-002", total_amount=Decimal("200"))
-        mock_result = MagicMock()
         mock_order_result = MagicMock()
         mock_order_result.scalar_one_or_none.side_effect = [o1, o2]
         mock_count_result = MagicMock()
@@ -138,15 +136,15 @@ class TestMergeOrders:
         assert len(result["order_ids"]) == 2
 
     async def test_less_than_two_orders_raises(self, mock_db):
-        from src.oms.merge import merge_orders
         from src.core.exceptions import ValidationException
+        from src.oms.merge import merge_orders
 
         with pytest.raises(ValidationException, match="at least 2 orders"):
             await merge_orders(mock_db, [UUID_1])
 
     async def test_order_not_found_raises(self, mock_db):
-        from src.oms.merge import merge_orders
         from src.core.exceptions import NotFoundException
+        from src.oms.merge import merge_orders
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
@@ -156,8 +154,8 @@ class TestMergeOrders:
             await merge_orders(mock_db, [UUID_1, UUID_2])
 
     async def test_terminal_state_order_raises(self, mock_db):
-        from src.oms.merge import merge_orders
         from src.core.exceptions import ValidationException
+        from src.oms.merge import merge_orders
         from src.oms.models import OrderStatus
 
         o1 = _mock_order(status=OrderStatus.COMPLETED)

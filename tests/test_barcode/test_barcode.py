@@ -8,7 +8,6 @@ import uuid
 
 import pandas as pd
 import pytest
-import pytest_asyncio
 from fastapi import UploadFile
 
 from src.barcode import service as barcode_service
@@ -22,7 +21,6 @@ from src.barcode.excel_barcode import (
     generate_barcode_zip,
     generate_gtin_from_sku,
 )
-
 
 # ── HTTP Integration tests (single-request) ──────────────────────────────────
 
@@ -120,6 +118,7 @@ class TestBarcodeRouterErrorPaths:
 
     async def test_upload_excel_empty_workbook(self, async_client, auth_headers):
         import io as _io
+
         from openpyxl import Workbook as _Workbook
         wb = _Workbook()
         buf = _io.BytesIO()
@@ -141,8 +140,9 @@ class TestBarcodeRouterErrorPaths:
 
 
     async def test_upload_excel_success(self, async_client, auth_headers):
-        from openpyxl import Workbook as _Wb
         import io as _io
+
+        from openpyxl import Workbook as _Wb
         wb = _Wb()
         ws = wb.active
         ws.append(["sku", "name", "quantity", "gtin"])
@@ -182,6 +182,7 @@ class TestService:
             "name": "First", "code": "DUP-SVC", "format": "zpl",
         })
         import pytest as _pt
+
         from src.core.exceptions import ValidationException
         with _pt.raises(ValidationException):
             await barcode_service.create_template(db_session, {

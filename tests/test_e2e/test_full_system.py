@@ -181,7 +181,8 @@ class TestWms:
         # ── List warehouses ──────────────────────────────────────────────
         r = await async_client.get(f"{P}/warehouses", headers=auth_header)
         assert r.status_code == 200
-        assert any(w["id"] == wh_id for w in r.json())
+        body = r.json()
+        assert any(w["id"] == wh_id for w in body["items"])
 
         # ── Get warehouse ────────────────────────────────────────────────
         r = await async_client.get(f"{P}/warehouses/{wh_id}", headers=auth_header)
@@ -212,7 +213,8 @@ class TestWms:
             f"{P}/warehouses/{wh_id}/locations", headers=auth_header,
         )
         assert r.status_code == 200
-        assert any(l["id"] == loc_id for l in r.json())
+        body = r.json()
+        assert any(it["id"] == loc_id for it in body["items"])
 
         # ── Adjust inventory (in) ────────────────────────────────────────
         r = await async_client.post(
@@ -378,7 +380,7 @@ class TestTms:
             f"{P}/devices/{dev_id}/sync", headers=auth_header,
         )
         assert r.status_code == 200
-        assert any(l["records_count"] == 42 for l in r.json())
+        assert any(it["records_count"] == 42 for it in r.json())
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -418,13 +420,17 @@ class TestBarcode:
         r = await async_client.post(
             f"{P}/barcode/generate",
             headers=auth_header,
-            json=dict(gtin_prefix="8901234567", entity_type="inventory", entity_id="a1b2c3d4-e5f6-7890-abcd-ef1234567890", format="code128"),
+            json=dict(
+                gtin_prefix="8901234567",
+                entity_type="inventory",
+                entity_id="a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                format="code128",
+            ),
         )
         assert r.status_code == 201, r.text
         bc = r.json()
         assert bc["entity_type"] == "inventory"
         assert bc["format"] == "code128"
-        bc_id = bc["id"]
 
         # ── Validate barcode ─────────────────────────────────────────────
         r = await async_client.post(
@@ -470,8 +476,14 @@ class TestOms:
                 priority="high",
                 notes="Rush order — E2E test",
                 items=[
-                    dict(gtin="8901234567890", sku="SKU-E2E-001", product_name="Widget Pro", quantity=10, unit_price="29.99"),
-                    dict(gtin="8901234567891", sku="SKU-E2E-002", product_name="Widget Lite", quantity=5, unit_price="14.99"),
+                    dict(
+                        gtin="8901234567890", sku="SKU-E2E-001", product_name="Widget Pro",
+                        quantity=10, unit_price="29.99",
+                    ),
+                    dict(
+                        gtin="8901234567891", sku="SKU-E2E-002", product_name="Widget Lite",
+                        quantity=5, unit_price="14.99",
+                    ),
                 ],
             ),
         )

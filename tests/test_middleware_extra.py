@@ -148,9 +148,11 @@ class TestAuditLogMiddleware:
         return AuditLogMiddleware(MockApp())
 
     async def test_get_user_id_valid_token(self, middleware):
-        from src.core.security import create_access_token
-        from starlette.requests import Request
         from unittest.mock import MagicMock
+
+        from starlette.requests import Request
+
+        from src.core.security import create_access_token
 
         token = create_access_token({"sub": "user123"})
         request = MagicMock(spec=Request)
@@ -159,8 +161,9 @@ class TestAuditLogMiddleware:
         assert result == "user123"
 
     async def test_get_user_id_no_header(self, middleware):
-        from starlette.requests import Request
         from unittest.mock import MagicMock
+
+        from starlette.requests import Request
 
         request = MagicMock(spec=Request)
         request.headers = {}
@@ -168,8 +171,9 @@ class TestAuditLogMiddleware:
         assert result == "anonymous"
 
     async def test_get_user_id_invalid_token(self, middleware):
-        from starlette.requests import Request
         from unittest.mock import MagicMock
+
+        from starlette.requests import Request
 
         request = MagicMock(spec=Request)
         request.headers = {"authorization": "Bearer invalid_token_here"}
@@ -177,8 +181,9 @@ class TestAuditLogMiddleware:
         assert result == "anonymous"
 
     async def test_extract_request_body_dict(self, middleware):
-        from starlette.requests import Request
         from unittest.mock import AsyncMock
+
+        from starlette.requests import Request
 
         body = b'{"key1": "value1", "key2": "value2"}'
         receive = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
@@ -193,8 +198,9 @@ class TestAuditLogMiddleware:
         assert result["key1"] == "value1"
 
     async def test_extract_request_body_list(self, middleware):
-        from starlette.requests import Request
         from unittest.mock import AsyncMock
+
+        from starlette.requests import Request
 
         body = b'[{"id": 1}, {"id": 2}]'
         receive = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
@@ -208,8 +214,9 @@ class TestAuditLogMiddleware:
         assert len(result) == 2
 
     async def test_extract_request_body_scalar(self, middleware):
-        from starlette.requests import Request
         from unittest.mock import AsyncMock
+
+        from starlette.requests import Request
 
         body = b'"just a string"'
         receive = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
@@ -222,8 +229,9 @@ class TestAuditLogMiddleware:
         assert isinstance(result, str)
 
     async def test_extract_request_body_invalid_json(self, middleware):
-        from starlette.requests import Request
         from unittest.mock import AsyncMock
+
+        from starlette.requests import Request
 
         body = b"not valid json"
         receive = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})

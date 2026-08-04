@@ -1,7 +1,6 @@
 """Tests for Celery application configuration."""
 import importlib.util
 import sys
-import subprocess
 
 import pytest
 

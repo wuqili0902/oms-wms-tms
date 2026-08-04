@@ -1,7 +1,6 @@
 from datetime import timedelta
 
 import pytest
-from jose import JWTError
 
 from src.config import settings
 from src.core.security import (
@@ -116,6 +115,7 @@ class TestDecodeToken:
 
     def test_expired_token(self):
         from datetime import UTC, datetime
+
         from jose import jwt
         expired = jwt.encode(
             {"sub": "user-1", "exp": datetime.now(UTC) - timedelta(hours=1)},
@@ -125,8 +125,9 @@ class TestDecodeToken:
             decode_token(expired)
 
     def test_invalid_signature(self):
-        from jose import jwt
         from datetime import UTC, datetime
+
+        from jose import jwt
         bad = jwt.encode(
             {"sub": "user-1", "exp": datetime.now(UTC) + timedelta(hours=1)},
             "wrong-secret", algorithm=ALGORITHM,

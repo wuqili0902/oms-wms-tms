@@ -1,8 +1,9 @@
 """Tests for API gateway middleware and exception handling."""
 
+from unittest.mock import patch
+
 import pytest
 from httpx import AsyncClient
-from unittest.mock import patch
 
 from src.core.response import (
     ApiResponse,
@@ -169,6 +170,7 @@ class TestRequestIDMiddleware:
         # First request - get a request ID
         response1 = await async_client.get("/api/v1/health")
         request_id_1 = response1.headers["x-request-id"]
+        assert request_id_1
 
         # Second request with explicit request ID
         custom_request_id = "test-request-123"
@@ -191,7 +193,7 @@ class TestRateLimiter:
         connected = await rate_limiter.connect()
 
         assert (
-            connected or rate_limiter._connected == False
+            connected or not rate_limiter._connected
         )  # Either connected or gracefully handled
 
     @pytest.mark.asyncio

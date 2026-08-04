@@ -1,7 +1,6 @@
-import hmac
 import hashlib
+import hmac
 
-import pytest
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
@@ -61,7 +60,6 @@ class TestVerifyToken:
         assert _verify_token("", "") is False
 
     def test_different_message_in_token(self):
-        token = generate_csrf_token()
         wrong_sig = hmac.new(
             settings.secret_key.encode(), b"csrf:different_msg", hashlib.sha256
         ).hexdigest()

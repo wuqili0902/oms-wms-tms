@@ -22,13 +22,13 @@ class TestGenerateCsrfToken:
 
 class TestVerifyToken:
     def test_valid_token(self):
-        from src.core.csrf import generate_csrf_token, _verify_token
+        from src.core.csrf import _verify_token, generate_csrf_token
 
         token = generate_csrf_token()
         assert _verify_token(token, token) is True
 
     def test_wrong_cookie(self):
-        from src.core.csrf import generate_csrf_token, _verify_token
+        from src.core.csrf import _verify_token, generate_csrf_token
 
         token = generate_csrf_token()
         other = generate_csrf_token()
@@ -86,7 +86,7 @@ class TestCsrfMiddleware:
         req.scope = {}
         call_next = AsyncMock(return_value=MagicMock())
 
-        resp = await mw.dispatch(req, call_next)
+        _ = await mw.dispatch(req, call_next)
 
         assert "csrf_token" not in req.scope
         call_next.assert_awaited_once_with(req)
@@ -97,7 +97,7 @@ class TestCsrfMiddleware:
         req.scope = {}
         call_next = AsyncMock(return_value=MagicMock())
 
-        resp = await mw.dispatch(req, call_next)
+        _ = await mw.dispatch(req, call_next)
 
         call_next.assert_awaited_once_with(req)
 
@@ -124,7 +124,7 @@ class TestCsrfMiddleware:
         )
         call_next = AsyncMock(return_value=MagicMock())
 
-        resp = await mw.dispatch(req, call_next)
+        _ = await mw.dispatch(req, call_next)
 
         call_next.assert_awaited_once_with(req)
 
@@ -156,7 +156,7 @@ class TestCsrfMiddleware:
         )
         call_next = AsyncMock(return_value=MagicMock())
 
-        resp = await mw.dispatch(req, call_next)
+        _ = await mw.dispatch(req, call_next)
 
         call_next.assert_awaited_once_with(req)
 
@@ -191,7 +191,7 @@ class TestCsrfMiddleware:
         )
         call_next = AsyncMock(return_value=MagicMock())
 
-        resp = await mw.dispatch(req, call_next)
+        _ = await mw.dispatch(req, call_next)
 
         call_next.assert_awaited_once_with(req)
 
@@ -219,6 +219,6 @@ class TestCsrfMiddleware:
         req.scope = {}
         call_next = AsyncMock(return_value=MagicMock())
 
-        resp = await mw.dispatch(req, call_next)
+        _ = await mw.dispatch(req, call_next)
 
         assert "csrf_token" in req.scope

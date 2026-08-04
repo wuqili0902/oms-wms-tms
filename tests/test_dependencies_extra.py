@@ -1,7 +1,8 @@
 """Tests for core dependency functions."""
+from unittest.mock import MagicMock, patch
+
 import pytest
 from fastapi import HTTPException
-from unittest.mock import patch, MagicMock, AsyncMock
 
 
 @pytest.fixture

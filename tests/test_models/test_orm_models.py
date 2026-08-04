@@ -4,11 +4,10 @@ All 5 modules (auth, oms, wms, barcode, tms) are tested against a SQLite engine
 so the CI pipeline can validate ORM definitions without a PostgreSQL server.
 """
 import uuid
+from datetime import UTC
 
 import pytest
 from sqlalchemy import create_engine, inspect
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Session as SASession
 
 # ---------------------------------------------------------------------------
 # SQLite compatibility shim for PostgreSQL-only types
@@ -16,6 +15,7 @@ from sqlalchemy.orm import Session as SASession
 # Register JSONB→JSON compiler for SQLite BEFORE importing models that use
 # JSONB (LabelTemplate.content), so SQLiteDialect knows how to render it.
 from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
+from sqlalchemy.orm import Session as SASession
 
 setattr(SQLiteTypeCompiler, "visit_JSONB", lambda self, type_, **kw: "JSON")
 
@@ -124,6 +124,12 @@ class TestMetadata:
             # webhooks
             "webhook_targets",
             "webhook_delivery_logs",
+            # logistics / waybills
+            "waybills",
+            # transfer orders
+            "transfer_orders",
+            "transfer_logs",
+            "transfer_order_lines",
         }
         missing = expected - tables
         extra = tables - expected
@@ -177,7 +183,7 @@ class TestMetadata:
 
 class TestAuthModels:
     def test_create_user(self, session):
-        from src.auth.models import User, Role
+        from src.auth.models import Role, User
 
         role = Role(id=uuid.uuid4(), name="Admin", code="admin")
         session.add(role)
@@ -307,7 +313,7 @@ class TestWmsModels:
         assert fetched.status == WarehouseStatus.ACTIVE
 
     def test_create_location(self, session):
-        from src.wms.models import Warehouse, Location
+        from src.wms.models import Location, Warehouse
 
         wh = Warehouse(id=uuid.uuid4(), code="WH-LOC", name="Loc Warehouse")
         session.add(wh)
@@ -327,7 +333,7 @@ class TestWmsModels:
         assert session.get(Location, loc.id) is not None
 
     def test_inventory_crud(self, session):
-        from src.wms.models import Warehouse, SKU, Inventory
+        from src.wms.models import SKU, Inventory, Warehouse
 
         wh = Warehouse(id=uuid.uuid4(), code="WH-INV", name="Inv Warehouse")
         sku = SKU(id=uuid.uuid4(), sku="SKU-001", name="Test SKU")
@@ -350,7 +356,7 @@ class TestWmsModels:
         assert fetched.quantity == 100
 
     def test_stock_movement(self, session):
-        from src.wms.models import Warehouse, Location, SKU, StockMovement
+        from src.wms.models import SKU, Location, StockMovement, Warehouse
 
         wh = Warehouse(id=uuid.uuid4(), code="WH-MV", name="Movement")
         loc = Location(id=uuid.uuid4(), warehouse_id=wh.id, code="MV-LOC")
@@ -373,7 +379,7 @@ class TestWmsModels:
         assert session.get(StockMovement, mv.id) is not None
 
     def test_picking_wave(self, session):
-        from src.wms.models import Warehouse, PickingWave
+        from src.wms.models import PickingWave, Warehouse
 
         wh = Warehouse(id=uuid.uuid4(), code="WH-PW", name="Picking Wave")
         session.add(wh)
@@ -440,7 +446,7 @@ class TestBarcodeModels:
 
 class TestTmsModels:
     def test_create_device(self, session):
-        from src.tms.models import TerminalDevice, TerminalDeviceType, PlatformType
+        from src.tms.models import PlatformType, TerminalDevice, TerminalDeviceType
 
         dev = TerminalDevice(
             id=uuid.uuid4(),
@@ -457,7 +463,7 @@ class TestTmsModels:
         assert fetched.code == "DEV-001"
 
     def test_create_session(self, session):
-        from src.tms.models import TerminalDevice, DeviceSession, TerminalDeviceType, PlatformType
+        from src.tms.models import DeviceSession, PlatformType, TerminalDevice, TerminalDeviceType
 
         dev = TerminalDevice(
             id=uuid.uuid4(),
@@ -480,14 +486,15 @@ class TestTmsModels:
         assert session.get(DeviceSession, ses.id) is not None
 
     def test_create_sync_log(self, session):
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         from src.tms.models import (
-            TerminalDevice,
-            SyncLog,
-            SyncLogType,
-            SyncLogStatus,
-            TerminalDeviceType,
             PlatformType,
+            SyncLog,
+            SyncLogStatus,
+            SyncLogType,
+            TerminalDevice,
+            TerminalDeviceType,
         )
 
         dev = TerminalDevice(
@@ -505,7 +512,7 @@ class TestTmsModels:
             device_id=dev.id,
             sync_type=SyncLogType.DOWNLOAD,
             status=SyncLogStatus.PENDING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         session.add(log)
         session.commit()

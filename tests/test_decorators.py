@@ -1,6 +1,6 @@
 """Tests for src.cache.decorators — cached, rate_limit, distributed_lock."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -54,9 +54,9 @@ class TestCachedDecorator:
             mock_redis.set.assert_awaited_once()
 
     async def test_cache_hit(self):
-        from src.cache.decorators import cached
-
         import json
+
+        from src.cache.decorators import cached
 
         mock_redis = AsyncMock()
         mock_redis.get.return_value = json.dumps(42).encode("utf-8")
@@ -135,7 +135,7 @@ class TestRateLimitDecorator:
             mock_redis.zadd.assert_awaited_once()
 
     async def test_exceeds_limit(self):
-        from src.cache.decorators import rate_limit, RateLimitExceeded
+        from src.cache.decorators import RateLimitExceeded, rate_limit
 
         mock_redis = AsyncMock()
         mock_redis.zcard.return_value = 10

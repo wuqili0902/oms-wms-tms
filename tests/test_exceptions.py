@@ -1,6 +1,5 @@
 """Tests for src.core.exceptions — AppException and subclasses."""
 
-import pytest
 from fastapi import status
 
 

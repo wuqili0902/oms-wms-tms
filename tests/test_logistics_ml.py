@@ -1,16 +1,15 @@
-"""Tests for logistics carrier module, ML forecaster, and push service."""
+"""Tests for logistics carrier module and push service."""
 import pytest
 
 from src.logistics import (
     CarrierCode,
+    estimate_shipping,
     generate_tracking_number,
     get_tracking_url,
     query_tracking,
-    estimate_shipping,
     validate_carrier,
 )
-from src.ml.forecast import DemandForecaster
-from src.tms.push_service import PushMessage, PushService, NotificationPriority
+from src.tms.push_service import NotificationPriority, PushMessage, PushService
 
 
 class TestCarriers:
@@ -51,64 +50,6 @@ class TestCarriers:
         result = await estimate_shipping(CarrierCode.ZTO, weight_kg=2.5)
         assert result["estimated_cost_yuan"] > 10
         assert result["estimated_days"] >= 1
-
-
-class TestDemandForecaster:
-    """Demand forecasting with EMA."""
-
-    def test_empty_forecaster(self):
-        df = DemandForecaster()
-        assert df.current_forecast is None
-
-    def test_add_observation(self):
-        df = DemandForecaster(alpha=1.0)
-        df.add_observation(100)
-        assert df.current_forecast == 100
-        df.add_observation(200)
-        assert df.current_forecast == 200
-
-    def test_ema_smoothing(self):
-        df = DemandForecaster(alpha=0.5)
-        df.add_observation(100)
-        df.add_observation(200)
-        assert df.current_forecast == 150  # 0.5*200 + 0.5*100
-
-    def test_forecast_single_day(self):
-        df = DemandForecaster()
-        for val in [10, 12, 11, 13, 14, 12, 13, 15, 14, 16]:
-            df.add_observation(val)
-        results = df.forecast(days=3)
-        assert len(results) == 3
-        assert results[0].predicted_orders > 0
-
-    def test_forecast_with_confidence(self):
-        df = DemandForecaster()
-        for val in [10, 12, 14, 13, 15]:
-            df.add_observation(val)
-        results = df.forecast(days=1)
-        assert results[0].confidence_lower is not None
-        assert results[0].confidence_upper is not None
-        assert results[0].confidence_lower <= results[0].predicted_orders <= results[0].confidence_upper
-
-    def test_forecast_insufficient_history(self):
-        df = DemandForecaster()
-        df.add_observation(100)
-        results = df.forecast(days=3)
-        assert len(results) == 3
-        assert all(r.predicted_orders == 100.0 for r in results)
-
-    def test_forecast_empty_history(self):
-        df = DemandForecaster()
-        results = df.forecast(days=2)
-        assert len(results) == 2
-        assert all(r.predicted_orders == 0.0 for r in results)
-
-    def test_reset(self):
-        df = DemandForecaster()
-        df.add_observation(100)
-        df.reset()
-        assert df.current_forecast is None
-        assert df.history == []
 
 
 class TestPushService:

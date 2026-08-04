@@ -6,7 +6,6 @@ import pytest
 
 from src.auth.service import create_role, delete_role, update_role
 
-
 # --- role -------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -25,5 +24,5 @@ async def test_update_role(db):
 
 @pytest.mark.asyncio
 async def test_delete_role_not_found(db):
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(Exception):
         await delete_role(db, uuid.uuid4())

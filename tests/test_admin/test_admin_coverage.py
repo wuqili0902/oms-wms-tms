@@ -1,5 +1,4 @@
 """Tests for admin Web UI — covering un-tested pages and forms."""
-import io
 import uuid as uuid_mod
 
 import pytest
@@ -147,8 +146,9 @@ class TestAdminExports:
 
     async def test_export_route_plans_csv_with_data(self, async_client, auth_headers, db_session):
         import uuid as uuid_mod
-        from src.tms.models import RoutePlan, RoutePlanType, RoutePlanStatus
         from decimal import Decimal
+
+        from src.tms.models import RoutePlan, RoutePlanStatus, RoutePlanType
         plan = RoutePlan(
             id=uuid_mod.uuid4(),
             transport_order_id=uuid_mod.uuid4(),
@@ -371,6 +371,7 @@ class TestAdminEdgeCases:
 
     async def test_train_ml_forecast_direct(self, monkeypatch):
         from starlette.responses import HTMLResponse
+
         from src.admin.router import train_ml_forecast
 
         def fake_render(req, template, ctx):

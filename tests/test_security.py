@@ -87,6 +87,7 @@ class TestJWT:
     def test_decode_expired_token(self):
         data = {"sub": "expired-user", "exp": datetime.now(UTC) - timedelta(hours=1)}
         from jose import jwt
+
         from src.config import settings
         token = jwt.encode(data, settings.secret_key, algorithm="HS256")
         with pytest.raises(TokenExpired):

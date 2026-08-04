@@ -161,7 +161,7 @@ class TestGetRedis:
 
 class TestRedisHealthCheck:
     async def test_returns_true(self):
-        from src.cache.redis_client import redis_health_check, redis_client
+        from src.cache.redis_client import redis_client, redis_health_check
 
         pool = MagicMock()
         pool.ping = AsyncMock()
@@ -174,7 +174,7 @@ class TestRedisHealthCheck:
         pool.ping.assert_awaited_once()
 
     async def test_returns_false(self):
-        from src.cache.redis_client import redis_health_check, redis_client
+        from src.cache.redis_client import redis_client, redis_health_check
 
         pool = MagicMock()
         pool.ping = AsyncMock(side_effect=ConnectionError("down"))

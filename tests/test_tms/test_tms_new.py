@@ -70,7 +70,9 @@ class TestReturnOrders:
         )
         assert ret["status"] == "requested"
 
-        updated = await tms_service.update_return_status(db_session, return_id=str(ret["id"]), target="pickup_scheduled")
+        updated = await tms_service.update_return_status(
+            db_session, return_id=str(ret["id"]), target="pickup_scheduled"
+        )
         assert updated["status"] == "pickup_scheduled"
 
 
@@ -150,7 +152,7 @@ class TestCeleryTasks:
 
     async def test_celery_task_imports(self):
         from src.tasks.inventory import (
-            sync_inventory, snapshot_inventory, cancel_expired_orders, process_pending_orders,
+            sync_inventory,
         )
         assert hasattr(sync_inventory, 'name')
 
@@ -164,6 +166,7 @@ class TestSeeding:
 
     async def test_seed_script_no_db(self, db_session):
         from unittest.mock import AsyncMock, patch
+
         from src.tms.seed import main as seed_main
         mock_cm = AsyncMock()
         mock_cm.__aenter__.return_value = db_session
@@ -382,12 +385,4 @@ class TestCalculateFreight:
         assert resp.status_code == 200
         data = resp.json()
         assert "total_freight_yuan" in data
-
-
-class TestAdminForecastPage:
-    """Test ML forecast admin page."""
-
-    async def test_ml_forecast_page(self, auth_headers, async_client):
-        r = await async_client.get("/admin/ml/forecast")
-        assert r.status_code in (200, 307)
 

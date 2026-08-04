@@ -3,20 +3,19 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 setattr(SQLiteTypeCompiler, "visit_JSONB", lambda self, type_, **kw: "JSON")
 
-from src.core.database import get_db
-from src.main import app
-from src.models import Base
-
+from src.core.database import get_db  # noqa: E402
+from src.main import app  # noqa: E402
+from src.models import Base  # noqa: E402
 
 pytest_plugins = ("pytest_asyncio",)
 
@@ -69,9 +68,12 @@ async def async_client(sqlite_engine):
             self.session = AsyncSession(bind=self.conn, expire_on_commit=False)
             await self.session.begin_nested()
         async def teardown(self):
-            if self.session: await self.session.close()
-            if self.trans: await self.trans.rollback()
-            if self.conn: await self.conn.close()
+            if self.session:
+                await self.session.close()
+            if self.trans:
+                await self.trans.rollback()
+            if self.conn:
+                await self.conn.close()
 
     shared = Shared(sqlite_engine)
     await shared.setup()
@@ -89,7 +91,7 @@ async def async_client(sqlite_engine):
 
 def _wh(**kw):
     """Factory helper for Warehouse to avoid column-name confusion."""
-    from src.wms.models import Warehouse, WarehouseType, WarehouseStatus
+    from src.wms.models import Warehouse, WarehouseStatus, WarehouseType
     return Warehouse(
         warehouse_type=WarehouseType.CENTER,
         status=WarehouseStatus.ACTIVE,
@@ -105,7 +107,7 @@ def _wh(**kw):
 
 class TestOutbox:
     async def test_append_event(self, db):
-        from src.core.outbox import append_event, OutboxEvent
+        from src.core.outbox import append_event
 
         event = await append_event(
             db,
@@ -123,84 +125,10 @@ class TestOutbox:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 2. PDA Offline — SyncQueueService
+# 2. PDA Offline — sync queue
+# NOTE: The PDA offline sync queue is implemented in src/pda/ (PendingMutation +
+# enqueue_mutation / process_pending_mutations) and covered by test_pda_service.py.
 # ═══════════════════════════════════════════════════════════════════════════════
-
-class TestPDAOffline:
-    pytestmark = pytest.mark.skip("SyncQueueService/MutationType not yet implemented in offline.py")
-    def setup_method(self):
-        self.db_path = None
-
-    def _make_svc(self, tmp_path):
-        from src.core.offline import SyncQueueService
-        db_path = str(tmp_path / "test_pda.db")
-        return SyncQueueService(db_path), db_path
-
-    def test_sync_queue_enqueue_and_pending(self, tmp_path):
-        from src.core.offline import MutationType
-        svc, _ = self._make_svc(tmp_path)
-
-        rec = svc.enqueue("InventoryItem", "SKU-001", MutationType.UPDATE,
-                          {"qty": 10}, priority=5)
-        assert rec.id is not None
-        assert rec.operation == "update"
-
-        n = svc.enqueue_bulk([
-            {"entity_type": "Order", "entity_id": "ORD-1",
-             "operation": MutationType.CREATE, "payload": {"total": 100}},
-            {"entity_type": "Order", "entity_id": "ORD-2",
-             "operation": MutationType.CREATE, "payload": {"total": 200}},
-        ])
-        assert n == 2
-
-        pending = svc.get_pending(limit=10)
-        assert len(pending) == 3
-
-        ids = [r.id for r in pending[:2]]
-        count = svc.mark_synced(ids)
-        assert count == 2
-
-        remaining = svc.get_pending(limit=10)
-        assert len(remaining) == 1
-
-    def test_sync_queue_mark_failed(self, tmp_path):
-        from src.core.offline import SyncQueueService, MutationType, SyncQueue
-        from sqlalchemy import select
-        from sqlalchemy.orm import Session
-
-        svc, _ = self._make_svc(tmp_path)
-        rec = svc.enqueue("Test", "1", MutationType.CREATE, {})
-        svc.mark_failed(rec.id, "connection timeout")
-
-        with Session(svc.engine) as s:
-            r = s.execute(select(SyncQueue).where(SyncQueue.id == rec.id)).scalar_one()
-            assert r.error_message == "connection timeout"
-            assert r.retry_count == 1
-            assert r.synced_at is None  # still pending
-
-    def test_mark_failed_exhausts_retries(self, tmp_path):
-        from src.core.offline import SyncQueueService, MutationType, SyncQueue
-        from sqlalchemy import select, update
-        from sqlalchemy.orm import Session
-
-        svc, _ = self._make_svc(tmp_path)
-        rec = svc.enqueue("Test", "2", MutationType.CREATE, {})
-
-        with Session(svc.engine) as s:
-            q = select(SyncQueue).where(SyncQueue.id == rec.id)
-            orig = s.execute(q).scalar_one()
-            max_r = orig.max_retries
-            s.execute(
-                update(SyncQueue).where(SyncQueue.id == rec.id).values(retry_count=max_r)
-            )
-            s.commit()
-
-        svc.mark_failed(rec.id, "final attempt failed")
-
-        with Session(svc.engine) as s:
-            r = s.execute(select(SyncQueue).where(SyncQueue.id == rec.id)).scalar_one()
-            assert r.error_message == "final attempt failed"
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. FEFO / FIFO — _pick_batches
@@ -255,7 +183,7 @@ class TestFEFOFIFO:
         assert picked[0]["inv"].batch_no == first_batch
 
     async def test_pick_insufficient_qty(self, db):
-        from src.wms.models import SKU, Location, Inventory
+        from src.wms.models import SKU, Inventory, Location
         wh = _wh(id=uuid.uuid4(), code="WH-SHORT", name="Short")
         loc = Location(id=uuid.uuid4(), warehouse_id=wh.id, code="L-SHORT")
         sku = SKU(id=uuid.uuid4(), sku="SKU-SHORT", name="Short")
@@ -299,7 +227,7 @@ class TestFEFOFIFO:
 
 class TestOrderSplitMerge:
     async def _seed_order(self, db, suffix="", customer_id=None, wh_id=None):
-        from src.oms.models import Customer, Order, OrderItem, OrderStatus, OrderPriority
+        from src.oms.models import Customer, Order, OrderItem, OrderPriority, OrderStatus
         if customer_id is None:
             cid = uuid.uuid4()
             cust = Customer(id=cid, code=f"CUST-SM{suffix}", name=f"SM{suffix}",
@@ -353,7 +281,7 @@ class TestOrderSplitMerge:
 
         o1 = await self._seed_order(db, suffix="MG01", customer_id=cust.id, wh_id=wh.id)
         o2 = await self._seed_order(db, suffix="MG02", customer_id=cust.id, wh_id=wh.id)
-        from src.oms.merge import merge_orders, get_merge_group
+        from src.oms.merge import get_merge_group, merge_orders
 
         group = await merge_orders(db, [str(o1.id), str(o2.id)], code="MG-001")
         assert group["code"] == "MG-001"
@@ -365,14 +293,14 @@ class TestOrderSplitMerge:
         assert fetched["code"] == "MG-001"
 
     async def test_split_nonexistent_order(self, db):
-        from src.oms.merge import split_order
         from src.core.exceptions import NotFoundException
+        from src.oms.merge import split_order
         with pytest.raises(NotFoundException):
             await split_order(db, str(uuid.uuid4()), [])
 
     async def test_merge_single_order_fails(self, db):
-        from src.oms.merge import merge_orders
         from src.core.exceptions import ValidationException
+        from src.oms.merge import merge_orders
         wh = _wh(id=uuid.uuid4(), code="WH-FAIL", name="Fail")
         db.add(wh)
         await db.flush()
@@ -387,7 +315,7 @@ class TestOrderSplitMerge:
 
 class TestABCXYZ:
     async def _seed_movements(self, db):
-        from src.wms.models import SKU, StockMovement, Location
+        from src.wms.models import SKU, Location, StockMovement
         wh = _wh(id=uuid.uuid4(), code="WH-ABC", name="ABC")
         loc = Location(id=uuid.uuid4(), warehouse_id=wh.id, code="L-ABC")
         skus = []
@@ -455,7 +383,8 @@ class TestShopifyConnector:
         from src.connectors.shopify_webhook import verify_webhook
         secret = "test_secret"
         body = b'{"test": true}'
-        import hmac, hashlib
+        import hashlib
+        import hmac
         expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
         assert verify_webhook(body, expected, secret)
         assert not verify_webhook(body, "bad_hash", secret)
@@ -472,7 +401,7 @@ class TestShopifyConnector:
 
 class TestAmazonConnector:
     def test_parse_amazon_order(self):
-        from src.connectors.amazon_mws import parse_amazon_order
+        from src.connectors.amazon_sp_api import parse_amazon_order
         data = {
             "AmazonOrderId": "AMZ-001",
             "OrderStatus": "Unshipped",
@@ -487,13 +416,13 @@ class TestAmazonConnector:
         assert len(msg.payload["items"]) == 1
 
     def test_build_tracking_update(self):
-        from src.connectors.amazon_mws import build_tracking_update
+        from src.connectors.amazon_sp_api import build_tracking_update
         upd = build_tracking_update("AMZ-001", "UPS", "1Z999AA10123456784")
         assert upd["carrier_code"] == "UPS"
         assert upd["status"] == "Shipped"
 
     def test_parse_amazon_order_no_items(self):
-        from src.connectors.amazon_mws import parse_amazon_order
+        from src.connectors.amazon_sp_api import parse_amazon_order
         msg = parse_amazon_order({"AmazonOrderId": "AMZ-000"})
         assert msg.payload["items"] == []
 

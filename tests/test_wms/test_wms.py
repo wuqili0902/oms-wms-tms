@@ -28,7 +28,11 @@ class TestWarehouse:
 
     async def test_create_duplicate_code(self, async_client, auth_headers):
         await async_client.post("/api/v1/warehouses", json={"code": "WH-001", "name": "Main"}, headers=auth_headers)
-        resp = await async_client.post("/api/v1/warehouses", json={"code": "WH-001", "name": "Duplicate"}, headers=auth_headers)
+        resp = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "WH-001", "name": "Duplicate"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 422
 
     async def test_list_warehouses(self, async_client, auth_headers):
@@ -53,7 +57,11 @@ class TestWarehouse:
 
 class TestLocation:
     async def test_create_location(self, async_client, auth_headers):
-        wh = await async_client.post("/api/v1/warehouses", json={"code": "WH-LOC", "name": "Loc WH"}, headers=auth_headers)
+        wh = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "WH-LOC", "name": "Loc WH"},
+            headers=auth_headers,
+        )
         wh_id = wh.json()["id"]
         resp = await async_client.post(f"/api/v1/warehouses/{wh_id}/locations", json={
             "zone": "A", "aisle": "1", "shelf": "S", "bin": "B", "type": "storage",
@@ -68,7 +76,11 @@ class TestLocation:
         assert resp.status_code == 404
 
     async def test_list_locations(self, async_client, auth_headers):
-        wh = await async_client.post("/api/v1/warehouses", json={"code": "WH-LST", "name": "List WH"}, headers=auth_headers)
+        wh = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "WH-LST", "name": "List WH"},
+            headers=auth_headers,
+        )
         wh_id = wh.json()["id"]
         await async_client.post(f"/api/v1/warehouses/{wh_id}/locations", json={
             "zone": "A", "aisle": "1", "shelf": "S", "bin": "B",
@@ -80,7 +92,11 @@ class TestLocation:
 
 class TestInventory:
     async def test_adjust_add(self, async_client, auth_headers):
-        wh = await async_client.post("/api/v1/warehouses", json={"code": "INV-ADD", "name": "Inv WH"}, headers=auth_headers)
+        wh = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "INV-ADD", "name": "Inv WH"},
+            headers=auth_headers,
+        )
         wh_id = wh.json()["id"]
         loc = await async_client.post(f"/api/v1/warehouses/{wh_id}/locations", json={
             "zone": "B", "aisle": "2", "shelf": "S", "bin": "B",
@@ -94,7 +110,11 @@ class TestInventory:
         assert int(data["quantity"]) == 100
 
     async def test_adjust_negative(self, async_client, auth_headers):
-        wh = await async_client.post("/api/v1/warehouses", json={"code": "INV-NEG", "name": "Neg WH"}, headers=auth_headers)
+        wh = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "INV-NEG", "name": "Neg WH"},
+            headers=auth_headers,
+        )
         wh_id = wh.json()["id"]
         loc = await async_client.post(f"/api/v1/warehouses/{wh_id}/locations", json={
             "zone": "C", "aisle": "3", "shelf": "S", "bin": "B",
@@ -107,7 +127,11 @@ class TestInventory:
         assert resp.status_code == 422
 
     async def test_query_inventory(self, async_client, auth_headers):
-        wh = await async_client.post("/api/v1/warehouses", json={"code": "INV-QRY", "name": "Qry WH"}, headers=auth_headers)
+        wh = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "INV-QRY", "name": "Qry WH"},
+            headers=auth_headers,
+        )
         wh_id = wh.json()["id"]
         loc = await async_client.post(f"/api/v1/warehouses/{wh_id}/locations", json={
             "zone": "D", "aisle": "4", "shelf": "S", "bin": "B",
@@ -123,7 +147,11 @@ class TestInventory:
 
 class TestPickingWave:
     async def test_create_picking_wave(self, async_client, auth_headers):
-        wh = await async_client.post("/api/v1/warehouses", json={"code": "WVE", "name": "Wave WH"}, headers=auth_headers)
+        wh = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "WVE", "name": "Wave WH"},
+            headers=auth_headers,
+        )
         wh_id = wh.json()["id"]
         resp = await async_client.post("/api/v1/warehouses/picking-waves", json={
             "warehouse_id": wh_id, "order_ids": ["ord-001"],
@@ -132,7 +160,11 @@ class TestPickingWave:
         assert resp.json()["warehouse_id"] == wh_id
 
     async def test_list_picking_waves(self, async_client, auth_headers):
-        wh = await async_client.post("/api/v1/warehouses", json={"code": "WVE-LST", "name": "Waves"}, headers=auth_headers)
+        wh = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "WVE-LST", "name": "Waves"},
+            headers=auth_headers,
+        )
         wh_id = wh.json()["id"]
         await async_client.post("/api/v1/warehouses/picking-waves", json={
             "warehouse_id": wh_id, "order_ids": ["ord-001"],
@@ -144,7 +176,11 @@ class TestPickingWave:
 
 class TestWarehouseUpdateDelete:
     async def test_update_warehouse(self, async_client, auth_headers):
-        r = await async_client.post("/api/v1/warehouses", json={"code": "WH-UPD", "name": "Original"}, headers=auth_headers)
+        r = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "WH-UPD", "name": "Original"},
+            headers=auth_headers,
+        )
         wid = r.json()["id"]
         resp = await async_client.put(f"/api/v1/warehouses/{wid}", json={
             "code": "WH-UPD", "name": "Updated Name", "address": "新地址", "type": "center",
@@ -159,19 +195,30 @@ class TestWarehouseUpdateDelete:
         assert resp.status_code == 404
 
     async def test_delete_warehouse(self, async_client, auth_headers):
-        r = await async_client.post("/api/v1/warehouses", json={"code": "WH-DEL", "name": "To Delete"}, headers=auth_headers)
+        r = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "WH-DEL", "name": "To Delete"},
+            headers=auth_headers,
+        )
         wid = r.json()["id"]
         resp = await async_client.delete(f"/api/v1/warehouses/{wid}", headers=auth_headers)
         assert resp.status_code == 204
 
     async def test_delete_warehouse_not_found(self, async_client, auth_headers):
-        resp = await async_client.delete("/api/v1/warehouses/00000000-0000-0000-0000-000000000000", headers=auth_headers)
+        resp = await async_client.delete(
+            "/api/v1/warehouses/00000000-0000-0000-0000-000000000000",
+            headers=auth_headers,
+        )
         assert resp.status_code == 404
 
 
 class TestLocationUpdateDelete:
     async def _setup(self, async_client, auth_headers):
-        r = await async_client.post("/api/v1/warehouses", json={"code": "LOC-UPD", "name": "Loc WH"}, headers=auth_headers)
+        r = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "LOC-UPD", "name": "Loc WH"},
+            headers=auth_headers,
+        )
         wh_id = r.json()["id"]
         r2 = await async_client.post(f"/api/v1/warehouses/{wh_id}/locations", json={
             "zone": "X", "aisle": "9", "shelf": "S", "bin": "B", "type": "storage",
@@ -192,7 +239,10 @@ class TestLocationUpdateDelete:
         assert resp.status_code == 204
 
     async def test_delete_location_not_found(self, async_client, auth_headers):
-        resp = await async_client.delete("/api/v1/warehouses/00000000-0000-0000-0000-000000000000/locations/00000000-0000-0000-0000-000000000000", headers=auth_headers)
+        resp = await async_client.delete(
+            "/api/v1/warehouses/00000000-0000-0000-0000-000000000000/locations/00000000-0000-0000-0000-000000000000",
+            headers=auth_headers,
+        )
         assert resp.status_code == 404
 
 
@@ -212,9 +262,16 @@ class TestMovements:
         assert len(resp.json()) >= 1
 
     async def test_list_movements_filter_wh(self, async_client, auth_headers):
-        wh = await async_client.post("/api/v1/warehouses", json={"code": "MOV-F", "name": "MovF WH"}, headers=auth_headers)
+        wh = await async_client.post(
+            "/api/v1/warehouses",
+            json={"code": "MOV-F", "name": "MovF WH"},
+            headers=auth_headers,
+        )
         wh_id = wh.json()["id"]
-        resp = await async_client.get(f"/api/v1/warehouses/inventory/movements?warehouse_id={wh_id}", headers=auth_headers)
+        resp = await async_client.get(
+            f"/api/v1/warehouses/inventory/movements?warehouse_id={wh_id}",
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
 
 
@@ -226,11 +283,17 @@ class TestPurchaseOrderLifecycle:
         assert po_resp.status_code == 201
         po_id = po_resp.json()["id"]
 
-        approve_resp = await async_client.post(f"/api/v1/warehouses/purchase-orders/{po_id}/approve", headers=auth_headers)
+        approve_resp = await async_client.post(
+            f"/api/v1/warehouses/purchase-orders/{po_id}/approve",
+            headers=auth_headers,
+        )
         assert approve_resp.status_code == 200
         assert approve_resp.json()["status"] == "approved"
 
-        receive_resp = await async_client.post(f"/api/v1/warehouses/purchase-orders/{po_id}/receive", headers=auth_headers)
+        receive_resp = await async_client.post(
+            f"/api/v1/warehouses/purchase-orders/{po_id}/receive",
+            headers=auth_headers,
+        )
         assert receive_resp.status_code == 200
         assert receive_resp.json()["status"] == "received"
 
@@ -413,12 +476,6 @@ class TestVendor:
         assert resp.status_code == 422
 
 
-class TestPurchaseOrderExceptions:
-    async def test_create_purchase_order_validation_error(self, async_client, auth_headers):
-        resp = await async_client.post("/api/v1/warehouses/purchase-orders", json={}, headers=auth_headers)
-        assert resp.status_code == 422
-
-
 class TestAddress:
     async def test_create_address(self, async_client, auth_headers):
         wh = await async_client.post("/api/v1/warehouses", json={
@@ -455,7 +512,11 @@ class TestPurchaseOrderExceptions:
         assert resp.status_code == 422
 
     async def test_list_purchase_orders(self, async_client, auth_headers):
-        await async_client.post("/api/v1/warehouses/purchase-orders", json={"po_number": "PO-LST"}, headers=auth_headers)
+        await async_client.post(
+            "/api/v1/warehouses/purchase-orders",
+            json={"po_number": "PO-LST"},
+            headers=auth_headers,
+        )
         resp = await async_client.get("/api/v1/warehouses/purchase-orders", headers=auth_headers)
         assert resp.status_code == 200
         assert len(resp.json()["items"]) >= 1

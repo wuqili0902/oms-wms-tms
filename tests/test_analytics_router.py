@@ -4,8 +4,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.main import app
 from src.core.database import get_db
+from src.main import app
 
 API = "/api/v1/analytics"
 

@@ -2,8 +2,6 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 
 class TestAppendEvent:
     async def test_creates_and_flushes(self):

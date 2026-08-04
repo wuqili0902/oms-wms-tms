@@ -1,11 +1,12 @@
 """Tests for auth models."""
+from uuid import uuid4
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from uuid import uuid4
 
-from src.auth.models import User, Role, Permission
+from src.auth.models import Permission, Role, User
 
 
 class TestUserModel:
@@ -49,7 +50,12 @@ class TestUserModel:
         await db_session.rollback()
 
     async def test_user_default_is_active(self, db_session: AsyncSession):
-        user = User(id=uuid4(), username=f"activeuser-{uuid4().hex[:8]}", email="active@example.com", hashed_password="pw")
+        user = User(
+            id=uuid4(),
+            username=f"activeuser-{uuid4().hex[:8]}",
+            email="active@example.com",
+            hashed_password="pw",
+        )
         db_session.add(user)
         await db_session.commit()
         await db_session.refresh(user)
@@ -66,7 +72,12 @@ class TestUserModel:
 
 class TestRoleModel:
     async def test_create_role(self, db_session: AsyncSession):
-        role = Role(id=uuid4(), name="Warehouse Manager", code=f"wh_manager-{uuid4().hex[:8]}", description="Manages warehouse ops")
+        role = Role(
+            id=uuid4(),
+            name="Warehouse Manager",
+            code=f"wh_manager-{uuid4().hex[:8]}",
+            description="Manages warehouse ops",
+        )
         db_session.add(role)
         await db_session.commit()
         await db_session.refresh(role)

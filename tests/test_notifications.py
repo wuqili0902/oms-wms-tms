@@ -1,14 +1,15 @@
 import json
+from unittest.mock import patch
+
 import pytest
 from fastapi import WebSocketDisconnect
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
-from unittest.mock import patch
 
 from src.core.database import get_db
 from src.main import app
-from src.notification.models import Notification, NotificationType, NotificationChannel, NotificationPreference
-from src.notification.service import send_notification, notify_order_status_change
+from src.notification.models import Notification, NotificationChannel, NotificationPreference, NotificationType
+from src.notification.service import notify_order_status_change, send_notification
 from tests.conftest import _SharedSession
 
 
@@ -230,7 +231,6 @@ async def test_notification_api_preferences(sqlite_engine):
     app.dependency_overrides[get_db] = _override
 
     from src.core.security import create_access_token
-
     from src.notification.models import NotificationPreference
     pref = NotificationPreference(user_id=uid, notification_type=NotificationType.SYSTEM_ALERT,
                                    channel=NotificationChannel.WEBSOCKET, enabled=False)
@@ -272,6 +272,7 @@ async def test_ws_manager():
 @pytest.mark.asyncio
 async def test_ws_manager_connect_disconnect():
     from unittest.mock import AsyncMock
+
     from src.notification.ws import ConnectionManager
     mgr = ConnectionManager()
     ws = AsyncMock()
@@ -296,6 +297,7 @@ async def test_ws_manager_connect_disconnect():
 @pytest.mark.asyncio
 async def test_ws_manager_send_json():
     from unittest.mock import AsyncMock
+
     from src.notification.ws import ConnectionManager
     mgr = ConnectionManager()
     ws1 = AsyncMock()
@@ -316,6 +318,7 @@ async def test_ws_manager_send_json():
 @pytest.mark.asyncio
 async def test_ws_manager_send_disconnect():
     from unittest.mock import AsyncMock
+
     from src.notification.ws import ConnectionManager
     mgr = ConnectionManager()
     ws = AsyncMock()
@@ -331,6 +334,7 @@ async def test_ws_manager_send_disconnect():
 @pytest.mark.asyncio
 async def test_ws_manager_send_generic_error():
     from unittest.mock import AsyncMock
+
     from src.notification.ws import ConnectionManager
     mgr = ConnectionManager()
     ws = AsyncMock()
@@ -346,6 +350,7 @@ async def test_ws_manager_send_generic_error():
 @pytest.mark.asyncio
 async def test_ws_manager_broadcast():
     from unittest.mock import AsyncMock
+
     from src.notification.ws import ConnectionManager
     mgr = ConnectionManager()
     ws1 = AsyncMock()
@@ -540,6 +545,7 @@ async def test_send_notification_exception(sqlite_engine, db_session):
 @pytest.mark.asyncio
 async def test_send_notification_auto_session(sqlite_engine, db_session):
     from unittest.mock import AsyncMock
+
     from src.notification.service import send_notification
 
     uid = "notif-auto-sess"
@@ -560,10 +566,11 @@ async def test_send_notification_auto_session(sqlite_engine, db_session):
 
 @pytest.mark.asyncio
 async def test_notify_low_stock(sqlite_engine, db_session):
-    from src.notification.models import Notification, NotificationChannel, NotificationType
-    from src.notification.service import notify_low_stock
     import uuid
+
     from src.auth.models import User
+    from src.notification.models import Notification, NotificationType
+    from src.notification.service import notify_low_stock
 
     u1 = User(id=uuid.uuid4(), username="ops1", email="ops1@test.com", hashed_password="x", is_active=True)
     u2 = User(id=uuid.uuid4(), username="ops2", email="ops2@test.com", hashed_password="x", is_active=True)
