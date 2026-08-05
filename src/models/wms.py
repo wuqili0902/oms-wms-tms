@@ -5,9 +5,10 @@ from decimal import Decimal
 from enum import StrEnum
 
 from sqlalchemy import UUID, Column, DateTime, ForeignKey, Numeric, String
+from sqlalchemy.orm import relationship
 
-from models.base import Base
-from models.wms_enum import StockInType, StockOutType
+from src.models.base import Base
+from src.models.wms_enum import StockInType, StockOutType
 
 # ── Stock In ────────────────────────────────────────────────────────
 
@@ -49,6 +50,10 @@ class StockIn(Base):
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
+    lines = relationship(
+        "StockInLine", back_populates="stock_in", cascade="all, delete-orphan"
+    )
+
 
 class StockInLine(Base):
     """Line item of a stock-in.
@@ -78,6 +83,8 @@ class StockInLine(Base):
     expiry_date = Column(DateTime(timezone=True), nullable=True)
 
     metadata_ = Column("metadata", String(length=1024), nullable=True)
+
+    stock_in = relationship("StockIn", back_populates="lines")
 
 
 # ── Stock Out ───────────────────────────────────────────────────────
@@ -115,6 +122,10 @@ class StockOut(Base):
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
+    lines = relationship(
+        "StockOutLine", back_populates="stock_out", cascade="all, delete-orphan"
+    )
+
 
 class StockOutLine(Base):
     """Line item of a stock-out.
@@ -145,6 +156,8 @@ class StockOutLine(Base):
 
     metadata_ = Column("metadata", String(length=1024), nullable=True)
 
+    stock_out = relationship("StockOut", back_populates="lines")
+
 
 # ── Inventory Log ───────────────────────────────────────────────────
 
@@ -158,8 +171,8 @@ class InventoryLogType(StrEnum):
     ADJUSTMENT_OUT = "ADJUSTMENT_OUT" # 盘亏 (stock decrease)
 
 
-class InventoryLog(Base):
-    """Audit trail for inventory changes.
+class StockInventoryLog(Base):
+    """Audit trail for stock in/out inventory changes.
 
     Schema:
         id                  UUID PK
@@ -174,7 +187,7 @@ class InventoryLog(Base):
         remark              str | None
     """
 
-    __tablename__ = "inventory_logs"
+    __tablename__ = "stock_inventory_logs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid.uuid4)
     warehouse_id = Column(
@@ -190,3 +203,5 @@ class InventoryLog(Base):
     operator_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     reason = Column(String(32), nullable=True)  # AdjustReason enum value
     remark = Column(String(500), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))

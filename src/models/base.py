@@ -19,21 +19,30 @@ def model_to_dict(model: Any) -> dict:
 
     Handles UUID, datetime, Decimal, Enum serialisation automatically.
     """
-    result = {}
-    for col in model.__table__.columns:
-        val = getattr(model, col.name)
+
+    def serialize(val):
         if val is None:
-            result[col.name] = None
-        elif isinstance(val, uuid.UUID):
-            result[col.name] = str(val)
-        elif isinstance(val, datetime):
-            result[col.name] = val.isoformat()
-        elif isinstance(val, Decimal):
-            result[col.name] = str(val)
-        elif isinstance(val, Enum):
-            result[col.name] = val.value
-        else:
-            result[col.name] = val
+            return None
+        if isinstance(val, uuid.UUID):
+            return str(val)
+        if isinstance(val, datetime):
+            return val.isoformat()
+        if isinstance(val, Decimal):
+            return str(val)
+        if isinstance(val, Enum):
+            return val.value
+        return val
+
+    result = {}
+    mapper = getattr(type(model), "__mapper__", None)
+    if mapper is not None:
+        for prop in mapper.column_attrs:
+            col = prop.columns[0]
+            result[col.name] = serialize(getattr(model, prop.key))
+    else:
+        for col in model.__table__.columns:
+            attr = getattr(col, "key", None) or col.name
+            result[col.name] = serialize(getattr(model, attr))
     return result
 
 

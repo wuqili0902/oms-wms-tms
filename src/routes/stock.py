@@ -11,9 +11,9 @@ from src.core.database import get_db
 from src.core.exceptions import NotFoundException
 from src.models.base import model_to_dict
 from src.models.wms import (
-    InventoryLog,
     StockIn,
     StockInLine,
+    StockInventoryLog,
     StockOut,
     StockOutLine,
 )
@@ -48,25 +48,29 @@ async def create_stock_in(req: dict, session: Annotated[AsyncSession, Depends(ge
     lines = data.pop("lines", [])
 
     # Validate warehouse exists
-    from src.models.wms import Warehouse  # noqa: F811
+    from src.wms.models import Warehouse  # noqa: F811
     wh = await session.execute(
         select(Warehouse).where(Warehouse.id == _uuid.UUID(data["warehouse_id"]))
     )
-    warehouse = wh.scalar_one()
+    warehouse = wh.scalar_one_or_none()
+    if not warehouse:
+        raise NotFoundException(f"warehouse {data['warehouse_id']}")
 
     if data.get("supplier_id"):
-        from src.models.wms import Vendor  # noqa: F811
+        from src.wms.models import Vendor  # noqa: F811
         v = await session.execute(
             select(Vendor).where(Vendor.id == _uuid.UUID(data["supplier_id"]))
         )
-        v.scalar_one()  # validate supplier exists
+        if not v.scalar_one_or_none():
+            raise NotFoundException(f"vendor {data['supplier_id']}")
 
     obj = StockIn(
         warehouse_id=warehouse.id,
         type=data.get("type", "PURCHASE"),
         ref_no=data.get("ref_no"),
         reference_type=data.get("reference_type"),
-        total_qty=sum((Decimal(str(ln.get("qty"))) for ln in lines), Decimal(0)),
+        supplier_id=_uuid.UUID(data["supplier_id"]) if data.get("supplier_id") else None,
+        total_qty=(sum((Decimal(str(ln.get("qty"))) for ln in lines), Decimal(0))).quantize(Decimal("0.0001")),
     )
     session.add(obj)
 
@@ -125,7 +129,7 @@ async def update_stock_in(id: str, req: dict, session: Annotated[AsyncSession, D
         if data["status"] not in allowed:
             raise HTTPException(400, f"Invalid status transition {obj.status} -> {data['status']}")
 
-    session.add(update(StockIn).where(StockIn.id == obj.id).values(data))
+    await session.execute(update(StockIn).where(StockIn.id == obj.id).values(data))
     await session.commit()
     return model_to_dict(obj)
 
@@ -140,18 +144,20 @@ async def create_stock_out(req: dict, session: Annotated[AsyncSession, Depends(g
     lines = data.pop("lines", [])
 
     # Validate warehouse exists
-    from src.models.wms import Warehouse  # noqa: F811
+    from src.wms.models import Warehouse  # noqa: F811
     wh = await session.execute(
         select(Warehouse).where(Warehouse.id == _uuid.UUID(data["warehouse_id"]))
     )
-    warehouse = wh.scalar_one()
+    warehouse = wh.scalar_one_or_none()
+    if not warehouse:
+        raise NotFoundException(f"warehouse {data['warehouse_id']}")
 
     obj = StockOut(
         warehouse_id=warehouse.id,
         type=data.get("type", "SALE"),
         ref_no=data.get("ref_no"),
         reference_type=data.get("reference_type"),
-        total_qty=sum((Decimal(str(ln.get("qty"))) for ln in lines), Decimal(0)),
+        total_qty=(sum((Decimal(str(ln.get("qty"))) for ln in lines), Decimal(0))).quantize(Decimal("0.0001")),
     )
     session.add(obj)
 
@@ -208,7 +214,7 @@ async def update_stock_out(id: str, req: dict, session: Annotated[AsyncSession, 
         if data["status"] not in allowed:
             raise HTTPException(400, f"Invalid status transition {obj.status} -> {data['status']}")
 
-    session.add(update(StockOut).where(StockOut.id == obj.id).values(data))
+    await session.execute(update(StockOut).where(StockOut.id == obj.id).values(data))
     await session.commit()
     return model_to_dict(obj)
 
@@ -219,7 +225,7 @@ async def update_stock_out(id: str, req: dict, session: Annotated[AsyncSession, 
 @router.get("/inventory-log/{id}")
 async def get_inventory_log(id: str, session: Annotated[AsyncSession, Depends(get_db)]):
     """Get a single Inventory Log record."""
-    obj = await session.get(InventoryLog, _uuid.UUID(id))
+    obj = await session.get(StockInventoryLog, _uuid.UUID(id))
     if not obj or getattr(obj, "is_deleted", False):
         raise NotFoundException(f"inventory-log {id}")
     return model_to_dict(obj)
@@ -228,9 +234,9 @@ async def get_inventory_log(id: str, session: Annotated[AsyncSession, Depends(ge
 @router.get("/inventory-log")
 async def list_inventory_log(session: Annotated[AsyncSession, Depends(get_db)], warehouse_id: str | None = Query(None)):
     """List Inventory Log records with optional warehouse filter."""
-    q = select(InventoryLog).order_by(InventoryLog.created_at.desc())
+    q = select(StockInventoryLog).order_by(StockInventoryLog.created_at.desc())
     if warehouse_id:
-        q = q.where(InventoryLog.warehouse_id == _uuid.UUID(warehouse_id))
+        q = q.where(StockInventoryLog.warehouse_id == _uuid.UUID(warehouse_id))
     res = await session.execute(q)
     return [model_to_dict(r) for r in res.scalars().all()]
 
@@ -262,13 +268,13 @@ async def adjust_stock(req: dict, session: Annotated[AsyncSession, Depends(get_d
     abs_qty = abs(qty)
 
     # Log the adjustment in inventory logs
-    log_entry = InventoryLog(
+    log_entry = StockInventoryLog(
         warehouse_id=warehouse_id,
         sku=str(sku_id),
         type=adj_type,
         reference_type="adjust_stock",
         quantity_change=abs_qty,
-        operator=data.get("operator"),
+        operator_id=data.get("operator_id"),
         reason=data.get("reason"),
         remark=data.get("remark"),
     )

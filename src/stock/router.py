@@ -10,7 +10,7 @@ from src.routes import stock as _s  # noqa: E402
 for ep in _s.router.routes:
     methods = getattr(ep, "methods", ["GET"])
     router.add_api_route(
-        path=ep.path.lstrip("/"),
+        path=ep.path,
         endpoint=ep.endpoint,
         methods=list(methods),
     )

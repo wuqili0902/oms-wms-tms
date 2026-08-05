@@ -77,6 +77,12 @@ class TestMetadata:
             "reference_entities",
             "stock_movements",
             "picking_waves",
+            # wms — stock in/out (migration d5e6f7a8b9c0)
+            "stock_in",
+            "stock_in_lines",
+            "stock_out",
+            "stock_out_lines",
+            "stock_inventory_logs",
             # barcode
             "barcode_records",
             "label_templates",
