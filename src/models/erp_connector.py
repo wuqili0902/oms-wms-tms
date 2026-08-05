@@ -24,6 +24,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from xml.etree import ElementTree
 
+from dataclasses import dataclass, field as dataclass_field
+
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -301,7 +303,21 @@ class EDITranslator(BaseModel):
 # ── Dead Letter Queue ───────────────────────────────────────────────────
 
 
-class DeadLetterQueue(BaseModel):
+@dataclass
+class DLQEntry:
+    """Individual entry in the dead letter queue."""
+
+    id: str
+    msg_type: MessageType
+    error_code: str       # e.g., "EDI_PARSE_ERROR", "SAP_COMM_FAILURE"
+    raw_message: str      # original EDI/IDOC content
+    resolved: bool = False
+    resolved_at: datetime | None = None  # when the entry was resolved (manual intervention)
+    created_at: datetime = dataclass_field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass
+class DeadLetterQueue:
     """DLQ for EDI messages that failed after retries.
 
     Messages are stored with:
@@ -313,20 +329,10 @@ class DeadLetterQueue(BaseModel):
     Dashboard API endpoint: GET /api/v1/edi/dlq?status=pending
     """
 
-    class DLQEntry(BaseModel):
-        id: str
-        msg_type: MessageType
-        error_code: str       # e.g., "EDI_PARSE_ERROR", "SAP_COMM_FAILURE"
-        raw_message: str      # original EDI/IDOC content
-        resolved: bool = False
-        resolved_at: datetime | None = None  # when the entry was resolved (manual intervention)
-        created_at: datetime  # when the entry was created
-
-    def __init__(self):
-        self._entries: list[DeadLetterQueue.DLQEntry] = []
+    _entries: list[DLQEntry] = dataclass_field(default_factory=list)  # noqa: RUF012
 
     def enqueue(self, msg: ERPMessage, error_code: str) -> DLQEntry:
-        entry = DeadLetterQueue.DLQEntry(
+        entry = DLQEntry(
             id=str(uuid.uuid4()),
             msg_type=msg.msg_type,
             error_code=error_code,

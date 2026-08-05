@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 import ElementPlus from 'unplugin-element-plus/vite'
@@ -45,12 +45,6 @@ export default defineConfig({
   ],
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
-  },
-  test: {
-    environment: 'jsdom',
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
-    css: { modules: { classNameStrategy: 'non-scoped' } },
-    server: { deps: { inline: ['element-plus'] } },
   },
   server: {
     port: 5173,
