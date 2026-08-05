@@ -20,11 +20,11 @@ import hashlib
 import json
 import logging
 import uuid
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from enum import StrEnum
 from xml.etree import ElementTree
-
-from dataclasses import dataclass, field as dataclass_field
 
 from pydantic import BaseModel, Field
 
