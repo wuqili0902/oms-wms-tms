@@ -72,6 +72,66 @@ async def adjust_inventory(
         raise HTTPException(status_code=code, detail=str(e))
 
 
+# ── Transfer Order (库存调拨) ────────────────────────────────────────────────
+
+@router.post("/warehouse/transfers", status_code=status.HTTP_201_CREATED)
+async def create_transfer_order(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Create a transfer order."""
+    try:
+        return await wms_service.create_transfer_order(db, data)
+    except (NotFoundException, ValidationException) as e:
+        code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=code, detail=str(e))
+
+
+@router.get("/warehouse/transfers", response_model=list[dict])
+async def list_transfers(
+    warehouse_id: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """List transfer orders for a warehouse."""
+    return await wms_service.list_transfers(db, wh_id=warehouse_id)
+
+
+# ── Stock Count / Inventory Adjustment (盘点) ────────────────────────────────
+
+@router.post("/inventory/count/submit")
+async def submit_stock_count(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Submit stock count results for a location.
+
+    Mobile flow: operator scans SKUs and enters actual quantities.
+    System compares with inventory → adjusts accordingly.
+    """
+    try:
+        return await wms_service.adjust_stock_count(db, data)
+    except (NotFoundException, ValidationException) as e:
+        code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=code, detail=str(e))
+
+
+@router.post("/inventory/adjust-stock-count")
+async def adjust_stock_count_mobile(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Raw-dict version of stock count for mobile (aliases fields)."""
+    try:
+        return await wms_service.adjust_stock_count(db, data)
+    except (NotFoundException, ValidationException) as e:
+        code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=code, detail=str(e))
+
+
 @router.post("/inventory/items", response_model=StockInResponseWithItems, status_code=status.HTTP_201_CREATED)
 async def stock_in(
     warehouse_id: str,

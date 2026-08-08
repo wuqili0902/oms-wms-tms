@@ -1,9 +1,10 @@
 <template>
-  <div>
-    <el-tabs v-model="activeTab">
+  <div class="page-container">
+    <!-- Desktop: tabs layout -->
+    <el-tabs v-if="!isMobile" v-model="activeTab">
       <el-tab-pane label="库存变动" name="mutation">
         <el-card>
-          <template #header>记录库存变动</template>
+          <template #header><span>记录库存变动</span></template>
           <el-form :model="mutationForm" label-width="100px" style="max-width:500px" @keyup.enter="submitMutation">
             <el-form-item label="设备ID">
               <el-input v-model="mutationForm.device_id" placeholder="扫描器/PDA 编号" />
@@ -37,7 +38,6 @@
               <el-button @click="clearMutation">清空</el-button>
             </el-form-item>
           </el-form>
-          <el-alert v-if="mutResult" type="success" :title="`变动已入队列，ID: ${mutResult.id}`" show-icon closable style="margin-top:12px" />
         </el-card>
       </el-tab-pane>
 
@@ -49,7 +49,6 @@
               <el-button type="primary" :loading="syncLoading" @click="triggerSync">触发同步</el-button>
             </div>
           </template>
-          <el-alert v-if="syncResult" :title="`同步完成：${syncResult.accepted} 成功，${syncResult.failed} 失败`" :type="syncResult.failed > 0 ? 'warning' : 'success'" show-icon closable style="margin-bottom:12px" />
           <el-table :data="mutations" stripe v-loading="listLoading">
             <template #empty><el-empty description="暂无待同步数据" /></template>
             <el-table-column prop="id" label="ID" width="60" />
@@ -68,80 +67,175 @@
         </el-card>
       </el-tab-pane>
     </el-tabs>
+
+    <!-- Mobile: bottom tabs + card list -->
+    <div v-else class="mobile-container">
+      <!-- Header with offline indicator -->
+      <div class="mobile-header" :class="{ offline: !online }">
+        <span>{{ online ? 'PDA 作业' : '⚠️ 已断开，部分功能不可用' }}</span>
+        <el-button text @click="$router.push('/dashboard')">退出</el-button>
+      </div>
+
+      <!-- Tab content area -->
+      <div class="mobile-content" v-if="activeTab === 'mutation'">
+        <el-card shadow="never" style="border-radius:0">
+          <template #header>
+            <span>库存变动</span>
+          </template>
+          <el-form :model="mutationForm" label-position="top">
+            <el-form-item label="设备ID"><el-input v-model="mutationForm.device_id" placeholder="扫描器/PDA 编号" /></el-form-item>
+            <el-form-item label="实体类型">
+              <el-select v-model="mutationForm.entity_type" style="width:100%">
+                <el-option label="库存" value="inventory" />
+                <el-option label="库位" value="location" />
+                <el-option label="订单" value="order" />
+                <el-option label="设备" value="device" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="实体ID"><el-input v-model="mutationForm.entity_id" placeholder="扫描条码 / 输入UUID" /></el-form-item>
+            <el-form-item label="操作">
+              <el-radio-group v-model="mutationForm.operation">
+                <el-radio value="create">新增</el-radio>
+                <el-radio value="update">更新</el-radio>
+                <el-radio value="delete">删除</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="数量"><el-input-number v-model="mutationForm.qty" :min="0" style="width:100%" /></el-form-item>
+            <el-form-item label="备注"><el-input v-model="mutationForm.remark" type="textarea" placeholder="可选备注" rows="2" /></el-form-item>
+          </el-form>
+        </el-card>
+
+        <div style="padding:10px">
+          <el-button type="primary" @click="submitMutation" :loading="mutLoading" style="width:100%;height:48px;font-size:16px">提交变动</el-button>
+        </div>
+
+        <div v-if="mutResult" style="padding:10px"><el-alert :title="'变动已入队列，ID:' + mutResult.id" type="success" show-icon closable /></div>
+      </div>
+
+      <div class="mobile-content" v-else-if="activeTab === 'sync'">
+        <!-- Sync status card -->
+        <el-card shadow="never" style="border-radius:0">
+          <template #header><span>同步状态</span></template>
+          <el-button type="primary" @click="triggerSync" :loading="syncLoading" icon="Refresh" size="large" style="width:100%;height:48px;font-size:16px">触发同步</el-button>
+        </el-card>
+
+        <!-- Mutation list as cards -->
+        <div v-if="mutations.length > 0" style="padding:10px">
+          <div v-for="m in mutations" :key="m.id" class="mobile-mutation-card">
+            <span class="mutation-id">#{{ m.id }} - {{ m.entity_type }}</span>
+            <el-tag size="small" :type="m.synced_at ? 'success' : 'warning'">{{ m.synced_at ? '已同步' : '待同步' }}</el-tag>
+          </div>
+        </div>
+
+        <!-- Empty state -->
+        <div v-else style="padding:40px;text-align:center;color:#999">暂无待同步数据</div>
+      </div>
+
+      <!-- Bottom navigation bar -->
+      <div class="mobile-bottom-bar">
+        <el-button :type="activeTab === 'mutation' ? 'primary' : ''" @click="activeTab = 'mutation'" icon="Plus" size="small">库存变动</el-button>
+        <el-button :type="activeTab === 'sync' ? 'primary' : ''" @click="activeTab = 'sync'" icon="Upload" size="small">同步队列</el-button>
+      </div>
+    </div>
+
+    <!-- Desktop: bottom spacer -->
+    <div v-if="!isMobile"><el-backtop target=".app-main" /></div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import apiClient from '../../api'
 
 const activeTab = ref('mutation')
+const isMobile = ref(window.innerWidth < 768)
+const online = ref(navigator.onLine)
 
-const mutationForm = reactive({
-  device_id: '', entity_type: 'inventory', entity_id: '',
-  operation: 'update', qty: 0, remark: '',
-})
+// Mutation form state
+const mutationForm = ref({ device_id: '', entity_type: 'inventory', entity_id: '', operation: 'update', qty: 0, remark: '' })
 const mutLoading = ref(false)
 const mutResult = ref<{ id: number } | null>(null)
 
+// Sync state
 const syncLoading = ref(false)
-const syncResult = ref<{ accepted: number; failed: number } | null>(null)
-
-const listLoading = ref(false)
 const mutations = ref<any[]>([])
+const listLoading = ref(false)
 
-function clearMutation() {
-  mutationForm.entity_id = ''
-  mutationForm.qty = 0
-  mutationForm.remark = ''
-  mutResult.value = null
-}
+function clearMutation() { mutationForm.value.entity_id = ''; mutationForm.value.qty = 0; mutationForm.value.remark = '' }
 
 async function submitMutation() {
   mutLoading.value = true
-  mutResult.value = null
   try {
-    const payload: Record<string, any> = { ...mutationForm }
-    payload.payload = { quantity: mutationForm.qty, remark: mutationForm.remark }
-    delete payload.qty
-    delete payload.remark
-    const res = await apiClient.post('/pda/mutations', payload)
-    mutResult.value = res.data ?? null
+    const payload = { ...mutationForm.value, payload: { quantity: mutationForm.value.qty, remark: mutationForm.value.remark } }
+    delete payload.qty; delete payload.remark
+    await $apiClient.post('/pda/mutations', payload)
     ElMessage.success('变动已入队列')
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '变动提交失败')
-  }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '提交失败') }
   mutLoading.value = false
 }
 
 async function triggerSync() {
   syncLoading.value = true
-  syncResult.value = null
   try {
-    const res = await apiClient.post('/pda/sync')
-    syncResult.value = res.data ?? null
-    if (syncResult.value && syncResult.value.failed === 0) {
-      ElMessage.success(`同步完成，${syncResult.value.accepted} 条处理成功`)
-    }
+    const res = await $apiClient.post('/pda/sync')
+    if (res.data?.failed === 0) ElMessage.success(`同步完成，${res.data.accepted} 条处理成功`)
     fetchMutations()
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '同步失败')
-  }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '同步失败') }
   syncLoading.value = false
 }
 
 async function fetchMutations() {
   listLoading.value = true
   try {
-    const res = await apiClient.get('/pda/mutations')
-    const d = res.data?.data ?? res.data ?? []
-    mutations.value = Array.isArray(d) ? d : []
-  } catch { mutations.value = [] }
+    const res = await $apiClient.get('/pda/mutations')
+    mutations.value = Array.isArray(res.data) ? res.data : []
+  } catch {}
   listLoading.value = false
 }
 
+// Offline detection — show warning banner when disconnected
 onMounted(() => {
   if (activeTab.value === 'sync') fetchMutations()
+  window.addEventListener('online', () => online.value = true)
+  window.addEventListener('offline', () => online.value = false)
 })
+onUnmounted(() => { window.removeEventListener('online'); window.removeEventListener('offline') })
+
+// Responsive: re-check on resize
+import { useDebounceFn } from '@vueuse/core'
+const debouncedResize = useDebounceFn(() => isMobile.value = window.innerWidth < 768, 200)
+onMounted(() => window.addEventListener('resize', debouncedResize))
 </script>
+
+<style scoped>
+.page-container { padding: 16px; }
+
+/* Mobile-specific overrides */
+@media (max-width: 768px) {
+  .mobile-content { flex: 1; overflow-y: auto; }
+
+  /* Bottom navigation bar — PDA style */
+  .mobile-bottom-bar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    display: flex; gap: 8px; padding: 8px;
+    background: #f1f5f9; border-top: 1px solid #e4e7ed; z-index: 100;
+  }
+
+  .mobile-mutation-card {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px; background: white; border-radius: 8px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+
+  .mobile-header {
+    display: flex; justify-content: space-between; align-items: center; padding: 12px 16px;
+    background: #f1f5f9; font-size: 18px; font-weight: 600;
+  }
+
+  .mobile-header.offline {
+    background: #fef3c7; color: #d97706;
+  }
+}
+
+/* Desktop tab overrides */
+.el-tabs__header { margin-bottom: 24px !important; }
+</style>

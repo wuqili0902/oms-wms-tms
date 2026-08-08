@@ -669,3 +669,6 @@ class TransferLog(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
     def __repr__(self):
         return f"<TransferLog {self.transfer_order_id}: qty_chg={self.quantity_change}>"
 
+# Re-export from legacy models for backwards compatibility
+from src.models.wms import StockInventoryLog  # noqa: F401
+

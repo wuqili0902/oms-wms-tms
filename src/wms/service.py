@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import NotFoundException, ValidationException
@@ -20,7 +20,6 @@ from src.wms.models import (
     CreditMemoLine,
     Inventory,
     InventoryChangeType,
-    InventoryLog,
     Invoice,
     InvoiceLine,
     Location,
@@ -31,8 +30,12 @@ from src.wms.models import (
     PickingWaveType,
     PurchaseOrder,
     PurchaseOrderLine,
+    StockInventoryLog,
     StockMovement,
     StockMovementType,
+    TransferItemType,
+    TransferOrder,
+    TransferOrderLine,
     Vendor,
     Warehouse,
     WarehouseStatus,
@@ -469,6 +472,114 @@ async def adjust_inventory(db: AsyncSession, data: dict) -> dict:
     return _inv_to_dict(inv, sku_str)
 
 
+# ── Stock Count / Inventory Adjustment (mobile app "盘点") ─────────────────────
+
+
+async def adjust_stock_count(db: AsyncSession, data: dict) -> dict:
+    """Process stock count results for a location.
+
+    Mobile flow: operator scans each SKU and enters the actual qty.
+    System compares with inventory → creates IN/OUT adjustments as needed.
+    """
+    # Accept both UUID-style `warehouse_id` and code-based `source_warehouse_code`
+    wh_id: uuid.UUID | None = None
+    if data.get("warehouse_id"):
+        wh_id = _to_uuid(data["warehouse_id"])
+    elif data.get("source_warehouse_code"):
+        wh_result = await db.execute(select(Warehouse).where(Warehouse.code == data["source_warehouse_code"]))
+        wh_obj = wh_result.scalar_one_or_none()
+        if not wh_obj:
+            raise NotFoundException(message=f"Warehouse {data['source_warehouse_code']} not found")
+        wh_id = wh_obj.id
+
+    loc_id_str = data.get("location_id") or data.get("target_location_id", "")
+    if not loc_id_str:
+        raise ValidationException(message="Missing location_id in count request")
+    loc_id = _to_uuid(loc_id_str)
+
+    # Validate warehouse exists (already done above with source_warehouse_code check)
+    loc_result = await db.execute(select(Location).where(Location.id == loc_id))
+    if not loc_result.scalar_one_or_none():
+        raise NotFoundException(message=f"Location {loc_id} not found")
+
+    results: list[dict] = data.get("count_results", [])
+    if not results:
+        raise ValidationException(message="No count results to process")
+
+    now = _now()
+    for item in results:
+        # Mobile sends `sku_code` and `actual_qty_count`; service expects `sku` and `actual_qty`
+        sku_str = item.get("sku", item.get("sku_code"))
+        actual_qty_raw = item.get("actual_qty") or item.get("actual_qty_count")
+        if actual_qty_raw is None:
+            raise ValidationException(message=f"Missing quantity field in count result for SKU {item.get('sku', 'unknown')}")
+        actual_qty = Decimal(str(actual_qty_raw))
+
+        # Lookup or create SKU
+        sku_obj = await _get_or_create_sku(db, sku_str)
+
+        # Current inventory at this location/SKU
+        inv_result = await db.execute(
+            select(Inventory).where(
+                Inventory.warehouse_id == wh_id,
+                Inventory.location_id == loc_id,
+                Inventory.sku_id == sku_obj.id,
+            )
+        )
+        inv = inv_result.scalar_one_or_none()
+
+        system_qty = Decimal(str(inv.quantity)) if inv else Decimal(0)
+        diff = actual_qty - system_qty  # positive = excess (IN), negative = shortage (OUT)
+
+        if abs(diff) < Decimal("0.001"):
+            continue  # no change needed
+
+        if not inv:
+            # Create new inventory record
+            inv = Inventory(
+                id=uuid.uuid4(),
+                warehouse_id=wh_id,
+                location_id=loc_id,
+                sku_id=sku_obj.id,
+                gtin="",
+                batch_no="COUNT",
+                quantity=actual_qty,
+                locked_qty=Decimal(0),
+                min_qty=Decimal(0),
+                max_qty=Decimal(0),
+                received_at=now,
+            )
+            db.add(inv)
+        elif diff > 0:
+            # Stock increase (盘盈)
+            inv.quantity = actual_qty
+        else:
+            # Stock decrease (盘亏)
+            if abs(diff) > Decimal(str(inv.quantity)):
+                raise ValidationException(
+                    message=f"SKU {sku_str}: actual qty ({actual_qty}) exceeds available inventory ({inv.quantity})"
+                )
+            inv.quantity = actual_qty
+
+        inv.updated_at = now
+
+        # Create adjustment log entry
+        adj_type = "ADJUSTMENT_IN" if diff > 0 else "ADJUSTMENT_OUT"
+        log_entry = StockInventoryLog(
+            id=uuid.uuid4(),
+            warehouse_id=wh_id,
+            sku=sku_str,
+            type=adj_type,
+            reference_type="stock_count",
+            quantity_change=abs(diff),
+            reason="stock_count",
+        )
+        db.add(log_entry)
+
+    await db.commit()
+    return {"success": True, "message": f"Stock count processed: {len(results)} SKUs"}
+
+
 async def list_movements(db: AsyncSession, wh_id: str | None = None) -> list[dict]:
     """List stock movements."""
     stmt = select(StockMovement)
@@ -551,6 +662,93 @@ async def list_picking_waves(db: AsyncSession, wh_id: str | None = None) -> list
         d.pop("completed_items", None)
         d.pop("assignee_id", None)
         d["updated_at"] = d.get("updated_at", d.get("created_at", ""))
+        items.append(d)
+    return items
+
+
+# ── Transfer Order (库存调拨) ───────────────────────────────────────────────
+
+
+async def create_transfer_order(db: AsyncSession, data: dict) -> dict:
+    """Create a transfer order with line items."""
+    # Accept both `source_location` and `source_warehouse_code` / `source_warehouse_id`
+    src_wh = _to_uuid(data["source_location"]) if data.get("source_location") else None
+
+    target_wh_id_raw = (data.get("destination_warehouse_id")
+                        or data.get("target_warehouse_id")
+                        or data.get("source_warehouse_id"))
+    # Mobile sends destination by code; try resolving from Warehouse.code
+    if not target_wh_id_raw:
+        raise ValidationException(message="destination_warehouse_id or target_warehouse_id required")
+
+    if isinstance(target_wh_id_raw, str) and len(target_wh_id_raw) == 36:
+        target_wh_id = _to_uuid(target_wh_id_raw)
+    else:
+        wh_result = await db.execute(select(Warehouse).where(Warehouse.code == target_wh_id_raw))
+        wh_obj = wh_result.scalar_one_or_none()
+        if not wh_obj:
+            raise NotFoundException(message=f"Warehouse {target_wh_id_raw} not found")
+        target_wh_id = wh_obj.id
+
+    src_wh_code = data.get("source_warehouse_code", "") or (src_wh.hex[:12].upper() if src_wh else "")
+
+    # Generate transfer order code
+    code = f"TO-{datetime.now(UTC).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+
+    transfer = TransferOrder(
+        id=uuid.uuid4(),
+        code=code,
+        source_warehouse_id=target_wh_id if not src_wh else None,  # fallback to target if no source location
+        target_warehouse_id=target_wh_id,
+        type=TransferItemType.SKU,
+        status="DRAFT",
+    )
+    db.add(transfer)
+
+    for item_data in data.get("items", []):
+        sku_str = item_data["sku"]
+        qty = Decimal(str(item_data["quantity"]))
+        sku_obj = await _get_or_create_sku(db, sku_str)
+
+        line = TransferOrderLine(
+            id=uuid.uuid4(),
+            transfer_order_id=transfer.id,
+            sku_id=sku_obj.id,
+            location_from_id=src_wh,
+            quantity=qty,
+        )
+        db.add(line)
+
+    await db.commit()
+    return model_to_dict(transfer)
+
+
+async def list_transfers(db: AsyncSession, wh_id: str | None = None) -> list[dict]:
+    """List transfer orders with optional warehouse filter."""
+    stmt = select(TransferOrder).order_by(TransferOrder.created_at.desc())
+    if wh_id:
+        wh_uuid = _to_uuid(wh_id)
+        stmt = stmt.where(
+            or_(
+                TransferOrder.source_warehouse_id == wh_uuid,
+                TransferOrder.target_warehouse_id == wh_uuid,
+            )
+        )
+    result = await db.execute(stmt)
+    orders = result.scalars().all()
+
+    # Load lines eagerly
+    order_ids = [o.id for o in orders]
+    lines_map: dict[uuid.UUID, list[dict]] = {}
+    if order_ids:
+        line_result = await db.execute(select(TransferOrderLine).where(TransferOrderLine.transfer_order_id.in_(order_ids)))
+        for ln in line_result.scalars().all():
+            lines_map.setdefault(ln.transfer_order_id, []).append(model_to_dict(ln))
+
+    items = []
+    for o in orders:
+        d = model_to_dict(o)
+        d["lines"] = lines_map.get(o.id, [])
         items.append(d)
     return items
 

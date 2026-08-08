@@ -23,7 +23,7 @@ export async function clearToken() {
   return SecureStore.deleteItemAsync(TOKEN_KEY);
 }
 
-// ── HTTP helpers ───────────────────────────────────────────────────────────
+// ── HTTP helpers with offline-queue support ────────────────────────────────
 
 async function request(method, path, body = null) {
   const token = await getToken();
@@ -33,16 +33,105 @@ async function request(method, path, body = null) {
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
 
-  const resp = await fetch(`${BASE_URL}${path}`, opts);
-  const data = await resp.json();
+  try {
+    const resp = await fetch(`${BASE_URL}${path}`, opts);
+    const data = await resp.json();
 
-  if (!resp.ok) {
-    const msg =
-      data.detail || (Array.isArray(data.detail) ? data.detail[0]?.msg : "Request failed");
-    throw { status: resp.status, message: msg, data };
+    if (!resp.ok) {
+      const msg =
+        data.detail || (Array.isArray(data.detail) ? data.detail[0]?.msg : "Request failed");
+      throw { status: resp.status, message: msg, data };
+    }
+    return data;
+  } catch (err) {
+    // If offline or server error — queue mutation for later sync
+    await enqueueMutation(path, method, body);
+    console.warn("API request queued offline:", err.message || err);
+    throw { ...err, queued: true };
   }
-  return data;
 }
+
+let _mutCount = 0;
+
+/** Lightweight mutation queue entry. */
+function enqueueMutation(path, method, body) {
+  const entries = JSON.parse(localStorage.getItem("pda_mutations") ?? "[]");
+  entries.push({
+    id: `m_${++_mutCount}_${Date.now()}`,
+    path,
+    method,
+    body,
+    created_at: new Date().toISOString(),
+    synced_at: null,
+  });
+  localStorage.setItem("pda_mutations", JSON.stringify(entries));
+}
+
+/** Re-queue all pending mutations and return count. */
+export async function syncMutations() {
+  const raw = localStorage.getItem("pda_mutations");
+  if (!raw) return 0;
+  const entries = JSON.parse(raw);
+  let synced = 0;
+  for (const m of entries) {
+    try {
+      await request(m.method, m.path, m.body);
+      m.synced_at = new Date().toISOString();
+      synced++;
+    } catch { /* keep unsynced */ }
+  }
+  localStorage.setItem(
+    "pda_mutations",
+    JSON.stringify(entries.filter(e => !e.synced_at))
+  );
+  return synced;
+}
+
+// ── WebSocket manager (PDA real-time push) ────────────────────────────────
+
+class PdaSocketManager {
+  constructor() {
+    this._callbacks = new Set();
+    this._ws = null;
+    this._reconnectTimer = null;
+  }
+
+  connect(deviceId, url = "ws://10.0.2.2:8000/pda/ws?client_id=") {
+    if (this._ws?.readyState === WebSocket.OPEN) return;
+    const ws = new WebSocket(url + encodeURIComponent(deviceId));
+    this._ws = ws;
+
+    ws.onmessage = ({ data }) => {
+      try {
+        const msg = JSON.parse(data);
+        this._callbacks.forEach(cb => cb(msg));
+      } catch {}
+    };
+    ws.onerror = () => this.scheduleReconnect(deviceId, url);
+    ws.onclose = () => this.scheduleReconnect(deviceId, url);
+  }
+
+  send(payload) {
+    if (this._ws?.readyState === WebSocket.OPEN) this._ws.send(JSON.stringify(payload));
+  }
+
+  scheduleReconnect(deviceId, url) {
+    clearTimeout(this._reconnectTimer);
+    // Exponential backoff: 1s → 2s → 4s → 8s (max 30s)
+    const delay = Math.min(1000 * Math.pow(2, this._retryCount++), 30000);
+    this._reconnectTimer = setTimeout(() => {
+      this.connect(deviceId, url);
+    }, delay);
+  }
+
+  onMessage(cb) { this._callbacks.add(cb); return () => this._callbacks.delete(cb); }
+
+  disconnect() { clearTimeout(this._reconnectTimer); if (this._ws) this._ws.close(); }
+}
+
+export const pdaSocket = new PdaSocketManager();
+
+// ── API methods ────────────────────────────────────────────────────────────
 
 export const api = {
   // ── Auth ─────────────────────────────────────────────────────────────────
@@ -74,12 +163,18 @@ export const api = {
     return request("GET", `/warehouses/inventory${qs ? "?" + qs : ""}`);
   },
 
-  adjustInventory: (data) =>
-    request("POST", "/warehouses/inventory/adjust", data),
+  adjustStockCount: (data) =>
+    request("POST", "/inventory/adjust-stock-count", data),
 
   // ── Picking ──────────────────────────────────────────────────────────────
   listPickingWaves: () =>
     request("GET", "/warehouses/picking-waves"),
+
+  startPickingWave: (waveId) =>
+    request("POST", `/warehouses/picking-waves/${waveId}/start`),
+
+  completePickingWave: (waveId) =>
+    request("POST", `/warehouses/picking-waves/${waveId}/complete`),
 
   // ── Barcode ──────────────────────────────────────────────────────────────
   generateBarcode: (data) =>
@@ -90,4 +185,39 @@ export const api = {
 
   recordScan: (data) =>
     request("POST", "/barcode/scan", data),
+
+  // ── Packing / Shipments ──────────────────────────────────────────────────
+  createPackingRecord: (data) =>
+    request("POST", "/warehouses/packing", data),
+
+  listShipments: (params = {}) => {
+    const qs = Object.entries(params)
+      .filter(([_, v]) => v != null)
+      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+    return request("GET", `/shipments${qs ? "?" + qs : ""}`);
+  },
+
+  shipPackage: (shipmentId) =>
+    request("POST", `/shipments/${shipmentId}/ship`),
+
+  // ── Purchase Orders ──────────────────────────────────────────────────────
+  listPurchaseOrders: (status = "pending") =>
+    request("GET", `/purchase-orders?status=${status}`),
+
+  receiveGoods: (poId, data) =>
+    request("POST", `/purchase-orders/${poId}/receive`, data),
+
+  // ── Transfer Orders ──────────────────────────────────────────────────────
+  createTransferOrder: (data) =>
+    request("POST", "/warehouse/transfers", data),
+
+  listTransferOrders: () =>
+    request("GET", "/warehouse/transfers"),
+
+  // ── PDA Sync / Offline Queue ────────────────────────────────────────────
+  registerDevice: (deviceData) =>
+    request("POST", `/tms/devices/register`, deviceData),
+
+  heartbeat: (deviceId) =>
+    request("GET", `/tms/devices/${deviceId}/heartbeat`),
 };
