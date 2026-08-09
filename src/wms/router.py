@@ -74,7 +74,7 @@ async def adjust_inventory(
 
 # ── Transfer Order (库存调拨) ────────────────────────────────────────────────
 
-@router.post("/warehouse/transfers", status_code=status.HTTP_201_CREATED)
+@router.post("/transfers", status_code=status.HTTP_201_CREATED)
 async def create_transfer_order(
     data: dict,
     db: AsyncSession = Depends(get_db),
@@ -88,7 +88,7 @@ async def create_transfer_order(
         raise HTTPException(status_code=code, detail=str(e))
 
 
-@router.get("/warehouse/transfers", response_model=list[dict])
+@router.get("/transfers", response_model=list[dict])
 async def list_transfers(
     warehouse_id: str | None = Query(None),
     db: AsyncSession = Depends(get_db),

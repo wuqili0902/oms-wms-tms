@@ -20,6 +20,7 @@ from src.wms.models import (
     CreditMemoLine,
     Inventory,
     InventoryChangeType,
+    InventoryLog,
     Invoice,
     InvoiceLine,
     Location,

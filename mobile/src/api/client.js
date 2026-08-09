@@ -164,7 +164,7 @@ export const api = {
   },
 
   adjustStockCount: (data) =>
-    request("POST", "/inventory/adjust-stock-count", data),
+    request("POST", "/warehouses/inventory/count/submit", data),
 
   // ── Picking ──────────────────────────────────────────────────────────────
   listPickingWaves: () =>
@@ -194,30 +194,30 @@ export const api = {
     const qs = Object.entries(params)
       .filter(([_, v]) => v != null)
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
-    return request("GET", `/shipments${qs ? "?" + qs : ""}`);
+    return request("GET", `/warehouses/shipments${qs ? "?" + qs : ""}`);
   },
 
   shipPackage: (shipmentId) =>
-    request("POST", `/shipments/${shipmentId}/ship`),
+    request("POST", `/warehouses/shipments/${shipmentId}/ship`),
 
   // ── Purchase Orders ──────────────────────────────────────────────────────
   listPurchaseOrders: (status = "pending") =>
-    request("GET", `/purchase-orders?status=${status}`),
+    request("GET", `/warehouses/purchase-orders?status=${status}`),
 
   receiveGoods: (poId, data) =>
     request("POST", `/purchase-orders/${poId}/receive`, data),
 
   // ── Transfer Orders ──────────────────────────────────────────────────────
   createTransferOrder: (data) =>
-    request("POST", "/warehouse/transfers", data),
+    request("POST", "/warehouses/transfers", data),
 
   listTransferOrders: () =>
-    request("GET", "/warehouse/transfers"),
+    request("GET", "/warehouses/transfers"),
 
   // ── PDA Sync / Offline Queue ────────────────────────────────────────────
   registerDevice: (deviceData) =>
-    request("POST", `/tms/devices/register`, deviceData),
+    request("POST", `/pda/mutations`, deviceData),
 
-  heartbeat: (deviceId) =>
-    request("GET", `/tms/devices/${deviceId}/heartbeat`),
+  heartbeat: () =>
+    request("GET", `/pda/sync`),
 };
