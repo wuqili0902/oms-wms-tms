@@ -670,5 +670,5 @@ class TransferLog(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
         return f"<TransferLog {self.transfer_order_id}: qty_chg={self.quantity_change}>"
 
 # Re-export from legacy models for backwards compatibility
-from src.models.wms import StockInventoryLog  # noqa: F401
+from src.models.wms import StockInventoryLog  # noqa: E402, F401
 

@@ -513,7 +513,10 @@ async def adjust_stock_count(db: AsyncSession, data: dict) -> dict:
         sku_str = item.get("sku", item.get("sku_code"))
         actual_qty_raw = item.get("actual_qty") or item.get("actual_qty_count")
         if actual_qty_raw is None:
-            raise ValidationException(message=f"Missing quantity field in count result for SKU {item.get('sku', 'unknown')}")
+            sku_val = item.get("sku", "unknown")
+            raise ValidationException(
+                message=f"Missing quantity field in count result for SKU {sku_val}"
+            )
         actual_qty = Decimal(str(actual_qty_raw))
 
         # Lookup or create SKU
@@ -691,7 +694,7 @@ async def create_transfer_order(db: AsyncSession, data: dict) -> dict:
             raise NotFoundException(message=f"Warehouse {target_wh_id_raw} not found")
         target_wh_id = wh_obj.id
 
-    src_wh_code = data.get("source_warehouse_code", "") or (src_wh.hex[:12].upper() if src_wh else "")
+    data.get("source_warehouse_code", "") or (src_wh.hex[:12].upper() if src_wh else "")
 
     # Generate transfer order code
     code = f"TO-{datetime.now(UTC).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
@@ -742,7 +745,11 @@ async def list_transfers(db: AsyncSession, wh_id: str | None = None) -> list[dic
     order_ids = [o.id for o in orders]
     lines_map: dict[uuid.UUID, list[dict]] = {}
     if order_ids:
-        line_result = await db.execute(select(TransferOrderLine).where(TransferOrderLine.transfer_order_id.in_(order_ids)))
+        line_result = await db.execute(
+            select(TransferOrderLine).where(
+                TransferOrderLine.transfer_order_id.in_(order_ids)
+            )
+        )
         for ln in line_result.scalars().all():
             lines_map.setdefault(ln.transfer_order_id, []).append(model_to_dict(ln))
 

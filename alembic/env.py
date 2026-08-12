@@ -47,7 +47,7 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(connection=connection, target_metadata=target_metadata, transaction_per_migration=False)
         with context.begin_transaction():
             context.run_migrations()
 
@@ -58,7 +58,7 @@ elif config.get_main_option("sqlalchemy.url", "").startswith("sqlite"):
     # SQLite online mode — use for CI / offline autogeneration
     connectable = create_engine(config.get_main_option("sqlalchemy.url"))
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(connection=connection, target_metadata=target_metadata, transaction_per_migration=False)
         with context.begin_transaction():
             context.run_migrations()
 else:
