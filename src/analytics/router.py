@@ -54,12 +54,9 @@ async def low_stock(db: AsyncSession = Depends(get_db)):
 
 
 async def _load_dashboard_data(db: AsyncSession) -> tuple:
-    from asyncio import gather
-    stats, trends, status_dist, low_stock, recent = await gather(
-        get_dashboard_stats(db),
-        get_order_trends(db),
-        get_status_distribution(db),
-        get_low_stock_items(db),
-        get_recent_orders(db),
-    )
+    stats = await get_dashboard_stats(db)
+    trends = await get_order_trends(db)
+    status_dist = await get_status_distribution(db)
+    low_stock = await get_low_stock_items(db)
+    recent = await get_recent_orders(db)
     return stats, trends, status_dist, low_stock, recent

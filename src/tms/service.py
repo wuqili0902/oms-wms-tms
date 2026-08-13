@@ -65,6 +65,16 @@ def _to_uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
     return uuid.UUID(val)
 
 
+def _safe_uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
+    """Convert to ``uuid.UUID`` without raising on malformed input."""
+    if val is None or isinstance(val, uuid.UUID):
+        return val
+    try:
+        return uuid.UUID(str(val))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 # ── Device CRUD ──────────────────────────────────────────────────────────────
 
 async def register_device(db: AsyncSession, data: dict) -> dict:
@@ -293,7 +303,7 @@ async def create_transport_order(db: AsyncSession, data: dict) -> dict:
         transport_no=f"TPL-{date.today().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}",
         status=TransportStatus.DRAFT,
         carrier_code=CarrierCode(carrier_code_value) if carrier_code_value else None,
-        pickup_warehouse_id=uuid.UUID(data["pickup_warehouse_id"]),
+        pickup_warehouse_id=uuid.UUID(data["pickup_warehouse_id"]) if data.get("pickup_warehouse_id") else None,
         pickup_address=data.get("pickup_address", {}),
         delivery_name=data["delivery_name"],
         delivery_phone=data.get("delivery_phone"),
@@ -332,8 +342,11 @@ async def create_transport_order(db: AsyncSession, data: dict) -> dict:
 @cached(ttl=300, prefix="tms", skip_args=1)
 async def get_transport_order(db: AsyncSession, order_id: str) -> dict:
     """Get a transport order by ID."""
+    order_uuid = _safe_uuid(order_id)
+    if order_uuid is None:
+        raise NotFoundException(message=f"TransportOrder {order_id} not found")
     result = await db.execute(
-        select(TransportOrder).where(TransportOrder.id == uuid.UUID(order_id))
+        select(TransportOrder).where(TransportOrder.id == order_uuid)
     )
     order = result.scalar_one_or_none()
     if not order:

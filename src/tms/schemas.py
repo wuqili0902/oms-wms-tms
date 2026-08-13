@@ -47,7 +47,7 @@ class TransportOrderResponse(BaseModel):
     transport_no: str
     status: str
     carrier_code: str
-    pickup_warehouse_id: str
+    pickup_warehouse_id: str | None = None
     delivery_name: str
     delivery_phone: str | None = None
     package_count: int
