@@ -18,7 +18,8 @@ class TestSettings:
         assert s.debug is False
         assert s.database_url.startswith("postgresql+asyncpg://")
 
-    def test_raises_on_empty_secret(self):
+    def test_raises_on_empty_secret(self, monkeypatch):
+        monkeypatch.delenv("SECRET_KEY", raising=False)
         from src.config import Settings
 
         with pytest.raises(ValueError, match="SECRET_KEY must be set"):
