@@ -4,3 +4,13 @@ description: OMS+WMS+TMS integrated logistics system
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+
+dependencies:
+  - name: postgresql
+    version: "16.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "20.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled

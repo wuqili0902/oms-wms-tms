@@ -36,10 +36,14 @@ python -m uvicorn src.main:app --reload --host 0.0.0.0   # 手动启动
 ### 生产环境
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f deploy/docker-compose.prod.yml up -d
 # 或 Helm
-helm upgrade --install oms-wms-tms ./oms-wms-tms/chart \
-    --namespace logistics --create-namespace --values ./chart/values.yaml
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm dependency update deploy/helm/tms
+helm upgrade --install oms-wms-tms deploy/helm/tms \
+    --namespace logistics --create-namespace \
+    --set postgresql.auth.password='change-me' \
+    --set env.SECRET_KEY='<64-hex>'
 ```
 
 ## 三、API 使用（`http://localhost:8001/api/v1/`）

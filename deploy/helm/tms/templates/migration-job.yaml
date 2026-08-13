@@ -24,3 +24,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "tms.fullname" . }}
                   key: SECRET_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tms.fullname" . }}
+                  key: DATABASE_URL
+            - name: DATABASE_SYNC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tms.fullname" . }}
+                  key: DATABASE_SYNC_URL
