@@ -37,6 +37,7 @@ async function loginViaUI(page: Page, username: string) {
   await page.locator('.el-input__inner').nth(1).fill('Test1234!')
   await page.locator('.el-button--primary').click()
   await expect(page).toHaveURL(/\/dashboard/)
+  await page.waitForLoadState('networkidle')
 }
 
 test.describe('业务主流程', () => {

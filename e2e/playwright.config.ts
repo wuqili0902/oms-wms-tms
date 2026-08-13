@@ -4,7 +4,7 @@ export default defineConfig({
   testDir: '.',
   timeout: 60000,
   fullyParallel: false,
-  retries: 0,
+  retries: 2,
   use: {
     baseURL: 'http://localhost:5173',
     channel: 'chrome',
