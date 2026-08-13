@@ -52,6 +52,7 @@ otel = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+norecursedirs = ["dev", "mobile", "build", "dist"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -64,6 +65,7 @@ filterwarnings = [
 target-version = "py312"
 line-length = 120
 indent-width = 4
+exclude = ["dev", "mobile", "alembic"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
