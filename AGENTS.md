@@ -49,6 +49,9 @@ OMS-WMS-TMS 一体化物流平台。FastAPI + SQLAlchemy async + PostgreSQL + Re
 
 ### 已知技术债(改到相关区域先说明)
 - 2026-08-13 修复(commit e7a849d):PG 迁移链 — alembic `26f0642a5601` 改用 SAVEPOINT 助手 `_best_effort()`,失败步骤不再中止整个事务;先建 `uq_role_permission`/`uq_user_role` 与 `eb47b7e1074b` 重复问题已在 PG 全量验证消除;`src/tms/models.py` CarrierConfig 增加唯一 PK `id`,`carrier_code` 改 unique 列(修复 `transport_orders.carrier_config_id` 在 PG 下无效的悬空 FK);CI(ci.yml/deploy.yml)新增 `alembic upgrade head` 对全新 PG 服务验证迁移;`tests/conftest.py` 恢复 SQLite-only 并注释说明原因(asyncpg 池无法跨 pytest-asyncio auto 模式事件循环)
+- 2026-08-13 修复(commit 53e92bb/8e171c9):CI 首次跑绿 — `test_raises_on_empty_secret` 用 monkeypatch 清 SECRET_KEY(CI 注入 SECRET_KEY 时会误失败);`frontend/package-lock.json` 用 `npm@10` + 官方 registry 重新生成(旧 lockfile 由本机 npm11 生成且缺 `unplugin@3.3.0`,npm10 用 EUSAGE 拒绝;本机全局 registry 是 npmmirror,其 tgz 地址 GitHub Actions 拉不到);deploy.yml postgres health-cmd 加引号(`pg_isready -U postgres` 无引号导致 docker create exit 125)
+- 2026-08-13 部署路径修复(commit 084b974/1b02392):Helm Chart.yaml 声明 bitnami postgresql/redis 依赖(缺声明则 subchart 不装);migration-job 从 secret 注入 DATABASE_URL(否则 hook 跑在默认 SQLite);secret 补 PG_USER/PG_DATABASE/PG_PASSWORD(backup-cronjob 曾引用未定义 key);新增 `deploy/.env.production.example` 生产密钥模板;compose 三服务补 Sentry/OTLP/Firebase/日志 env;dev/ 收纳根目录调试脚本 + ruff/pytest exclude
+- 2026-08-13 验证:**GitHub Actions 全线绿**(CI run 16 + Build/Test/Deploy run 6:lint/test/frontend-build/build-and-push/deploy 全 success,GHCR 镜像已推送)
 - 2026-08-13 核查:`ruff check src/ tests/` 现已 **All checks passed!**(此前"212 个错误无法自动修复"清单已全部清除),`test_notification_router.py`/`test_notification_ws.py`/`test_e2e` 42 passed(WebSocket mock 问题与 E2E 超时均已解决)
 
 ### 已确认完成(勿重复实现)
