@@ -21,6 +21,13 @@ from src.models import Base  # noqa: E402
 
 _DB_FILE = os.path.join(tempfile.gettempdir(), "oms_wms_tms_test.sqlite")
 
+# NOTE: The suite intentionally runs against a temp-file SQLite DB. PostgreSQL
+# is validated separately in CI by applying the Alembic migrations
+# (``alembic upgrade head``) against the provisioned postgres service, which
+# covers the production schema path. Changing this fixture to asyncpg would
+# require a session-wide event loop — asyncpg pools cannot cross event loops,
+# and pytest-asyncio (auto mode) gives each test its own loop.
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -37,6 +44,8 @@ async def sqlite_engine():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield engine
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
     if os.path.exists(_DB_FILE):
         os.remove(_DB_FILE)

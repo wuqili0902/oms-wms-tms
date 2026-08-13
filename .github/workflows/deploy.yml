@@ -56,6 +56,13 @@ jobs:
       - name: Run lint
         run: ruff check src/
 
+      - name: Apply Alembic migrations on fresh PostgreSQL
+        env:
+          DATABASE_SYNC_URL: postgresql://postgres:postgres@localhost:5432/oms_wms_tms
+          SECRET_KEY: ci-test-secret-key
+        run: |
+          alembic upgrade head
+
       - name: Run tests
         run: pytest tests/ --cov=src --cov-report=term
         env:

@@ -4,16 +4,35 @@ Revision ID: 26f0642a5601
 Revises: d5e6f7a8b9c0
 Create Date: 2026-08-08 09:34:22.065504
 """
-from typing import Sequence, Union
-from alembic import op
+from collections.abc import Callable, Sequence
+from typing import Any
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
+
+def _best_effort(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+    """Run a best-effort migration step inside a SAVEPOINT.
+
+    PostgreSQL aborts the *entire* transaction when any statement fails, so a
+    plain ``try/except`` around an "already applied" step would poison every
+    later statement in the migration. ``begin_nested()`` rolls back only this
+    step instead, letting the rest of the reconciliation proceed.
+    """
+    try:
+        with op.get_bind().begin_nested():
+            fn(*args, **kwargs)
+    except Exception:  # noqa: BLE001 - reconciliation steps are optional
+        pass
+
+
 # revision identifiers, used by Alembic.
 revision: str = '26f0642a5601'
-down_revision: Union[str, None] = 'd5e6f7a8b9c0'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = 'd5e6f7a8b9c0'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -124,290 +143,121 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_transfer_order_lines_id'), 'transfer_order_lines', ['id'], unique=False)
     # Drop FK from transport_orders first so we can drop the unique constraint
-    try:
-        op.drop_constraint(op.f('transport_orders_carrier_config_id_fkey'), 'transport_orders', type_='foreignkey')
-    except Exception:
-        pass  # FK may already be gone
-    try:
-        op.drop_constraint(op.f('uq_carrier_configs_id'), 'carrier_configs', type_='unique')
-    except Exception:
-        pass  # unique may already be gone (id is PK by default)
-    try:
-        op.alter_column('credit_memo_lines', 'credit_memo_id',
-                   existing_type=sa.UUID(),
-                   nullable=True)
-    except Exception:
-        pass
-    try:
-        op.drop_column('credit_memo_lines', 'updated_at')
-    except Exception:
-        pass
-    try:
-        op.drop_column('credit_memo_lines', 'created_at')
-    except Exception:
-        pass
-    try:
-        op.drop_constraint(op.f('uq_freight_tiers_id'), 'freight_tiers', type_='unique')
-    except Exception:
-        pass
-    try:
-        op.alter_column('inventory', 'expiry_date',
-                   existing_type=postgresql.TIMESTAMP(timezone=True),
-                   type_=sa.Date(),
-                   existing_nullable=True)
-    except Exception:
-        pass
-    try:
-        op.alter_column('inventory', 'manufacturing_date',
-                   existing_type=postgresql.TIMESTAMP(timezone=True),
-                   type_=sa.Date(),
-                   existing_nullable=True)
-    except Exception:
-        pass
-    try:
-        op.drop_index(op.f('ix_inventory_batch_expiry'), table_name='inventory')
-    except Exception:
-        pass
-    try:
-        op.alter_column('invoice_lines', 'invoice_id',
-                   existing_type=sa.UUID(),
-                   nullable=True)
-    except Exception:
-        pass
-    try:
-        op.drop_column('invoice_lines', 'updated_at')
-    except Exception:
-        pass
-    try:
-        op.drop_column('invoice_lines', 'created_at')
-    except Exception:
-        pass
-    try:
-        op.drop_index(op.f('ix_merge_groups_is_deleted'), table_name='merge_groups')
-    except Exception:
-        pass
-    try:
-        op.drop_column('merge_groups', 'is_deleted')
-    except Exception:
-        pass
-    try:
-        op.drop_column('merge_groups', 'deleted_at')
-    except Exception:
-        pass
-    try:
-        op.drop_index(op.f('ix_orders_created_at'), table_name='orders')
-    except Exception:
-        pass
-    try:
-        op.alter_column('purchase_order_lines', 'purchase_order_id',
-                   existing_type=sa.UUID(),
-                   nullable=True)
-    except Exception:
-        pass
-    try:
-        op.drop_column('purchase_order_lines', 'updated_at')
-    except Exception:
-        pass
-    try:
-        op.drop_column('purchase_order_lines', 'created_at')
-    except Exception:
-        pass
+    _best_effort(op.drop_constraint, op.f('transport_orders_carrier_config_id_fkey'), 'transport_orders', type_='foreignkey')
+    _best_effort(op.drop_constraint, op.f('uq_carrier_configs_id'), 'carrier_configs', type_='unique')
+    _best_effort(op.alter_column, 'credit_memo_lines', 'credit_memo_id',
+               existing_type=sa.UUID(),
+               nullable=True)
+    _best_effort(op.drop_column, 'credit_memo_lines', 'updated_at')
+    _best_effort(op.drop_column, 'credit_memo_lines', 'created_at')
+    _best_effort(op.drop_constraint, op.f('uq_freight_tiers_id'), 'freight_tiers', type_='unique')
+    _best_effort(op.alter_column, 'inventory', 'expiry_date',
+               existing_type=postgresql.TIMESTAMP(timezone=True),
+               type_=sa.Date(),
+               existing_nullable=True)
+    _best_effort(op.alter_column, 'inventory', 'manufacturing_date',
+               existing_type=postgresql.TIMESTAMP(timezone=True),
+               type_=sa.Date(),
+               existing_nullable=True)
+    _best_effort(op.drop_index, op.f('ix_inventory_batch_expiry'), table_name='inventory')
+    _best_effort(op.alter_column, 'invoice_lines', 'invoice_id',
+               existing_type=sa.UUID(),
+               nullable=True)
+    _best_effort(op.drop_column, 'invoice_lines', 'updated_at')
+    _best_effort(op.drop_column, 'invoice_lines', 'created_at')
+    _best_effort(op.drop_index, op.f('ix_merge_groups_is_deleted'), table_name='merge_groups')
+    _best_effort(op.drop_column, 'merge_groups', 'is_deleted')
+    _best_effort(op.drop_column, 'merge_groups', 'deleted_at')
+    _best_effort(op.drop_index, op.f('ix_orders_created_at'), table_name='orders')
+    _best_effort(op.alter_column, 'purchase_order_lines', 'purchase_order_id',
+               existing_type=sa.UUID(),
+               nullable=True)
+    _best_effort(op.drop_column, 'purchase_order_lines', 'updated_at')
+    _best_effort(op.drop_column, 'purchase_order_lines', 'created_at')
     # Manually create the enum type because psycopg2 doesn't support create_type=True well
-    try:
-        op.execute("""
-            DO $$ BEGIN
-                CREATE TYPE returnshipmentstatus AS ENUM ('PENDING', 'PICKUP_SCHEDULED', 'IN_TRANSIT_RETURN', 'RECEIVED_BY_CARRIER', 'RETURNED_TO_WAREHOUSE');
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$;
-        """)
-    except Exception:
-        pass
-    try:
-        op.add_column('return_orders', sa.Column('shipment_status', sa.Enum('PENDING', 'PICKUP_SCHEDULED', 'IN_TRANSIT_RETURN', 'RECEIVED_BY_CARRIER', 'RETURNED_TO_WAREHOUSE', name='returnshipmentstatus'), nullable=True))
-    except Exception:
-        pass
-    try:
-        op.create_unique_constraint('uq_role_permission', 'role_permissions', ['role_id', 'permission_id'])
-    except Exception:
-        pass  # already exists
-    try:
-        op.alter_column('route_plans', 'plan_json',
-                   existing_type=postgresql.JSON(astext_type=sa.Text()),
-                   nullable=False)
-    except Exception:
-        pass
-    try:
-        op.alter_column('split_child_orders', 'child_order_id',
-                   existing_type=sa.UUID(),
-                   nullable=True)
-    except Exception:
-        pass
-    try:
-        op.alter_column('split_child_orders', 'split_reason',
-                   existing_type=sa.VARCHAR(length=100),
-                   type_=sa.Text(),
-                   existing_nullable=True)
-    except Exception:
-        pass
-    try:
-        op.drop_index(op.f('ix_stock_movements_created_at'), table_name='stock_movements')
-    except Exception:
-        pass
-    try:
-        op.drop_index(op.f('ix_stock_movements_sku_id'), table_name='stock_movements')
-    except Exception:
-        pass
-    try:
-        op.create_unique_constraint('uq_user_role', 'user_roles', ['user_id', 'role_id'])
-    except Exception:
-        pass  # already exists
-    try:
-        op.add_column('vendors', sa.Column('is_active', sa.Boolean(), nullable=True))
-    except Exception:
-        pass
-    try:
-        op.alter_column('vendors', 'phone',
-                   existing_type=sa.VARCHAR(length=30),
-                   type_=sa.String(length=50),
-                   existing_nullable=True)
-    except Exception:
-        pass
+    _best_effort(op.execute, """
+        DO $$ BEGIN
+            CREATE TYPE returnshipmentstatus AS ENUM ('PENDING', 'PICKUP_SCHEDULED', 'IN_TRANSIT_RETURN', 'RECEIVED_BY_CARRIER', 'RETURNED_TO_WAREHOUSE');
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$;
+    """)
+    _best_effort(op.add_column, 'return_orders', sa.Column('shipment_status', sa.Enum('PENDING', 'PICKUP_SCHEDULED', 'IN_TRANSIT_RETURN', 'RECEIVED_BY_CARRIER', 'RETURNED_TO_WAREHOUSE', name='returnshipmentstatus'), nullable=True))
+    _best_effort(op.create_unique_constraint, 'uq_role_permission', 'role_permissions', ['role_id', 'permission_id'])
+    _best_effort(op.alter_column, 'route_plans', 'plan_json',
+               existing_type=postgresql.JSON(astext_type=sa.Text()),
+               nullable=False)
+    _best_effort(op.alter_column, 'split_child_orders', 'child_order_id',
+               existing_type=sa.UUID(),
+               nullable=True)
+    _best_effort(op.alter_column, 'split_child_orders', 'split_reason',
+               existing_type=sa.VARCHAR(length=100),
+               type_=sa.Text(),
+               existing_nullable=True)
+    _best_effort(op.drop_index, op.f('ix_stock_movements_created_at'), table_name='stock_movements')
+    _best_effort(op.drop_index, op.f('ix_stock_movements_sku_id'), table_name='stock_movements')
+    _best_effort(op.create_unique_constraint, 'uq_user_role', 'user_roles', ['user_id', 'role_id'])
+    _best_effort(op.add_column, 'vendors', sa.Column('is_active', sa.Boolean(), nullable=True))
+    _best_effort(op.alter_column, 'vendors', 'phone',
+               existing_type=sa.VARCHAR(length=30),
+               type_=sa.String(length=50),
+               existing_nullable=True)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
 
-    try:
-        op.alter_column('vendors', 'phone',
-                   existing_type=sa.String(length=50),
-                   type_=sa.VARCHAR(length=30),
-                   existing_nullable=True)
-    except Exception:
-        pass  # already applied or rolled back
+    _best_effort(op.alter_column, 'vendors', 'phone',
+               existing_type=sa.String(length=50),
+               type_=sa.VARCHAR(length=30),
+               existing_nullable=True)
 
-    try:
-        op.drop_column('vendors', 'is_active')
-    except Exception:
-        pass
+    _best_effort(op.drop_column, 'vendors', 'is_active')
 
-    try:
-        op.drop_constraint('uq_user_role', 'user_roles', type_='unique')
-    except Exception:
-        pass  # constraint was not created in upgrade (already existed)
+    _best_effort(op.drop_constraint, 'uq_user_role', 'user_roles', type_='unique')
 
-    try:
-        op.create_index(op.f('ix_stock_movements_sku_id'), 'stock_movements', ['sku_id'], unique=False)
-        op.create_index(op.f('ix_stock_movements_created_at'), 'stock_movements', ['created_at'], unique=False)
-    except Exception:
-        pass
+    _best_effort(lambda: (op.create_index(op.f('ix_stock_movements_sku_id'), 'stock_movements', ['sku_id'], unique=False), op.create_index(op.f('ix_stock_movements_created_at'), 'stock_movements', ['created_at'], unique=False)))
 
-    try:
-        op.alter_column('split_child_orders', 'split_reason',
-                   existing_type=sa.Text(),
-                   type_=sa.VARCHAR(length=100),
-                   existing_nullable=True)
-        op.alter_column('split_child_orders', 'child_order_id',
-                   existing_type=sa.UUID(),
-                   nullable=False)
-    except Exception:
-        pass
+    _best_effort(lambda: (op.alter_column('split_child_orders', 'split_reason',
+               existing_type=sa.Text(),
+               type_=sa.VARCHAR(length=100),
+               existing_nullable=True), op.alter_column('split_child_orders', 'child_order_id',
+               existing_type=sa.UUID(),
+               nullable=False)))
 
-    try:
-        op.alter_column('route_plans', 'plan_json',
-                   existing_type=postgresql.JSON(astext_type=sa.Text()),
-                   nullable=True)
-    except Exception:
-        pass
+    _best_effort(op.alter_column, 'route_plans', 'plan_json',
+               existing_type=postgresql.JSON(astext_type=sa.Text()),
+               nullable=True)
 
-    try:
-        op.drop_constraint('uq_role_permission', 'role_permissions', type_='unique')
-        op.drop_column('return_orders', 'shipment_status')
-    except Exception:
-        pass
+    _best_effort(lambda: (op.drop_constraint('uq_role_permission', 'role_permissions', type_='unique'), op.drop_column('return_orders', 'shipment_status')))
 
-    try:
-        op.add_column('purchase_order_lines', sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=False))
-        op.add_column('purchase_order_lines', sa.Column('updated_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=True))
-        op.alter_column('purchase_order_lines', 'purchase_order_id',
-                   existing_type=sa.UUID(),
-                   nullable=False)
-    except Exception:
-        pass
+    _best_effort(lambda: (op.add_column('purchase_order_lines', sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=False)), op.add_column('purchase_order_lines', sa.Column('updated_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=True)), op.alter_column('purchase_order_lines', 'purchase_order_id',
+               existing_type=sa.UUID(),
+               nullable=False)))
 
-    try:
-        op.create_index(op.f('ix_orders_created_at'), 'orders', ['created_at'], unique=False)
-    except Exception:
-        pass
+    _best_effort(op.create_index, op.f('ix_orders_created_at'), 'orders', ['created_at'], unique=False)
 
-    try:
-        op.add_column('merge_groups', sa.Column('deleted_at', postgresql.TIMESTAMP(timezone=True), autoincrement=False, nullable=True))
-        op.add_column('merge_groups', sa.Column('is_deleted', sa.BOOLEAN(), autoincrement=False, nullable=False))
-        op.create_index(op.f('ix_merge_groups_is_deleted'), 'merge_groups', ['is_deleted'], unique=False)
-    except Exception:
-        pass
+    _best_effort(lambda: (op.add_column('merge_groups', sa.Column('deleted_at', postgresql.TIMESTAMP(timezone=True), autoincrement=False, nullable=True)), op.add_column('merge_groups', sa.Column('is_deleted', sa.BOOLEAN(), autoincrement=False, nullable=False)), op.create_index(op.f('ix_merge_groups_is_deleted'), 'merge_groups', ['is_deleted'], unique=False)))
 
-    try:
-        op.add_column('invoice_lines', sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=False))
-        op.add_column('invoice_lines', sa.Column('updated_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=True))
-        op.alter_column('invoice_lines', 'invoice_id',
-                   existing_type=sa.UUID(),
-                   nullable=False)
-    except Exception:
-        pass
+    _best_effort(lambda: (op.add_column('invoice_lines', sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=False)), op.add_column('invoice_lines', sa.Column('updated_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=True)), op.alter_column('invoice_lines', 'invoice_id',
+               existing_type=sa.UUID(),
+               nullable=False)))
 
-    try:
-        op.create_index(op.f('ix_inventory_batch_expiry'), 'inventory', ['batch_no', 'expiry_date'], unique=False)
-        op.alter_column('inventory', 'manufacturing_date',
+    _best_effort(lambda: (op.create_index(op.f('ix_inventory_batch_expiry'), 'inventory', ['batch_no', 'expiry_date'], unique=False), op.alter_column('inventory', 'manufacturing_date',
                        existing_type=sa.Date(),
                        type_=postgresql.TIMESTAMP(timezone=True),
-                       existing_nullable=True)
-        op.alter_column('inventory', 'expiry_date',
+                       existing_nullable=True), op.alter_column('inventory', 'expiry_date',
                        existing_type=sa.Date(),
                        type_=postgresql.TIMESTAMP(timezone=True),
-                       existing_nullable=True)
-    except Exception:
-        pass
+                       existing_nullable=True)))
 
-    try:
-        op.create_unique_constraint(op.f('uq_freight_tiers_id'), 'freight_tiers', ['id'], postgresql_nulls_not_distinct=False)
-    except Exception:
-        pass  # already exists
+    _best_effort(op.create_unique_constraint, op.f('uq_freight_tiers_id'), 'freight_tiers', ['id'], postgresql_nulls_not_distinct=False)
 
-    try:
-        op.add_column('credit_memo_lines', sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=False))
-        op.add_column('credit_memo_lines', sa.Column('updated_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=True))
-        op.alter_column('credit_memo_lines', 'credit_memo_id',
-                   existing_type=sa.UUID(),
-                   nullable=False)
-    except Exception:
-        pass
+    _best_effort(lambda: (op.add_column('credit_memo_lines', sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=False)), op.add_column('credit_memo_lines', sa.Column('updated_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=True)), op.alter_column('credit_memo_lines', 'credit_memo_id',
+               existing_type=sa.UUID(),
+               nullable=False)))
 
-    try:
-        op.create_unique_constraint(op.f('uq_carrier_configs_id'), 'carrier_configs', ['id'], postgresql_nulls_not_distinct=False)
-    except Exception:
-        pass  # already exists
-    try:
-        op.drop_index(op.f('ix_transfer_order_lines_id'), table_name='transfer_order_lines')
-        op.drop_table('transfer_order_lines')
-        op.drop_index(op.f('ix_transfer_logs_transfer_order_id'), table_name='transfer_logs')
-        op.drop_index(op.f('ix_transfer_logs_is_deleted'), table_name='transfer_logs')
-        op.drop_index(op.f('ix_transfer_logs_id'), table_name='transfer_logs')
-        op.drop_table('transfer_logs')
-        op.drop_index('ix_transfer_orders_status_created_at', table_name='transfer_orders')
-        op.drop_index(op.f('ix_transfer_orders_is_deleted'), table_name='transfer_orders')
-        op.drop_index(op.f('ix_transfer_orders_id'), table_name='transfer_orders')
-        op.drop_index(op.f('ix_transfer_orders_code'), table_name='transfer_orders')
-        op.drop_table('transfer_orders')
-        op.drop_index(op.f('ix_waybills_tracking_number'), table_name='waybills')
-        op.drop_index(op.f('ix_waybills_status'), table_name='waybills')
-        op.drop_index(op.f('ix_waybills_order_id'), table_name='waybills')
-        op.drop_index(op.f('ix_waybills_is_deleted'), table_name='waybills')
-        op.drop_index(op.f('ix_waybills_id'), table_name='waybills')
-        op.drop_table('waybills')
-        op.drop_index('ix_outbox_events_status_created', table_name='outbox_events')
-        op.drop_index('ix_outbox_events_aggregate_type_id', table_name='outbox_events')
-        op.drop_table('outbox_events')
-    except Exception:
-        pass  # tables may already be gone (e.g. from failed upgrade)
+    _best_effort(op.create_unique_constraint, op.f('uq_carrier_configs_id'), 'carrier_configs', ['id'], postgresql_nulls_not_distinct=False)
+
+    _best_effort(lambda: (op.drop_index(op.f('ix_transfer_order_lines_id'), table_name='transfer_order_lines'), op.drop_table('transfer_order_lines'), op.drop_index(op.f('ix_transfer_logs_transfer_order_id'), table_name='transfer_logs'), op.drop_index(op.f('ix_transfer_logs_is_deleted'), table_name='transfer_logs'), op.drop_index(op.f('ix_transfer_logs_id'), table_name='transfer_logs'), op.drop_table('transfer_logs'), op.drop_index('ix_transfer_orders_status_created_at', table_name='transfer_orders'), op.drop_index(op.f('ix_transfer_orders_is_deleted'), table_name='transfer_orders'), op.drop_index(op.f('ix_transfer_orders_id'), table_name='transfer_orders'), op.drop_index(op.f('ix_transfer_orders_code'), table_name='transfer_orders'), op.drop_table('transfer_orders'), op.drop_index(op.f('ix_waybills_tracking_number'), table_name='waybills'), op.drop_index(op.f('ix_waybills_status'), table_name='waybills'), op.drop_index(op.f('ix_waybills_order_id'), table_name='waybills'), op.drop_index(op.f('ix_waybills_is_deleted'), table_name='waybills'), op.drop_index(op.f('ix_waybills_id'), table_name='waybills'), op.drop_table('waybills'), op.drop_index('ix_outbox_events_status_created', table_name='outbox_events'), op.drop_index('ix_outbox_events_aggregate_type_id', table_name='outbox_events'), op.drop_table('outbox_events')))
     # ### end Alembic commands ###

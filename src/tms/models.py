@@ -231,7 +231,7 @@ class CarrierConfig(Base, UUIDMixin, TimestampMixin):
 
     __tablename__ = "carrier_configs"
 
-    carrier_code: CarrierCode = Column(SAEnum(CarrierCode), primary_key=True)
+    carrier_code: CarrierCode = Column(SAEnum(CarrierCode), unique=True, nullable=False)
     api_endpoint: str | None = Column(String(500))       # carrier API base URL
     api_key: str | None = Column(String(200))            # encrypted key
     account_number: str | None = Column(String(100))      # warehouse's account with carrier

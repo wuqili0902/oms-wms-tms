@@ -55,6 +55,13 @@ jobs:
           pip install -e ".[dev,otel]"
           pip install pytest pytest-asyncio pytest-cov httpx
 
+      - name: Apply Alembic migrations on fresh PostgreSQL
+        env:
+          DATABASE_SYNC_URL: postgresql://postgres:postgres@localhost:5432/oms_wms_tms_test
+          SECRET_KEY: ci-test-secret-key-do-not-use
+        run: |
+          alembic upgrade head
+
       - name: Run tests with PostgreSQL
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/oms_wms_tms_test
