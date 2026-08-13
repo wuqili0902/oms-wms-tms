@@ -7,7 +7,6 @@ export default defineConfig({
   retries: 2,
   use: {
     baseURL: 'http://localhost:5173',
-    channel: 'chrome',
     trace: 'on-first-retry',
   },
   webServer: [
