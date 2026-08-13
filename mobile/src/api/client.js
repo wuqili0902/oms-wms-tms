@@ -3,6 +3,7 @@
  * Handles JWT token storage, request signing, and error normalization.
  */
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const TOKEN_KEY = "auth_token";
 const BASE_URL = __DEV__
@@ -33,29 +34,34 @@ async function request(method, path, body = null) {
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
 
+  let resp;
   try {
-    const resp = await fetch(`${BASE_URL}${path}`, opts);
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      const msg =
-        data.detail || (Array.isArray(data.detail) ? data.detail[0]?.msg : "Request failed");
-      throw { status: resp.status, message: msg, data };
-    }
-    return data;
+    resp = await fetch(`${BASE_URL}${path}`, opts);
   } catch (err) {
-    // If offline or server error — queue mutation for later sync
-    await enqueueMutation(path, method, body);
-    console.warn("API request queued offline:", err.message || err);
-    throw { ...err, queued: true };
+    // Network failure. Queue mutations (POST/PUT/PATCH/DELETE) for later sync.
+    const isMutation = method !== "GET";
+    if (isMutation) {
+      await enqueueMutation(path, method, body);
+    }
+    throw { ...err, queued: isMutation, offline: true };
   }
+
+  const data = await resp.json().catch(() => null);
+
+  if (!resp.ok) {
+    const msg =
+      data?.detail || (Array.isArray(data?.detail) ? data.detail[0]?.msg : "Request failed");
+    throw { status: resp.status, message: msg, data };
+  }
+  return data;
 }
 
 let _mutCount = 0;
 
 /** Lightweight mutation queue entry. */
-function enqueueMutation(path, method, body) {
-  const entries = JSON.parse(localStorage.getItem("pda_mutations") ?? "[]");
+async function enqueueMutation(path, method, body) {
+  const raw = await AsyncStorage.getItem("pda_mutations");
+  const entries = JSON.parse(raw ?? "[]");
   entries.push({
     id: `m_${++_mutCount}_${Date.now()}`,
     path,
@@ -64,12 +70,12 @@ function enqueueMutation(path, method, body) {
     created_at: new Date().toISOString(),
     synced_at: null,
   });
-  localStorage.setItem("pda_mutations", JSON.stringify(entries));
+  await AsyncStorage.setItem("pda_mutations", JSON.stringify(entries));
 }
 
 /** Re-queue all pending mutations and return count. */
 export async function syncMutations() {
-  const raw = localStorage.getItem("pda_mutations");
+  const raw = await AsyncStorage.getItem("pda_mutations");
   if (!raw) return 0;
   const entries = JSON.parse(raw);
   let synced = 0;
@@ -80,7 +86,7 @@ export async function syncMutations() {
       synced++;
     } catch { /* keep unsynced */ }
   }
-  localStorage.setItem(
+  await AsyncStorage.setItem(
     "pda_mutations",
     JSON.stringify(entries.filter(e => !e.synced_at))
   );

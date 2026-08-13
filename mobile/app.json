@@ -25,7 +25,9 @@
         {
           "cameraPermission": "Allow OMS WMS to access your camera for barcode scanning."
         }
-      ]
+      ],
+      "expo-asset",
+      "expo-font"
     ]
   }
 }

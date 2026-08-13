@@ -68,7 +68,7 @@ export default function PackingRecordScreen({ route }) {
             <Text style={styles.sku}>{item.sku}</Text>
             <Text style={styles.qty}>需打包: {item.quantity}</Text>
           </View>
-          <Text style={styles.name}>{item.product_name || item.name ?? ''}</Text>
+          <Text style={styles.name}>{item.product_name || item.name || ''}</Text>
 
           {/* Confirm qty */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>

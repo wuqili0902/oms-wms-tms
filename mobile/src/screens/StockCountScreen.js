@@ -81,7 +81,7 @@ export default function StockCountScreen({ route }) {
           {locations.length === 0 && <View><Text style={{ color: '#666', padding: 10 }}>暂无数据 — 请先入库商品</Text></View>}
           {locations.map(loc => (
             <TouchableOpacity key={loc.id} onPress={() => startCount(loc)} style={[styles.locationCard, styles.card]}>
-              <Text style={styles.locCode}>{loc.code || loc.location_id?.slice(0, 8) ?? '—'}</Text>
+              <Text style={styles.locCode}>{loc.code || loc.location_id?.slice(0, 8) || '—'}</Text>
               <Text style={styles.locInfo}>库位: {loc.name || loc.zone || 'A-1'} | SKU: {loc.sku}</Text>
             </TouchableOpacity>
           ))}
@@ -105,7 +105,7 @@ export default function StockCountScreen({ route }) {
             return (
               <View key={item.id} style={[styles.invItem, styles.card, actual ? styles.scanned : {}]}>
                 <Text style={styles.sku}>{item.sku}</Text>
-                <Text style={styles.name}>{item.product_name || item.name ?? '—'}</Text>
+                <Text style={styles.name}>{item.product_name || item.name || '—'}</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                   <Text style={styles.systemQty}>系统: {item.quantity ?? 0}</Text>
                   <TextInput value={actual?.toString() ?? ''} keyboardType="numeric" placeholder="-" style={styles.qtyInput} />

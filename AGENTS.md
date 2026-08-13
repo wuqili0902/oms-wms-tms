@@ -53,6 +53,7 @@ OMS-WMS-TMS 一体化物流平台。FastAPI + SQLAlchemy async + PostgreSQL + Re
 - 2026-08-13 部署路径修复(commit 084b974/1b02392):Helm Chart.yaml 声明 bitnami postgresql/redis 依赖(缺声明则 subchart 不装);migration-job 从 secret 注入 DATABASE_URL(否则 hook 跑在默认 SQLite);secret 补 PG_USER/PG_DATABASE/PG_PASSWORD(backup-cronjob 曾引用未定义 key);新增 `deploy/.env.production.example` 生产密钥模板;compose 三服务补 Sentry/OTLP/Firebase/日志 env;dev/ 收纳根目录调试脚本 + ruff/pytest exclude
 - 2026-08-13 验证:**GitHub Actions 全线绿**(CI run 16 + Build/Test/Deploy run 6:lint/test/frontend-build/build-and-push/deploy 全 success,GHCR 镜像已推送)
 - 2026-08-13 核查:`ruff check src/ tests/` 现已 **All checks passed!**(此前"212 个错误无法自动修复"清单已全部清除),`test_notification_router.py`/`test_notification_ws.py`/`test_e2e` 42 passed(WebSocket mock 问题与 E2E 超时均已解决)
+- 2026-08-13 mobile/ 补齐:client.js 的 localStorage → AsyncStorage(原生 RN 无 localStorage);`request()` 离线入队仅限 mutation 且排除 4xx 业务错误;修复 PackingRecord/StockCount 的 `??`+`||` 混用语法错误;补依赖 async-storage/expo-asset/font/constants/web 三件套;生成合法 icon;package-lock.json 用官方 registry 重新生成(0 npmmirror)。`expo export --platform android` 验证通过(Metro 打包成功)
 
 ### 已确认完成(勿重复实现)
 - OrderPriority 枚举(URGENT)、warehouses.html、orders split/merge API、TMS ERP connector
