@@ -32,7 +32,7 @@
       <el-table :data="orders" stripe v-loading="loading" style="width:100%">
         <template #empty><el-empty description="暂无数据" /></template>
         <el-table-column type="index" label="#" width="50" />
-        <el-table-column prop="order_no" label="运单号" width="180" />
+        <el-table-column prop="transport_no" label="运单号" width="180" />
         <el-table-column prop="driver_name" label="司机" width="100" />
         <el-table-column prop="plate_no" label="车牌号" width="120" />
         <el-table-column prop="origin" label="出发地" width="130" />
@@ -109,7 +109,7 @@
 
     <el-dialog v-model="showTrackingDialog" title="运输追踪" width="700px" destroy-on-close>
       <template v-if="trackingOrder">
-        <p style="margin-bottom:12px;font-weight:600">运单号：{{ trackingOrder.order_no }}</p>
+        <p style="margin-bottom:12px;font-weight:600">运单号：{{ trackingOrder.transport_no }}</p>
         <el-timeline>
           <el-timeline-item
             v-for="(evt, idx) in trackingEvents"
