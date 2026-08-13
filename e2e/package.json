@@ -1,0 +1,14 @@
+{
+  "name": "oms-wms-tms-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright 端到端测试 (OMS-WMS-TMS)",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

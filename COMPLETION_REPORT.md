@@ -92,7 +92,7 @@
 
 ### 后续功能建议（详见 newtodo.md）
 - 生产级告警/监控配置（Sentry DSN、OTLP 端点生产接入）
-- Playwright E2E 覆盖核心流程（登录→订单→库存→运输→通知）
+- Playwright E2E 覆盖核心流程（登录→订单→库存→运输→通知）— **已建骨架**：`e2e/`（Playwright + 自动拉起后端 SQLite + vite），auth 冒烟 2 用例通过
 - 前端组件级单测扩充、库存模块补测
 
 ---
