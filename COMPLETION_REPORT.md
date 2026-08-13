@@ -31,7 +31,7 @@
 | 后端覆盖率 | `src/` 平均 **89%**（8288 行 / 缺 924） |
 | Ruff lint | `ruff check src/ tests/` **0 error**（exit=0） |
 | 前端 typecheck | `vue-tsc -b --noEmit` **0 error** |
-| 前端单元测试 | vitest **24 passed / 2 skipped**（含 PdaPage 等 8 个测试文件） |
+| 前端单元测试 | vitest **39 passed / 2 skipped**（含 api client / auth store / useExport / PdaPage 等 10 个测试文件；覆盖率 Statements **65.4%** / Lines **71.8%**） |
 | 前端 build | `vite build` **成功**（PWA precache 71 entries） |
 | 冒烟测试 | `python smoke_test.py` **33 passed / 0 failed**（全模块 E2E 冒烟） |
 | **GitHub Actions** | **CI 全绿**（lint / frontend-build / test 含 PG+alembic 迁移链）; **Build, Test, and Deploy 全绿**（test → build-and-push → deploy，GHCR 镜像已推送） |

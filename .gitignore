@@ -42,6 +42,7 @@ media/
 htmlcov/
 .coverage.*
 cov.xml
+frontend/coverage/
 
 # Pytest
 .pytest_cache/
