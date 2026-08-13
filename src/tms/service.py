@@ -105,7 +105,10 @@ async def register_device(db: AsyncSession, data: dict) -> dict:
 
 async def get_device(db: AsyncSession, dev_id: str) -> dict:
     """Get a device by ID."""
-    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == uuid.UUID(dev_id)))
+    dev_uuid = _safe_uuid(dev_id)
+    if dev_uuid is None:
+        raise NotFoundException(message=f"Device {dev_id} not found")
+    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == dev_uuid))
     dev = result.scalar_one_or_none()
     if not dev:
         raise NotFoundException(message=f"Device {dev_id} not found")
@@ -121,7 +124,10 @@ async def list_devices(
     """List devices with optional filters."""
     stmt = select(TerminalDevice)
     if warehouse_id:
-        stmt = stmt.where(TerminalDevice.warehouse_id == uuid.UUID(warehouse_id))
+        wh_uuid = _safe_uuid(warehouse_id)
+        if wh_uuid is None:
+            return []
+        stmt = stmt.where(TerminalDevice.warehouse_id == wh_uuid)
     if status:
         stmt = stmt.where(TerminalDevice.status == DeviceStatus(status))
     if device_type:
@@ -133,7 +139,10 @@ async def list_devices(
 
 async def update_device(db: AsyncSession, dev_id: str, data: dict) -> dict:
     """Update device fields."""
-    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == uuid.UUID(dev_id)))
+    dev_uuid = _safe_uuid(dev_id)
+    if dev_uuid is None:
+        raise NotFoundException(message=f"Device {dev_id} not found")
+    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == dev_uuid))
     dev = result.scalar_one_or_none()
     if not dev:
         raise NotFoundException(message=f"Device {dev_id} not found")
@@ -158,7 +167,10 @@ async def update_device(db: AsyncSession, dev_id: str, data: dict) -> dict:
 
 async def record_heartbeat(db: AsyncSession, dev_id: str) -> dict:
     """Record device heartbeat — marks device online."""
-    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == uuid.UUID(dev_id)))
+    dev_uuid = _safe_uuid(dev_id)
+    if dev_uuid is None:
+        raise NotFoundException(message=f"Device {dev_id} not found")
+    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == dev_uuid))
     dev = result.scalar_one_or_none()
     if not dev:
         raise NotFoundException(message=f"Device {dev_id} not found")
@@ -181,7 +193,10 @@ async def record_heartbeat(db: AsyncSession, dev_id: str) -> dict:
 
 async def record_sync(db: AsyncSession, dev_id: str, data: dict) -> dict:
     """Record a sync operation for a device."""
-    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == uuid.UUID(dev_id)))
+    dev_uuid = _safe_uuid(dev_id)
+    if dev_uuid is None:
+        raise NotFoundException(message=f"Device {dev_id} not found")
+    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == dev_uuid))
     dev = result.scalar_one_or_none()
     if not dev:
         raise NotFoundException(message=f"Device {dev_id} not found")
@@ -189,7 +204,7 @@ async def record_sync(db: AsyncSession, dev_id: str, data: dict) -> dict:
     now = _now()
     log = SyncLog(
         id=uuid.uuid4(),
-        device_id=uuid.UUID(dev_id),
+        device_id=dev_uuid,
         sync_type=SyncLogType(data.get("sync_type", "download")),
         status=SyncLogStatus(data.get("status", "pending")),
         records_count=data.get("records_count", 0),
@@ -211,14 +226,17 @@ async def record_sync(db: AsyncSession, dev_id: str, data: dict) -> dict:
 
 async def list_sync_logs(db: AsyncSession, dev_id: str) -> list[dict]:
     """List sync logs for a device."""
+    dev_uuid = _safe_uuid(dev_id)
+    if dev_uuid is None:
+        raise NotFoundException(message=f"Device {dev_id} not found")
     # Verify device exists
-    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == uuid.UUID(dev_id)))
+    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == dev_uuid))
     if not result.scalar_one_or_none():
         raise NotFoundException(message=f"Device {dev_id} not found")
 
     logs_result = await db.execute(
         select(SyncLog)
-        .where(SyncLog.device_id == uuid.UUID(dev_id))
+        .where(SyncLog.device_id == dev_uuid)
         .order_by(SyncLog.started_at.desc())
     )
     return [model_to_dict(entry) for entry in logs_result.scalars().all()]
@@ -228,7 +246,10 @@ async def list_sync_logs(db: AsyncSession, dev_id: str) -> list[dict]:
 
 async def create_session(db: AsyncSession, dev_id: str, ip_address: str | None = None) -> dict:
     """Create a new device session."""
-    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == uuid.UUID(dev_id)))
+    dev_uuid = _safe_uuid(dev_id)
+    if dev_uuid is None:
+        raise NotFoundException(message=f"Device {dev_id} not found")
+    result = await db.execute(select(TerminalDevice).where(TerminalDevice.id == dev_uuid))
     dev = result.scalar_one_or_none()
     if not dev:
         raise NotFoundException(message=f"Device {dev_id} not found")
@@ -236,7 +257,7 @@ async def create_session(db: AsyncSession, dev_id: str, ip_address: str | None =
     now = _now()
     sess = DeviceSession(
         id=uuid.uuid4(),
-        device_id=uuid.UUID(dev_id),
+        device_id=dev_uuid,
         ip_address=ip_address,
         login_at=now,
     )
@@ -252,10 +273,14 @@ async def create_session(db: AsyncSession, dev_id: str, ip_address: str | None =
 
 async def end_session(db: AsyncSession, dev_id: str, sess_id: str) -> dict:
     """End a device session."""
+    dev_uuid = _safe_uuid(dev_id)
+    sess_uuid = _safe_uuid(sess_id)
+    if dev_uuid is None or sess_uuid is None:
+        raise NotFoundException(message=f"Session {sess_id} not found for device {dev_id}")
     result = await db.execute(
         select(DeviceSession).where(
-            DeviceSession.id == uuid.UUID(sess_id),
-            DeviceSession.device_id == uuid.UUID(dev_id),
+            DeviceSession.id == sess_uuid,
+            DeviceSession.device_id == dev_uuid,
         )
     )
     sess = result.scalar_one_or_none()
@@ -273,15 +298,18 @@ async def end_session(db: AsyncSession, dev_id: str, sess_id: str) -> dict:
 
 async def list_sessions(db: AsyncSession, dev_id: str) -> list[dict]:
     """List sessions for a device."""
+    dev_uuid = _safe_uuid(dev_id)
+    if dev_uuid is None:
+        raise NotFoundException(message=f"Device {dev_id} not found")
     result = await db.execute(
-        select(TerminalDevice).where(TerminalDevice.id == uuid.UUID(dev_id))
+        select(TerminalDevice).where(TerminalDevice.id == dev_uuid)
     )
     if not result.scalar_one_or_none():
         raise NotFoundException(message=f"Device {dev_id} not found")
 
     sessions_result = await db.execute(
         select(DeviceSession)
-        .where(DeviceSession.device_id == uuid.UUID(dev_id))
+        .where(DeviceSession.device_id == dev_uuid)
         .order_by(DeviceSession.login_at.desc())
     )
     return [model_to_dict(s) for s in sessions_result.scalars().all()]
@@ -407,8 +435,11 @@ _transport_status_transitions: dict[TransportStatus, list[TransportStatus]] = {
 
 async def change_transport_status(db: AsyncSession, order_id: str, new_status: str) -> dict:
     """Change transport order status with state machine validation."""
+    order_uuid = _safe_uuid(order_id)
+    if order_uuid is None:
+        raise NotFoundException(message=f"TransportOrder {order_id} not found")
     result = await db.execute(
-        select(TransportOrder).where(TransportOrder.id == uuid.UUID(order_id))
+        select(TransportOrder).where(TransportOrder.id == order_uuid)
     )
     order = result.scalar_one_or_none()
     if not order:
@@ -469,7 +500,10 @@ async def create_hub(db: AsyncSession, data: dict) -> dict:
 @cached(ttl=300, prefix="tms", skip_args=1)
 async def get_hub(db: AsyncSession, hub_id: str) -> dict:
     """Get a transfer hub by ID."""
-    result = await db.execute(select(TransferHub).where(TransferHub.id == uuid.UUID(hub_id)))
+    hub_uuid = _safe_uuid(hub_id)
+    if hub_uuid is None:
+        raise NotFoundException(message=f"Hub {hub_id} not found")
+    result = await db.execute(select(TransferHub).where(TransferHub.id == hub_uuid))
     hub = result.scalar_one_or_none()
     if not hub:
         raise NotFoundException(message=f"Hub {hub_id} not found")
@@ -494,7 +528,10 @@ async def list_hubs(
 
 async def update_hub(db: AsyncSession, hub_id: str, data: dict) -> dict:
     """Update transfer hub fields."""
-    result = await db.execute(select(TransferHub).where(TransferHub.id == uuid.UUID(hub_id)))
+    hub_uuid = _safe_uuid(hub_id)
+    if hub_uuid is None:
+        raise NotFoundException(message=f"Hub {hub_id} not found")
+    result = await db.execute(select(TransferHub).where(TransferHub.id == hub_uuid))
     hub = result.scalar_one_or_none()
     if not hub:
         raise NotFoundException(message=f"Hub {hub_id} not found")
@@ -635,7 +672,10 @@ async def update_segment_status(
     db: AsyncSession, seg_id: str, status: str
 ) -> dict:
     """Update transport segment status with state machine validation."""
-    result = await db.execute(select(TransportSegment).where(TransportSegment.id == uuid.UUID(seg_id)))
+    seg_uuid = _safe_uuid(seg_id)
+    if seg_uuid is None:
+        raise NotFoundException(message=f"Segment {seg_id} not found")
+    result = await db.execute(select(TransportSegment).where(TransportSegment.id == seg_uuid))
     seg = result.scalar_one_or_none()
     if not seg:
         raise NotFoundException(message=f"Segment {seg_id} not found")
@@ -695,7 +735,10 @@ async def update_segment_status(
 
 async def get_segment(db: AsyncSession, seg_id: str) -> dict:
     """Get a transport segment by ID."""
-    result = await db.execute(select(TransportSegment).where(TransportSegment.id == uuid.UUID(seg_id)))
+    seg_uuid = _safe_uuid(seg_id)
+    if seg_uuid is None:
+        raise NotFoundException(message=f"Segment {seg_id} not found")
+    result = await db.execute(select(TransportSegment).where(TransportSegment.id == seg_uuid))
     seg = result.scalar_one_or_none()
     if not seg:
         raise NotFoundException(message=f"Segment {seg_id} not found")
@@ -704,9 +747,12 @@ async def get_segment(db: AsyncSession, seg_id: str) -> dict:
 
 async def list_segments(db: AsyncSession, transport_order_id: str) -> list[dict]:
     """List all segments for a transport order."""
+    order_uuid = _safe_uuid(transport_order_id)
+    if order_uuid is None:
+        raise NotFoundException(message=f"TransportOrder {transport_order_id} not found")
     stmt = (
         select(TransportSegment)
-        .where(TransportSegment.transport_order_id == uuid.UUID(transport_order_id))
+        .where(TransportSegment.transport_order_id == order_uuid)
         .order_by(TransportSegment.segment_no)
     )
     result = await db.execute(stmt)
@@ -824,6 +870,9 @@ async def find_best_route_plan(
     ``route:{pickup_city}:{delivery_city}:{weight_kg}`` for 24 h.
     Cache is invalidated when carrier routes or hub connections change.
     """
+    order_uuid = _safe_uuid(transport_order_id)
+    if order_uuid is None:
+        raise NotFoundException(message=f"TransportOrder {transport_order_id} not found")
     pickup_city = ""
     delivery_city = ""
     weight_kg = "1"
@@ -1004,13 +1053,16 @@ async def generate_route_plan(
     When plan_type is "auto_gen", runs find_best_route_plan then
     persists the result as a RoutePlan record with TransportSegments.
     """
+    order_uuid = _safe_uuid(transport_order_id)
+    if order_uuid is None:
+        raise NotFoundException(message=f"TransportOrder {transport_order_id} not found")
     # Step 1 — Run the core algorithm
     route = await find_best_route_plan(transport_order_id, db)
 
     # Step 2 — Create RoutePlan
     plan = RoutePlan(
         id=uuid.uuid4(),
-        transport_order_id=uuid.UUID(transport_order_id),
+        transport_order_id=order_uuid,
         type=RoutePlanType(plan_type),
         status=RoutePlanStatus.ROUTE_ACTIVE,
         origin_city=route["origin_city"],
@@ -1053,7 +1105,10 @@ async def generate_route_plan(
 @cached(ttl=300, prefix="tms", skip_args=1)
 async def get_route_plan(db: AsyncSession, plan_id: str) -> dict:
     """Get a route plan by ID, including its segments."""
-    result = await db.execute(select(RoutePlan).where(RoutePlan.id == uuid.UUID(plan_id)))
+    plan_uuid = _safe_uuid(plan_id)
+    if plan_uuid is None:
+        raise NotFoundException(message=f"RoutePlan {plan_id} not found")
+    result = await db.execute(select(RoutePlan).where(RoutePlan.id == plan_uuid))
     plan = result.scalar_one_or_none()
     if not plan:
         raise NotFoundException(message=f"RoutePlan {plan_id} not found")
@@ -1083,7 +1138,7 @@ async def create_tracking_event(db: AsyncSession, data: dict) -> dict:
     )
 
     result = await db.execute(
-        select(TransportOrder).where(TransportOrder.id == uuid.UUID(data["transport_order_id"]))
+        select(TransportOrder).where(TransportOrder.id == _safe_uuid(data["transport_order_id"]))
     )
     order = result.scalar_one_or_none()
     if not order:
@@ -1113,9 +1168,12 @@ async def create_tracking_event(db: AsyncSession, data: dict) -> dict:
 
 async def list_tracking_events(db: AsyncSession, transport_order_id: str) -> list[dict]:
     """List all tracking events for a transport order."""
+    order_uuid = _safe_uuid(transport_order_id)
+    if order_uuid is None:
+        raise NotFoundException(message=f"TransportOrder {transport_order_id} not found")
     stmt = (
         select(TrackingEvent)
-        .where(TrackingEvent.transport_order_id == uuid.UUID(transport_order_id))
+        .where(TrackingEvent.transport_order_id == order_uuid)
         .order_by(TrackingEvent.created_at.asc())
     )
     result = await db.execute(stmt)
@@ -1135,8 +1193,11 @@ async def create_pod(db: AsyncSession, data_or_transport_order_id: str | dict, d
 
     from src.tms.models import ProofOfDelivery
 
+    order_uuid = _safe_uuid(real_data["transport_order_id"])
+    if order_uuid is None:
+        raise NotFoundException(message=f"TransportOrder {real_data['transport_order_id']} not found")
     result = await db.execute(
-        select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == uuid.UUID(real_data["transport_order_id"]))
+        select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == order_uuid)
     )
     pod = result.scalar_one_or_none()
 
@@ -1166,8 +1227,11 @@ async def get_pod(db: AsyncSession, transport_order_id: str) -> dict | None:
     """Get POD for a transport order."""
     from src.tms.models import ProofOfDelivery
 
+    order_uuid = _safe_uuid(transport_order_id)
+    if order_uuid is None:
+        return None
     result = await db.execute(
-        select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == uuid.UUID(transport_order_id))
+        select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == order_uuid)
     )
     pod = result.scalar_one_or_none()
     return model_to_dict(pod) if pod else None
@@ -1177,8 +1241,11 @@ async def update_pod(db: AsyncSession, transport_order_id: str, data: dict) -> d
     """Update existing POD."""
     from src.tms.models import ProofOfDelivery
 
+    order_uuid = _safe_uuid(transport_order_id)
+    if order_uuid is None:
+        raise NotFoundException(message="POD not found")
     result = await db.execute(
-        select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == uuid.UUID(transport_order_id))
+        select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == order_uuid)
     )
     pod = result.scalar_one_or_none()
     if not pod:
@@ -1235,7 +1302,10 @@ async def list_return_orders(db: AsyncSession, status=None, warehouse_id=None) -
 
 async def get_return_order(db: AsyncSession, return_id: str) -> dict | None:
     from src.tms.models import ReturnOrder
-    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id)))
+    return_uuid = _safe_uuid(return_id)
+    if return_uuid is None:
+        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
+    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == return_uuid))
     ret = result.scalar_one_or_none()
     if not ret:
         raise NotFoundException(message=f"ReturnOrder {return_id} not found")
@@ -1244,7 +1314,10 @@ async def get_return_order(db: AsyncSession, return_id: str) -> dict | None:
 
 async def update_return_status(db: AsyncSession, return_id: str, target: str) -> dict:
     from src.tms.models import ReturnOrder
-    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id)))
+    return_uuid = _safe_uuid(return_id)
+    if return_uuid is None:
+        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
+    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == return_uuid))
     ret = result.scalar_one_or_none()
     if not ret:
         raise NotFoundException(message=f"ReturnOrder {return_id} not found")
@@ -1269,7 +1342,10 @@ async def mark_shipment_received(db: AsyncSession, return_id: str) -> dict:
 
     Transition flow: PENDING → IN_TRANSIT_RETURN → RECEIVED_BY_CARRIER
     """
-    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id)))
+    return_uuid = _safe_uuid(return_id)
+    if return_uuid is None:
+        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
+    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == return_uuid))
     ret = result.scalar_one_or_none()
     if not ret:
         raise NotFoundException(message=f"ReturnOrder {return_id} not found")
@@ -1302,7 +1378,10 @@ async def mark_return_inspected(db: AsyncSession, return_id: str, accepted: bool
     If accepted → REFUNDED / CLOSED
     If rejected → RETURNED_TO_SUPPLIER
     """
-    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id)))
+    return_uuid = _safe_uuid(return_id)
+    if return_uuid is None:
+        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
+    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == return_uuid))
     ret = result.scalar_one_or_none()
     if not ret:
         raise NotFoundException(message=f"ReturnOrder {return_id} not found")
@@ -1329,7 +1408,10 @@ async def mark_return_inspected(db: AsyncSession, return_id: str, accepted: bool
 
 async def cancel_return_order(db: AsyncSession, return_id: str) -> dict:
     """Cancel a return order (only if still in PENDING or SHIPPED)."""
-    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == uuid.UUID(return_id)))
+    return_uuid = _safe_uuid(return_id)
+    if return_uuid is None:
+        raise NotFoundException(message=f"ReturnOrder {return_id} not found")
+    result = await db.execute(select(ReturnOrder).where(ReturnOrder.id == return_uuid))
     ret = result.scalar_one_or_none()
     if not ret:
         raise NotFoundException(message=f"ReturnOrder {return_id} not found")
@@ -1358,7 +1440,10 @@ async def create_exception(db: AsyncSession, data: dict) -> dict:
     # transport_order_id may be optional (exceptions not linked to an order)
     order_id = data.get("transport_order_id")
     if order_id:
-        result = await db.execute(select(TransportOrder).where(TransportOrder.id == uuid.UUID(order_id)))
+        order_uuid = _safe_uuid(order_id)
+        if order_uuid is None:
+            raise NotFoundException(message=f"TransportOrder {order_id} not found")
+        result = await db.execute(select(TransportOrder).where(TransportOrder.id == order_uuid))
         if not result.scalar_one_or_none():
             raise NotFoundException(message=f"TransportOrder {order_id} not found")
 
@@ -1378,14 +1463,20 @@ async def list_exceptions(db: AsyncSession, transport_order_id=None, status="ope
     from src.tms.models import TransportException
     stmt = select(TransportException).where(TransportException.status == status)
     if transport_order_id:
-        stmt = stmt.where(TransportException.transport_order_id == uuid.UUID(transport_order_id))
+        order_uuid = _safe_uuid(transport_order_id)
+        if order_uuid is None:
+            return []
+        stmt = stmt.where(TransportException.transport_order_id == order_uuid)
     result = await db.execute(stmt.order_by(TransportException.created_at.desc()))
     return [model_to_dict(e) for e in result.scalars().all()]
 
 
 async def resolve_exception(db: AsyncSession, exc_id: str, resolution_notes=None) -> dict:
     from src.tms.models import TransportException
-    result = await db.execute(select(TransportException).where(TransportException.id == uuid.UUID(exc_id)))
+    exc_uuid = _safe_uuid(exc_id)
+    if exc_uuid is None:
+        raise NotFoundException(message=f"TransportException {exc_id} not found")
+    result = await db.execute(select(TransportException).where(TransportException.id == exc_uuid))
     exc = result.scalar_one_or_none()
     if not exc:
         raise NotFoundException(message=f"TransportException {exc_id} not found")
