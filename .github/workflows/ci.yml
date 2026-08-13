@@ -67,7 +67,12 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/oms_wms_tms_test
           SECRET_KEY: ci-test-secret-key-do-not-use
         run: |
-          pytest tests/ -x --tb=short -q --cov=src --cov-report=term-missing
+          pytest tests/ -x --tb=short -q --cov=src --cov-report=term-missing 2>&1 | tee /tmp/pytest.log || {
+            tail -80 /tmp/pytest.log | while IFS= read -r line; do
+              echo "::error file=tests::$line"
+            done
+            exit 1
+          }
 
   frontend-build:
     runs-on: ubuntu-latest
