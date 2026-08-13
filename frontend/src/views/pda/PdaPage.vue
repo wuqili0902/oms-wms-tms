@@ -139,13 +139,14 @@
     </div>
 
     <!-- Desktop: bottom spacer -->
-    <div v-if="!isMobile"><el-backtop target=".app-main" /></div>
+    <div v-if="!isMobile"><el-backtop /></div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import apiClient from '../../api'
 
 const activeTab = ref('mutation')
 const isMobile = ref(window.innerWidth < 768)
@@ -166,9 +167,9 @@ function clearMutation() { mutationForm.value.entity_id = ''; mutationForm.value
 async function submitMutation() {
   mutLoading.value = true
   try {
-    const payload = { ...mutationForm.value, payload: { quantity: mutationForm.value.qty, remark: mutationForm.value.remark } }
-    delete payload.qty; delete payload.remark
-    await $apiClient.post('/pda/mutations', payload)
+    const { qty, remark, ...rest } = mutationForm.value
+    const payload = { ...rest, payload: { quantity: qty, remark } }
+    await apiClient.post('/pda/mutations', payload)
     ElMessage.success('变动已入队列')
   } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '提交失败') }
   mutLoading.value = false
@@ -177,7 +178,7 @@ async function submitMutation() {
 async function triggerSync() {
   syncLoading.value = true
   try {
-    const res = await $apiClient.post('/pda/sync')
+    const res = await apiClient.post('/pda/sync')
     if (res.data?.failed === 0) ElMessage.success(`同步完成，${res.data.accepted} 条处理成功`)
     fetchMutations()
   } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '同步失败') }
@@ -187,24 +188,37 @@ async function triggerSync() {
 async function fetchMutations() {
   listLoading.value = true
   try {
-    const res = await $apiClient.get('/pda/mutations')
+    const res = await apiClient.get('/pda/mutations')
     mutations.value = Array.isArray(res.data) ? res.data : []
   } catch {}
   listLoading.value = false
 }
 
 // Offline detection — show warning banner when disconnected
+const handleOnline = () => { online.value = true }
+const handleOffline = () => { online.value = false }
+
+function debounce<T extends (...args: any[]) => void>(fn: T, delay = 200) {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  return (...args: Parameters<T>) => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => fn(...args), delay)
+  }
+}
+
+const handleResize = debounce(() => { isMobile.value = window.innerWidth < 768 })
+
 onMounted(() => {
   if (activeTab.value === 'sync') fetchMutations()
-  window.addEventListener('online', () => online.value = true)
-  window.addEventListener('offline', () => online.value = false)
+  window.addEventListener('online', handleOnline)
+  window.addEventListener('offline', handleOffline)
+  window.addEventListener('resize', handleResize)
 })
-onUnmounted(() => { window.removeEventListener('online'); window.removeEventListener('offline') })
-
-// Responsive: re-check on resize
-import { useDebounceFn } from '@vueuse/core'
-const debouncedResize = useDebounceFn(() => isMobile.value = window.innerWidth < 768, 200)
-onMounted(() => window.addEventListener('resize', debouncedResize))
+onUnmounted(() => {
+  window.removeEventListener('online', handleOnline)
+  window.removeEventListener('offline', handleOffline)
+  window.removeEventListener('resize', handleResize)
+})
 </script>
 
 <style scoped>
