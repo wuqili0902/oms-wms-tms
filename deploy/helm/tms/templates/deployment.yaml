@@ -52,6 +52,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "tms.fullname" . }}
                   key: SMTP_PASSWORD
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tms.fullname" . }}
+                  key: SENTRY_DSN
           livenessProbe:
             httpGet:
               path: /api/v1/health
@@ -119,6 +124,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "tms.fullname" . }}
                   key: SMTP_PASSWORD
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tms.fullname" . }}
+                  key: SENTRY_DSN
           resources:
             {{- toYaml .Values.resources.worker | nindent 12 }}
 {{- if .Values.celery.beat.enabled }}

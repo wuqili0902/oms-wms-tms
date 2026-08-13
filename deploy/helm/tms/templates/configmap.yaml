@@ -11,3 +11,13 @@ data:
   SMTP_PORT: {{ .Values.env.SMTP_PORT | quote }}
   SMTP_USER: {{ .Values.env.SMTP_USER | quote }}
   SMTP_FROM: {{ .Values.env.SMTP_FROM | quote }}
+  SMTP_USE_TLS: {{ .Values.env.SMTP_USE_TLS | quote }}
+  ENVIRONMENT: {{ .Values.env.ENVIRONMENT | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.env.OTEL_EXPORTER_OTLP_ENDPOINT | quote }}
+  LOG_LEVEL: {{ .Values.env.LOG_LEVEL | quote }}
+  LOG_FORMAT: {{ .Values.env.LOG_FORMAT | quote }}
+  FIREBASE_ENABLED: {{ .Values.env.FIREBASE_ENABLED | quote }}
+  FIREBASE_CREDENTIALS_PATH: {{ .Values.env.FIREBASE_CREDENTIALS_PATH | quote }}
+  CARRIER_API_ENDPOINTS: {{ .Values.env.CARRIER_API_ENDPOINTS | quote }}
+  RATE_LIMIT_REQUESTS: {{ .Values.env.RATE_LIMIT_REQUESTS | quote }}
+  RATE_LIMIT_WINDOW: {{ .Values.env.RATE_LIMIT_WINDOW | quote }}
