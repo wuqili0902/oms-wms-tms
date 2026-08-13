@@ -1,4 +1,4 @@
-# OMS-WMS-TMS 项目完工报告 v2.0（2026-08-13 实测）
+# OMS-WMS-TMS 项目完工报告 v2.1（2026-08-13 实测）
 
 > **本报告为根目录唯一权威完工报告**。此前并存的多份报告（`PROJECT_COMPLETION_REPORT.md`、`详细完工报告.md`、`项目完成度分析报告.md`、`项目成熟度评估报告.md`）内容互相矛盾且已过时，已合并入本文件并删除。
 
@@ -34,6 +34,7 @@
 | 前端单元测试 | vitest **24 passed / 2 skipped**（含 PdaPage 等 8 个测试文件） |
 | 前端 build | `vite build` **成功**（PWA precache 71 entries） |
 | 冒烟测试 | `python smoke_test.py` **33 passed / 0 failed**（全模块 E2E 冒烟） |
+| **GitHub Actions** | **CI 全绿**（lint / frontend-build / test 含 PG+alembic 迁移链）; **Build, Test, and Deploy 全绿**（test → build-and-push → deploy，GHCR 镜像已推送） |
 | 代码规模 | 后端 ~14,400 行 py；前端 ~7,900 行 vue/ts；API 路由 ~192 个 |
 | 前端页面 | 41 个 Vue 页面 + 17 个 admin Jinja2 模板 |
 | 部署资产 | docker-compose.yml / docker-compose.prod.yml / deploy/ (Helm + scripts) |
@@ -78,10 +79,16 @@
 ### 技术债
 | # | 事项 | 优先级 |
 |---|------|--------|
-| 1 | CI `.github/workflows/ci.yml` 已就绪但**尚未在 GitHub Actions 上跑绿验证**（2026-08-13 本地已全绿，待实际触发） | P0 |
+| 1 | ~~CI 未跑绿验证~~ — **已解决**：GitHub Actions CI run 16 + deploy run 6 全绿（含 `alembic upgrade head` 对 PG 服务验证迁移链） | ✅ |
 | 2 | `TMS get_transport_order` 对非 UUID 输入已修复为 404（`_safe_uuid`）；其余路径参数仍直接用 `uuid.UUID()`，建议逐步补校验 | P2 |
-| 3 | 根目录调试脚本（`_check_db.py`、`_debug_e2e.py`、`fix_test_wms.py` 等）建议清理或移入 `dev/` | P2 |
-| 4 | `mobile/`（React Native）仅骨架（App.js + 少量文件），未达可发布状态 | P2 |
+| 3 | ~~根目录调试脚本散落~~ — **已解决**：已 `git mv` 至 `dev/`（含 README），pyproject 已 exclude | ✅ |
+| 4 | `mobile/`（React Native）骨架 — **已提升**：Expo RN 脚手架可构建（`expo export --platform android` 通过，13 屏 + 导航 + AsyncStorage 离线队列 + 端点与后端对齐）；尚未做真机/EMAS 发布构建 | P2 |
+
+### 部署验证（2026-08-13 新增）
+- **Helm**：Chart.yaml 声明 bitnami postgresql/redis 依赖；migration-job 注入 DATABASE_URL（避免 hook 跑默认 SQLite）；secret 补 PG_USER/PG_DATABASE/PG_PASSWORD（修复 backup-cronjob 引用未定义 key）；含安装 README
+- **生产密钥模板**：`deploy/.env.production.example`（Sentry DSN / OTLP / Firebase / 日志）
+- **docker-compose.prod.yml**：app/celery_worker/celery_beat 三服务补齐 Sentry/OTLP/Firebase env 注入
+- 关键修复：lockfile npm10 兼容重生成（0 npmmirror）、SECRET_KEY 测试隔离、postgres 健康检查引号、`_best_effort()` SAVEPOINT 迁移链
 
 ### 后续功能建议（详见 newtodo.md）
 - 生产级告警/监控配置（Sentry DSN、OTLP 端点生产接入）
@@ -112,4 +119,4 @@ python smoke_test.py                  # 全模块冒烟（内嵌 sqlite）
 
 ---
 
-*报告生成: 2026-08-13 · 数据来源: 当日全量实测（pytest 1720 passed、ruff 0、vue-tsc 0、vitest 24 passed、smoke 33 passed）*
+*报告生成: 2026-08-13（v2.1）· 数据来源: 当日全量实测（pytest 1720 passed、ruff 0、vue-tsc 0、vitest 24 passed、smoke 33 passed）+ GitHub Actions CI/deploy 双工作流全绿（commit 666c70a）*
