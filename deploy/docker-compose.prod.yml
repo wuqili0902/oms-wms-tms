@@ -103,7 +103,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     image: oms-wms-tms:latest
-    command: celery -A src.celery_app worker --loglevel=info --concurrency=4
+    command: celery -A src.celeryconf worker --loglevel=info --concurrency=4
     environment:
       DATABASE_URL: postgresql+asyncpg://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
       DATABASE_SYNC_URL: postgresql://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
@@ -141,7 +141,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     image: oms-wms-tms:latest
-    command: celery -A src.celery_app beat --loglevel=info
+    command: celery -A src.celeryconf beat --loglevel=info
     environment:
       DATABASE_URL: postgresql+asyncpg://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
       DATABASE_SYNC_URL: postgresql://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms

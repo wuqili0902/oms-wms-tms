@@ -2,4 +2,4 @@
 set -e
 
 echo "Starting Celery beat..."
-exec celery -A src.celery_app beat --loglevel=info --scheduler celery.beat.PersistentScheduler
+exec celery -A src.celeryconf beat --loglevel=info
