@@ -65,8 +65,8 @@ async def _do_dispatch(db, event: WebhookEvent, payload: dict):
     # Deliver webhooks immediately (synchronous for backward compatibility)
     payload_json = json.dumps(payload, ensure_ascii=False, default=str)
     async with httpx.AsyncClient(timeout=15) as client:
-        for target in matching:
-            await _deliver(db, client, target, event, payload_json)
+        for target, log in zip(matching, delivery_logs):
+            await _deliver(db, client, target, event, payload_json, log)
 
     # Append outbox event for async Celery dispatch (committed in caller's transaction)
     try:
@@ -94,8 +94,8 @@ async def dispatch_event(event: WebhookEvent, payload: dict, db=None):
         await _do_dispatch(db, event, payload)
 
 
-async def _deliver(db, client, target: WebhookTarget, event: WebhookEvent, payload: str):
-    """Deliver a single webhook synchronously (used by old dispatch path)."""
+async def _deliver(db, client, target: WebhookTarget, event: WebhookEvent, payload: str, log: WebhookDeliveryLog):
+    """Deliver a single webhook and update the existing delivery log."""
     headers = {"Content-Type": "application/json", "X-Webhook-Event": event.value}
     if target.secret:
         timestamp = str(int(time.time()))
@@ -108,26 +108,17 @@ async def _deliver(db, client, target: WebhookTarget, event: WebhookEvent, paylo
     try:
         resp = await client.post(target.url, content=payload, headers=headers)
         elapsed = int((time.monotonic() - start) * 1000)
-        status_code = resp.status_code
-        success = resp.is_success
-        body = resp.text[:1000]
+        log.status_code = resp.status_code
+        log.status = DeliveryStatus.SUCCESS if resp.is_success else DeliveryStatus.FAILED
+        log.response_body = resp.text[:1000]
+        log.duration_ms = elapsed
     except Exception as e:
         elapsed = int((time.monotonic() - start) * 1000)
         logger.warning("Webhook %s -> %s failed: %s", event.value, target.url, e)
-        status_code = None
-        success = False
-        body = str(e)[:1000]
-
-    log = WebhookDeliveryLog(
-        target_id=target.id,
-        event=event.value,
-        payload=payload,
-        status=DeliveryStatus.SUCCESS if success else DeliveryStatus.FAILED,
-        status_code=status_code,
-        response_body=body,
-        duration_ms=elapsed,
-    )
-    db.add(log)
+        log.status_code = None
+        log.status = DeliveryStatus.FAILED
+        log.response_body = str(e)[:1000]
+        log.duration_ms = elapsed
 
 
 async def _deliver_async(

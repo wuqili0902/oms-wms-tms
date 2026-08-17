@@ -192,23 +192,19 @@ async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
 
 
 async def mark_dispatched(event_ids: list[uuid.UUID]) -> int:
-    """Mark a batch of events as dispatched (successfully published to MQ).
-
-    Uses SAVEPOINT so that if the caller's transaction is still open,
-    the dispatch status update can be rolled back independently.
-    """
+    """Mark a batch of events as dispatched (successfully published to MQ)."""
     async with _get_session() as session:
-        async with session.begin():
-            result = await session.execute(
-                OutboxEvent.__table__.update()  # type: ignore[union-attr]
-                .where(OutboxEvent.id.in_(event_ids))
-                .values(
-                    status=OutboxEventStatus.DISPATCHED.value,
-                    dispatched_at=datetime.now(UTC),
-                )
+        result = await session.execute(
+            OutboxEvent.__table__.update()  # type: ignore[union-attr]
+            .where(OutboxEvent.id.in_(event_ids))
+            .values(
+                status=OutboxEventStatus.DISPATCHED.value,
+                dispatched_at=datetime.now(UTC),
             )
-            await session.commit()
-    return result.rowcount  # type: ignore[attr-defined]
+        )
+        rowcount = result.rowcount
+        await session.commit()
+    return rowcount  # type: ignore[return-value]
 
 
 async def mark_failed(event_id: uuid.UUID, error_message: str) -> None:
@@ -219,36 +215,38 @@ async def mark_failed(event_id: uuid.UUID, error_message: str) -> None:
     Max retries capped at 5; events exceeding limit become dead letters.
     """
     async with _get_session() as session:
+        # Atomic: increment retry_count only if < 5, in a single UPDATE
         result = await session.execute(
-            _select(OutboxEvent.retry_count).where(
+            OutboxEvent.__table__.update()  # type: ignore[union-attr]
+            .where(
                 OutboxEvent.id == event_id,
                 OutboxEvent.status == OutboxEventStatus.DISPATCHED.value,
+                OutboxEvent.retry_count < 5,
+            )
+            .values(
+                status=OutboxEventStatus.FAILED.value,
+                error_message=error_message[:500],
+                retry_count=OutboxEvent.retry_count + 1,
+                scheduled_at=datetime.now(UTC) + timedelta(seconds=60),
             )
         )
-        row = result.scalar_one_or_none()
-        if row is None:
-            return  # event not found or not in DISPATCHED state — skip
-
-        current_retry = row
-        if current_retry >= 5:
-            await session.execute(
-                OutboxEvent.__table__.update()  # type: ignore[union-attr]
-                .where(OutboxEvent.id == event_id)
-                .values(
-                    status=OutboxEventStatus.FAILED.value,
-                    error_message=f"Max retries exceeded ({current_retry} attempts): {error_message[:400]}",
+        if result.rowcount == 0:
+            # Either not in DISPATCHED state, or already at max retries
+            # Check if we need to dead-letter (retry_count >= 5)
+            check = await session.execute(
+                _select(OutboxEvent.retry_count).where(
+                    OutboxEvent.id == event_id,
+                    OutboxEvent.status == OutboxEventStatus.DISPATCHED.value,
                 )
             )
-        else:
-            backoff_seconds = min(60 * (2 ** current_retry), 3600)
-            await session.execute(
-                OutboxEvent.__table__.update()  # type: ignore[union-attr]
-                .where(OutboxEvent.id == event_id)
-                .values(
-                    status=OutboxEventStatus.FAILED.value,
-                    error_message=error_message[:500],
-                    retry_count=current_retry + 1,
-                    scheduled_at=datetime.now(UTC) + timedelta(seconds=backoff_seconds),
+            current_retry = check.scalar_one_or_none()
+            if current_retry is not None and current_retry >= 5:
+                await session.execute(
+                    OutboxEvent.__table__.update()  # type: ignore[union-attr]
+                    .where(OutboxEvent.id == event_id)
+                    .values(
+                        status=OutboxEventStatus.FAILED.value,
+                        error_message=f"Max retries exceeded ({current_retry} attempts): {error_message[:400]}",
+                    )
                 )
-            )
         await session.commit()

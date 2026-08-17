@@ -15,9 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 # Patch JSONB -> JSON for SQLite BEFORE any model imports
 setattr(SQLiteTypeCompiler, "visit_JSONB", lambda self, type_, **kw: "JSON")
 
+from src.config import settings  # noqa: E402
 from src.core.database import get_db  # noqa: E402
 from src.main import app  # noqa: E402
 from src.models import Base  # noqa: E402
+
+settings.testing = True
 
 _DB_FILE = os.path.join(tempfile.gettempdir(), "oms_wms_tms_test.sqlite")
 

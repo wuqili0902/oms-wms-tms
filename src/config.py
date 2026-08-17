@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     firebase_credentials_path: str = ""
     firebase_enabled: bool = False
 
+    # Testing mode (bypasses rate limiter, etc.)
+    testing: bool = False
+
     # Carrier API endpoints (JSON dict: {"carrier_code": "https://api.carrier.com/..."})
     carrier_api_endpoints: str = "{}"
 

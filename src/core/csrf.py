@@ -107,9 +107,14 @@ class CsrfMiddleware(BaseHTTPMiddleware):
                 if not _verify_token(header_token, cookie_token):
                     return JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
             else:
-                form = await request.form()
-                form_token = form.get("csrf_token", "")
-                if not form_token or not _verify_token(form_token, cookie_token):
+                # Only try form fallback for form content types
+                ct = request.headers.get("content-type", "")
+                if "application/x-www-form-urlencoded" in ct or "multipart/form-data" in ct:
+                    form = await request.form()
+                    form_token = form.get("csrf_token", "")
+                    if not form_token or not _verify_token(form_token, cookie_token):
+                        return JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+                else:
                     return JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
             return await call_next(request)
 

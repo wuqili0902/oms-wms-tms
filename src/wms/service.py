@@ -496,6 +496,7 @@ async def adjust_inventory(db: AsyncSession, data: dict) -> dict:
                 )
             )
             if update_result.rowcount == 0:
+                # Version changed — re-pick batches on next iteration
                 await db.rollback()
                 continue
             await db.refresh(inv)

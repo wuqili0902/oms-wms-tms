@@ -65,6 +65,9 @@ class RateLimiter:
         requests = requests or settings.rate_limit_requests
         window = window or settings.rate_limit_window
 
+        if settings.testing:
+            return True  # bypass in test mode
+
         if not self._connected:
             return False  # fail-closed
 
