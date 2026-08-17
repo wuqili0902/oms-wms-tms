@@ -31,16 +31,44 @@ class TokenStore:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    async def store(self, refresh_token: str, username: str) -> None:
-        """Persist *refresh_token* → *username* (TTL = 7 days)."""
+    async def pop(self, refresh_token: str) -> str | None:
+        """Look up *refresh_token* and atomically revoke it (token rotation).
+
+        Uses a Redis Lua script for atomic GET + DEL to prevent TOCTOU race.
+        Falls back to in-memory dict when Redis is unavailable.
+        """
+        key = TokenStore._key(refresh_token)
         if self._redis_ok:
             try:
-                await self._redis_set(refresh_token, username)
-                return
+                from src.cache.redis_client import get_redis
+
+                async with get_redis() as r:
+                    lua_script = r.register_script("""
+                        local val = redis.call('GET', KEYS[1])
+                        if val then
+                            redis.call('DEL', KEYS[1])
+                        end
+                        return val
+                    """)
+                    raw = await lua_script(keys=[key])
+                    if raw is not None:
+                        return str(raw)
+                    return None
             except Exception:
                 self._redis_ok = False
-                logger.warning("Redis set() failed — falling back to memory")
-        self._memory[refresh_token] = username
+                logger.warning("Redis pop() failed — falling back to memory")
+        # In-memory fallback: dict.pop is atomic in single-threaded asyncio
+        return self._memory.pop(refresh_token, None)
+
+    async def revoke(self, refresh_token: str) -> None:
+        """Remove *refresh_token* from the store."""
+        if self._redis_ok:
+            try:
+                await self._redis_del(refresh_token)
+            except Exception:
+                self._redis_ok = False
+                logger.warning("Redis del() failed — falling back to memory")
+        self._memory.pop(refresh_token, None)
 
     async def lookup(self, refresh_token: str) -> str | None:
         """Return the username associated with *refresh_token*, or ``None``."""
@@ -54,21 +82,16 @@ class TokenStore:
                 logger.warning("Redis get() failed — falling back to memory")
         return self._memory.get(refresh_token)
 
-    async def revoke(self, refresh_token: str) -> None:
-        """Remove *refresh_token* from the store."""
+    async def store(self, refresh_token: str, username: str) -> None:
+        """Persist *refresh_token* → *username* (TTL = 7 days)."""
         if self._redis_ok:
             try:
-                await self._redis_del(refresh_token)
+                await self._redis_set(refresh_token, username)
+                return
             except Exception:
                 self._redis_ok = False
-                logger.warning("Redis del() failed — falling back to memory")
-        self._memory.pop(refresh_token, None)
-
-    async def pop(self, refresh_token: str) -> str | None:
-        """Look up *refresh_token* and atomically revoke it (token rotation)."""
-        username = await self.lookup(refresh_token)
-        await self.revoke(refresh_token)
-        return username
+                logger.warning("Redis set() failed — falling back to memory")
+        self._memory[refresh_token] = username
 
     # ── Internal: Redis helpers ─────────────────────────────────────────────
 
@@ -90,7 +113,7 @@ class TokenStore:
 
         async with get_redis() as r:
             val: Any = await r.get(TokenStore._key(token))
-            return str(val) if val is not None else None
+            return val.decode("utf-8") if isinstance(val, bytes) else (val if val is not None else None)
 
     @staticmethod
     async def _redis_del(token: str) -> None:

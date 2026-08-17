@@ -13,6 +13,7 @@ from typing import Optional
 from sqlalchemy import (
     JSON,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -115,7 +116,7 @@ class TransportOrder(Base, UUIDMixin, TimestampMixin):
     transport_type: TransportType = Column(SAEnum(TransportType), default=TransportType.CARRIER_PICKUP)
 
     # Estimates & actuals
-    estimated_delivery_date: date | None = Column(String(30), nullable=True)
+    estimated_delivery_date: date | None = Column(Date, nullable=True)
     actual_pickup_time: datetime | None = Column(DateTime(timezone=True))
     actual_delivery_time: datetime | None = Column(DateTime(timezone=True))
 
@@ -136,7 +137,7 @@ class TransportOrder(Base, UUIDMixin, TimestampMixin):
     )
 
     pickup_warehouse = relationship("Warehouse", foreign_keys=[pickup_warehouse_id])
-    tracking_events: list[object] = relationship(
+    tracking_events: list["TrackingEvent"] = relationship(
         "TrackingEvent", back_populates="transport_order",
     )
     pod_record: Optional["ProofOfDelivery"] = relationship(
@@ -297,9 +298,6 @@ class CarrierRoute(Base, UUIDMixin, TimestampMixin):
     min_charge_weight: Decimal = Column(Numeric(20, 4), default=Decimal("1.0"))
     is_active: bool = True
 
-    class Config:
-        use_sa_type_option = True
-
 
 # ───────────── Transport Segment Model ────────────────────────────────────────
 
@@ -364,6 +362,10 @@ class HubConnection(Base, UUIDMixin, TimestampMixin):
     distance_km: Decimal = Column(Numeric(20, 4))              # edge weight
     transit_hours: Decimal = Column(Numeric(10, 1))             # travel time
     is_active: bool = True
+
+    __table_args__ = (
+        Index("uq_hub_connections", "from_hub_code", "to_hub_code", unique=True),
+    )
 
 
 # ───────────── Route Plan Model ──────────────────────────────────────────────
@@ -592,8 +594,8 @@ class TerminalDevice(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
     config: dict | None = Column(JSON, nullable=True)
     push_token: str | None = Column(String(500), nullable=True)
 
-    device_sessions: list[object] = relationship("DeviceSession", back_populates="device")
-    sync_logs: list[object] = relationship("SyncLog", back_populates="device")
+    device_sessions: list["DeviceSession"] = relationship("DeviceSession", back_populates="device")
+    sync_logs: list["SyncLog"] = relationship("SyncLog", back_populates="device")
 
     __table_args__ = (Index("ix_terminal_devices_status", "status"),)
 
