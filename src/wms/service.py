@@ -388,6 +388,9 @@ async def adjust_inventory(db: AsyncSession, data: dict) -> dict:
     may provide ``batch_no``, ``expiry_date``, and ``manufacturing_date``.
     When removing stock (qty < 0) the system picks the best batch
     automatically (FEFO first, then FIFO).
+
+    Uses optimistic locking via the ``version`` column to prevent lost updates
+    under concurrent access. Retries up to 3 times before raising ConflictException.
     """
     wh_id = _to_uuid(data["warehouse_id"])
     loc_id = _to_uuid(data["location_id"])
@@ -407,68 +410,121 @@ async def adjust_inventory(db: AsyncSession, data: dict) -> dict:
     batch_no = data.get("batch_no", "DEFAULT")
     expiry_date = data.get("expiry_date")
     manufacturing_date = data.get("manufacturing_date")
+    max_retries = 3
 
-    if qty > 0:
-        inv_result = await db.execute(
-            select(Inventory).where(
-                Inventory.warehouse_id == wh_id,
-                Inventory.location_id == loc_id,
-                Inventory.sku_id == sku_obj.id,
-                Inventory.batch_no == batch_no,
+    for attempt in range(max_retries):
+        now = _now()  # refresh timestamp per attempt
+        if qty > 0:
+            inv_result = await db.execute(
+                select(Inventory).where(
+                    Inventory.warehouse_id == wh_id,
+                    Inventory.location_id == loc_id,
+                    Inventory.sku_id == sku_obj.id,
+                    Inventory.batch_no == batch_no,
+                )
             )
-        )
-        inv = inv_result.scalar_one_or_none()
-        if inv:
-            new_qty = Decimal(str(inv.quantity)) + qty
-            inv.quantity = new_qty
-            inv.updated_at = now
-            if expiry_date and not inv.expiry_date:
-                inv.expiry_date = expiry_date
-            if manufacturing_date and not inv.manufacturing_date:
-                inv.manufacturing_date = manufacturing_date
+            inv = inv_result.scalar_one_or_none()
+            if inv:
+                current_version = inv.version or 0
+                new_qty = Decimal(str(inv.quantity)) + qty
+                # Optimistic lock: only update if version hasn't changed
+                values = dict(
+                    quantity=new_qty,
+                    updated_at=now,
+                    version=current_version + 1,
+                )
+                if expiry_date and not inv.expiry_date:
+                    values["expiry_date"] = expiry_date
+                if manufacturing_date and not inv.manufacturing_date:
+                    values["manufacturing_date"] = manufacturing_date
+                update_result = await db.execute(
+                    Inventory.__table__.update()
+                    .where(
+                        Inventory.id == inv.id,
+                        Inventory.version == current_version,
+                    )
+                    .values(**values)
+                )
+                if update_result.rowcount == 0:
+                    # Version changed — another transaction modified this row, retry
+                    await db.rollback()
+                    continue
+                await db.refresh(inv)
+            else:
+                inv = Inventory(
+                    id=uuid.uuid4(),
+                    warehouse_id=wh_id,
+                    location_id=loc_id,
+                    sku_id=sku_obj.id,
+                    gtin="",
+                    batch_no=batch_no,
+                    expiry_date=expiry_date,
+                    manufacturing_date=manufacturing_date,
+                    received_at=now,
+                    quantity=qty,
+                    locked_qty=Decimal(0),
+                    min_qty=Decimal(0),
+                    max_qty=Decimal(0),
+                )
+                db.add(inv)
         else:
-            inv = Inventory(
-                id=uuid.uuid4(),
-                warehouse_id=wh_id,
-                location_id=loc_id,
-                sku_id=sku_obj.id,
-                gtin="",
-                batch_no=batch_no,
-                expiry_date=expiry_date,
-                manufacturing_date=manufacturing_date,
-                received_at=now,
-                quantity=qty,
-                locked_qty=Decimal(0),
-                min_qty=Decimal(0),
-                max_qty=Decimal(0),
+            need = abs(qty)
+            batches = await _pick_batches(
+                db, wh_id, loc_id, sku_obj.id, need,
+                strategy=data.get("picking_strategy", "fefo"),
             )
-            db.add(inv)
-    else:
-        need = abs(qty)
-        batches = await _pick_batches(
-            db, wh_id, loc_id, sku_obj.id, need,
-            strategy=data.get("picking_strategy", "fefo"),
+            if not batches or sum(b["available"] for b in batches) < need:
+                raise ValidationException(message="Insufficient stock")
+
+            inv = batches[0]["inv"]
+            current_version = inv.version or 0
+            if inv.quantity + qty < Decimal("0"):
+                await db.rollback()
+                continue
+            new_qty = Decimal(str(inv.quantity)) + qty  # qty is negative
+            # Optimistic lock: only update if version hasn't changed
+            update_result = await db.execute(
+                Inventory.__table__.update()
+                .where(
+                    Inventory.id == inv.id,
+                    Inventory.version == current_version,
+                )
+                .values(
+                    quantity=new_qty,
+                    updated_at=now,
+                    version=current_version + 1,
+                )
+            )
+            if update_result.rowcount == 0:
+                await db.rollback()
+                continue
+            await db.refresh(inv)
+
+        movement = StockMovement(
+            id=uuid.uuid4(),
+            source_warehouse_id=wh_id,
+            target_warehouse_id=None,
+            source_location_id=loc_id if qty < 0 else None,
+            target_location_id=loc_id if qty > 0 else None,
+            sku_id=sku_obj.id,
+            gtin="",
+            quantity=abs(qty),
+            movement_type=StockMovementType.TRANSFER,
         )
-        if not batches or sum(b["available"] for b in batches) < need:
-            raise ValidationException(message="Insufficient stock")
-        inv = batches[0]["inv"]
-        inv.quantity = Decimal(str(inv.quantity)) + qty  # qty is negative
-        inv.updated_at = now
+        db.add(movement)
 
-    movement = StockMovement(
-        id=uuid.uuid4(),
-        source_warehouse_id=wh_id,
-        target_warehouse_id=None,
-        source_location_id=loc_id if qty < 0 else None,
-        target_location_id=loc_id if qty > 0 else None,
-        sku_id=sku_obj.id,
-        gtin="",
-        quantity=abs(qty),
-        movement_type=StockMovementType.TRANSFER,
-    )
-    db.add(movement)
+        try:
+            await db.commit()
+        except Exception:
+            if attempt < max_retries - 1:
+                await db.rollback()
+                continue
+            raise
+        break
 
-    await db.commit()
+    if not inv:
+        raise ValidationException(message="Inventory record was lost during concurrent update")
+
     await db.refresh(inv)
     return _inv_to_dict(inv, sku_str)
 

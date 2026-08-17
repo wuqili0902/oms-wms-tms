@@ -119,6 +119,10 @@ async def _do_send(
     except (ImportError, AttributeError):
         # async_session_factory not available — fall back to caller's session
         return False
+    except NotificationDeliveryError:
+        raise
+    except Exception as e:
+        raise NotificationDeliveryError(f"Notification delivery failed: {e}") from e
 
 
 async def notify_order_status_change(order_id: int, user_id: str, status: str, order_no: str, db: AsyncSession):

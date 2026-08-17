@@ -10,27 +10,13 @@ from datetime import UTC, datetime, timedelta
 import redis
 from sqlalchemy import delete, select, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from src.celery_app import app
-from src.config import settings
+from src.core.database import get_session
 from src.tasks.base import BaseTask
 from src.tms.models import SyncLog
 
 logger = logging.getLogger(__name__)
-
-
-def _get_async_session() -> AsyncSession:
-    engine = create_async_engine(settings.database_url, echo=False)
-    return AsyncSession(engine)
-
-
-def _get_sync_session() -> AsyncSession:
-    """Create session using sync URL for maintenance operations."""
-    from sqlalchemy import create_engine as sync_create_engine
-
-    engine = sync_create_engine(settings.database_sync_url, echo=False)
-    return AsyncSession(engine)
 
 
 @app.task(base=BaseTask, bind=True)
@@ -40,22 +26,19 @@ async def cleanup_old_sync_logs(self):
     TMS sync logs can accumulate rapidly. This task prunes old records
     to prevent unbounded table growth.
     """
-    session = _get_async_session()
-    try:
-        cutoff = datetime.now(UTC) - timedelta(days=30)
-        result = await session.execute(
-            delete(SyncLog).where(SyncLog.started_at < cutoff)
-        )
-        await session.commit()
-        deleted = result.rowcount
-        if deleted:
-            logger.info("Cleaned up %d sync logs older than 30 days", deleted)
-        return {"deleted_sync_logs": deleted}
-    except SQLAlchemyError:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()
+    async with get_session() as session:
+        try:
+            cutoff = datetime.now(UTC) - timedelta(days=30)
+            result = await session.execute(
+                delete(SyncLog).where(SyncLog.started_at < cutoff)
+            )
+            deleted = result.rowcount
+            if deleted:
+                logger.info("Cleaned up %d sync logs older than 30 days", deleted)
+            return {"deleted_sync_logs": deleted}
+        except SQLAlchemyError:
+            await session.rollback()
+            raise
 
 
 @app.task(base=BaseTask, bind=True)
@@ -83,17 +66,17 @@ async def health_check(self):
     Runs every 5 minutes. Results should be monitored by an external
     system (Prometheus, Datadog, etc.).
     """
+    from src.config import settings
+
     results = {"database": False, "redis": False, "timestamp": datetime.now(UTC).isoformat()}
 
     # Check database
-    session = _get_async_session()
-    try:
-        await session.execute(text("SELECT 1"))
-        results["database"] = True
-    except Exception as e:
-        logger.error("Health check: database unreachable — %s", str(e))
-    finally:
-        await session.close()
+    async with get_session() as session:
+        try:
+            await session.execute(text("SELECT 1"))
+            results["database"] = True
+        except Exception as e:
+            logger.error("Health check: database unreachable — %s", str(e))
 
     # Check Redis
     try:
@@ -118,63 +101,61 @@ async def daily_aggregation(self):
 
     Writes daily KPI summary to logs/storage for reporting.
     """
-    session = _get_async_session()
-    try:
-        from datetime import datetime
+    async with get_session() as session:
+        try:
+            from sqlalchemy import func
 
-        from sqlalchemy import func
+            from src.oms.models import Order, OrderStatus
+            from src.wms.models import Inventory
 
-        from src.oms.models import Order, OrderStatus
-        from src.wms.models import Inventory
+            today = datetime.now(UTC).date()
+            start = datetime(today.year, today.month, today.day, tzinfo=UTC)
 
-        today = datetime.now(UTC).date()
-        start = datetime(today.year, today.month, today.day, tzinfo=UTC)
+            # Total orders
+            total_result = await session.execute(select(func.count()).select_from(Order))
+            total = total_result.scalar() or 0
 
-        # Total orders
-        total_result = await session.execute(select(func.count()).select_from(Order))
-        total = total_result.scalar() or 0
-
-        # Orders today
-        today_result = await session.execute(
-            select(func.count()).select_from(Order).where(Order.created_at >= start)
-        )
-        today_count = today_result.scalar() or 0
-
-        # Orders by status
-        status_counts = {}
-        for status in OrderStatus:
-            count_result = await session.execute(
-                select(func.count()).select_from(Order).where(Order.status == status)
+            # Orders today
+            today_result = await session.execute(
+                select(func.count()).select_from(Order).where(Order.created_at >= start)
             )
-            status_counts[status.value] = count_result.scalar() or 0
+            today_count = today_result.scalar() or 0
 
-        # Total inventory items
-        inv_result = await session.execute(select(func.count()).select_from(Inventory))
-        inv_count = inv_result.scalar() or 0
+            # Orders by status
+            status_counts = {}
+            for status in OrderStatus:
+                count_result = await session.execute(
+                    select(func.count()).select_from(Order).where(Order.status == status)
+                )
+                status_counts[status.value] = count_result.scalar() or 0
 
-        stats = {
-            "date": today.isoformat(),
-            "total_orders": total,
-            "orders_today": today_count,
-            "orders_by_status": status_counts,
-            "total_inventory_items": inv_count,
-        }
+            # Total inventory items
+            inv_result = await session.execute(select(func.count()).select_from(Inventory))
+            inv_count = inv_result.scalar() or 0
 
-        # Persist to JSON log for external ingestion
-        import json
-        import os
+            stats = {
+                "date": today.isoformat(),
+                "total_orders": total,
+                "orders_today": today_count,
+                "orders_by_status": status_counts,
+                "total_inventory_items": inv_count,
+            }
 
-        log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
-        os.makedirs(log_dir, exist_ok=True)
-        daily_file = os.path.join(log_dir, f"daily_stats_{today.isoformat()}.json")
-        with open(daily_file, "w") as f:
-            json.dump(stats, f, indent=2)
+            # Persist to JSON log for external ingestion
+            import os
 
-        logger.info("Daily aggregation written: %s — %d orders, %d inventory items",
-                     today.isoformat(), total, inv_count)
-        return stats
-    finally:
-        await session.close()
+            log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+            os.makedirs(log_dir, exist_ok=True)
+            daily_file = os.path.join(log_dir, f"daily_stats_{today.isoformat()}.json")
+            with open(daily_file, "w") as f:
+                json.dump(stats, f, indent=2)
+
+            logger.info("Daily aggregation written: %s — %d orders, %d inventory items",
+                          today.isoformat(), total, inv_count)
+            return stats
+        except SQLAlchemyError:
+            await session.rollback()
+            raise
 
 
 @app.task(base=BaseTask, bind=True, max_retries=2)
@@ -184,28 +165,29 @@ async def compute_abc_xyz_analysis(self):
     Reads stock movement data, computes the ABC‑XYZ matrix, and writes
     the result to Redis so the admin dashboard can display it instantly.
     """
-    session = _get_async_session()
-    try:
-        from src.wms.analysis import compute_abc_xyz_matrix
-
-        matrix = await compute_abc_xyz_matrix(session, months=6)
-
+    async with get_session() as session:
         try:
-            from src.cache.redis_client import get_redis
+            from src.wms.analysis import compute_abc_xyz_matrix
 
-            async with get_redis() as r:
-                if r:
-                    await r.setex(
-                        "inventory:abc_xyz_matrix",
-                        86400,  # 24 h TTL
-                        json.dumps(matrix, default=str),
-                    )
-                    logger.info("ABC‑XYZ matrix cached in Redis")
-        except (redis.RedisError, ConnectionError, TimeoutError):
-            logger.warning("Redis unavailable — ABC‑XYZ matrix not cached")
+            matrix = await compute_abc_xyz_matrix(session, months=6)
 
-        total = sum(len(v) for v in matrix.values())
-        logger.info("ABC‑XYZ analysis completed: %d SKUs classified", total)
-        return {cell: len(items) for cell, items in matrix.items()}
-    finally:
-        await session.close()
+            try:
+                from src.cache.redis_client import get_redis
+
+                async with get_redis() as r:
+                    if r:
+                        await r.setex(
+                            "inventory:abc_xyz_matrix",
+                            86400,  # 24 h TTL
+                            json.dumps(matrix, default=str),
+                        )
+                        logger.info("ABC‑XYZ matrix cached in Redis")
+            except (redis.RedisError, ConnectionError, TimeoutError):
+                logger.warning("Redis unavailable — ABC‑XYZ matrix not cached")
+
+            total = sum(len(v) for v in matrix.values())
+            logger.info("ABC‑XYZ analysis completed: %d SKUs classified", total)
+            return {cell: len(items) for cell, items in matrix.items()}
+        except SQLAlchemyError:
+            await session.rollback()
+            raise

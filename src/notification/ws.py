@@ -9,22 +9,33 @@ logger = logging.getLogger(__name__)
 
 class ConnectionManager:
     def __init__(self):
-        self._active: dict[int, list[WebSocket]] = {}
+        self._active: dict[str, list[WebSocket]] = {}
 
-    async def connect(self, user_id: int, ws: WebSocket):
+    async def connect(self, user_id: str, ws: WebSocket):
         await ws.accept()
-        self._active.setdefault(user_id, []).append(ws)
-        logger.debug("WebSocket connected: user_id=%d", user_id)
-
-    def disconnect(self, user_id: int, ws: WebSocket):
+        # Evict stale connections if user already has max 3 (prevents duplicate sends)
         conns = self._active.get(user_id, [])
+        while len(conns) >= 3:
+            old_ws = conns.pop(0)
+            try:
+                await old_ws.close()
+            except Exception:
+                pass
+        # Prevent duplicate WebSocket for same user (idempotent connect)
         if ws in conns:
+            return
+        self._active.setdefault(user_id, []).append(ws)
+
+    def disconnect(self, user_id: str, ws: WebSocket):
+        conns = self._active.get(user_id, [])
+        # Remove ALL matching stale connections for this ws object
+        while ws in conns:
             conns.remove(ws)
         if not conns:
             self._active.pop(user_id, None)
-        logger.debug("WebSocket disconnected: user_id=%d", user_id)
+        logger.debug("WebSocket disconnected: user_id=%s", user_id)
 
-    async def send_to_user(self, user_id: int, payload: dict[str, Any]):
+    async def send_to_user(self, user_id: str, payload: dict[str, Any]):
         conns = self._active.get(user_id, [])
         if not conns:
             return
@@ -36,7 +47,7 @@ class ConnectionManager:
             except WebSocketDisconnect:
                 stale.append(ws)
             except Exception as e:
-                logger.warning("WebSocket send error user=%d: %s", user_id, e)
+                logger.warning("WebSocket send error user=%s: %s", user_id, e)
                 stale.append(ws)
         for ws in stale:
             self.disconnect(user_id, ws)

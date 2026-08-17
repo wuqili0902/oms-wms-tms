@@ -84,7 +84,11 @@ export async function syncMutations() {
       await request(m.method, m.path, m.body);
       m.synced_at = new Date().toISOString();
       synced++;
-    } catch { /* keep unsynced */ }
+    } catch (err) {
+      // Only re-queue on network errors (no status code). 4xx business errors are permanent.
+      if (!err || !err.status) { /* keep unsynced - network error */ }
+      else { m.synced_at = new Date().toISOString(); synced++; } // remove permanently retried 4xx
+    }
   }
   await AsyncStorage.setItem(
     "pda_mutations",

@@ -33,16 +33,20 @@ def parse_order_create(payload: dict) -> ERPMessage:
     """
     items = []
     for line in payload.get("line_items", []):
+        if not isinstance(line, dict):
+            continue
         items.append({
-            "sku": line.get("sku", ""),
-            "product_name": line.get("title", ""),
+            "sku": str(line.get("sku", "")),
+            "product_name": str(line.get("title", "")),
             "quantity": line.get("quantity", 1),
             "unit_price": str(line.get("price", "0")),
-            "gtin": line.get("barcode", ""),
+            "gtin": str(line.get("barcode", "")),
         })
 
     note = payload.get("note") or ""
-    tags = payload.get("tags") or ""
+    tags = payload.get("tags") or []
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
 
     return ERPMessage(
         msg_type=MessageType.ORDERS,
@@ -52,23 +56,27 @@ def parse_order_create(payload: dict) -> ERPMessage:
         payload={
             "source": "shopify",
             "shopify_order_id": str(payload.get("id", "")),
-            "order_number": payload.get("order_number", 0),
-            "customer_email": payload.get("email", ""),
-            "customer_name": payload.get("customer", {}).get("first_name", ""),
-            "shipping_address": payload.get("shipping_address", {}),
+            "order_number": int(payload.get("order_number", 0) or 0),
+            "customer_email": str(payload.get("email", "") or ""),
+            "customer_name": "",
+            "shipping_address": payload.get("shipping_address") or {},
             "items": items,
             "total_amount": str(payload.get("total_price", "0")),
             "currency": payload.get("currency", "USD"),
-            "notes": f"Shopify #{payload.get('order_number', '')}: {note}",
+            "notes": (
+                f"Shopify #{payload.get('order_number', '')}: {note}" if note
+                else f"Shopify #{payload.get('order_number', '')}"
+            ),
             "tags": tags,
             "fulfillment_status": payload.get("fulfillment_status", ""),
-            "created_at": payload.get("created_at", ""),
+            "created_at": str(payload.get("created_at", "")),
         },
     )
 
 
 def parse_fulfillment(payload: dict) -> ERPMessage:
     """Convert a Shopify ``orders/fulfilled`` event into a fulfillment message."""
+    first = (payload.get("fulfillments") or [{}])[0] if isinstance(payload.get("fulfillments"), list) else {}
     return ERPMessage(
         msg_type=MessageType.DESADV,
         sender_id="shopify",
@@ -77,10 +85,10 @@ def parse_fulfillment(payload: dict) -> ERPMessage:
         payload={
             "source": "shopify",
             "shopify_order_id": str(payload.get("id", "")),
-            "fulfillment_status": payload.get("fulfillment_status", "fulfilled"),
-            "tracking_company": payload.get("fulfillments", [{}])[0].get("tracking_company", ""),
-            "tracking_number": payload.get("fulfillments", [{}])[0].get("tracking_number", ""),
-            "fulfilled_at": payload.get("fulfillments", [{}])[0].get("created_at", ""),
+            "fulfillment_status": "fulfilled",
+            "tracking_company": str(first.get("tracking_company") or ""),
+            "tracking_number": str(first.get("tracking_number") or ""),
+            "fulfilled_at": str(first.get("created_at") or ""),
         },
     )
 
@@ -96,12 +104,24 @@ async def handle_shopify_webhook(
         logger.warning("Shopify webhook HMAC verification failed")
         return None
 
-    payload = json.loads(body)
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, TypeError) as exc:
+        logger.error("Shopify webhook JSON parse error (%s): %s", topic, exc)
+        return None
 
-    if topic == "orders/create":
-        return parse_order_create(payload)
-    elif topic == "orders/fulfilled":
-        return parse_fulfillment(payload)
-    else:
-        logger.info("Unhandled Shopify webhook topic: %s", topic)
+    if not isinstance(payload, dict):
+        logger.error("Shopify webhook payload is not a JSON object for topic: %s", topic)
+        return None
+
+    try:
+        if topic == "orders/create":
+            return parse_order_create(payload)
+        elif topic == "orders/fulfilled":
+            return parse_fulfillment(payload)
+        else:
+            logger.info("Unhandled Shopify webhook topic: %s", topic)
+            return None
+    except Exception as exc:
+        logger.error("Shopify webhook handler error for topic '%s': %s", topic, exc)
         return None

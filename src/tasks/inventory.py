@@ -26,11 +26,11 @@ async def sync_inventory(self) -> dict:
         count = len(items)
         for item in items:
             try:
-                SyncLog(
+                session.add(SyncLog(
                     id=self.request.id, device_id=item.warehouse_id,
                     sync_type=SyncLogType.UPLOAD, status=SyncLogStatus.COMPLETED,
                     records_count=count, started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
-                )
+                ))
             except Exception:
                 logger.exception("Failed to create SyncLog for inventory item %s", item.sku_id)
         await session.commit()
@@ -106,7 +106,7 @@ async def release_locked_inventory_for_cancelled_orders(self) -> dict:
 
 
 @celery.task(bind=True, name="tasks.order.cancel_expired")
-async def cancel_expired_orders(self) -> int:
+async def cancel_expired_orders(self) -> dict:
     """Cancel orders that have been pending too long."""
 
     async with async_session_factory() as session:

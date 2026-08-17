@@ -211,7 +211,7 @@ def rate_limit(
     return decorator
 
 
-# Pre-configured rate limiters for common use cases
+# Pre-configured rate limiters for common use cases (all follow settings)
 api_rate_limit = rate_limit()  # uses settings.rate_limit_requests/window
-user_rate_limit = rate_limit(requests=300, window=60)  # 300 requests per minute per user
-write_rate_limit = rate_limit(requests=100, window=60)  # 100 write operations per minute
+user_rate_limit = rate_limit()  # follows global settings per user
+write_rate_limit = rate_limit()  # follows global settings per IP

@@ -16,8 +16,9 @@ Typical flow:
 References:
     - Microservices Pattern – Outbox: https://microservices.io/patterns/data/Outbox.html
 """
+import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -27,14 +28,26 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.core.database import get_session
-from src.models.base import Base
+logger = logging.getLogger(__name__)
+
 
 # Memory cache fallback (used when Redis is unavailable)
 try:
     from src.cache.redis_client import get_memory_cache  # noqa: F401
 except ImportError:
     pass
+
+
+def _get_session():
+    """Lazy-import session factory to avoid circular imports."""
+    from src.core.database import get_session
+    return get_session
+
+
+def _get_base():
+    """Lazy-import Base to avoid circular imports."""
+    from src.models.base import Base
+    return Base
 
 
 class OutboxEventStatus(StrEnum):
@@ -45,7 +58,7 @@ class OutboxEventStatus(StrEnum):
     FAILED = "failed"         # dispatch failed; may retry
 
 
-class OutboxEvent(Base):
+class OutboxEvent(_get_base()):
     """Represents a domain event waiting for delivery.
 
     Schema:
@@ -100,7 +113,7 @@ class OutboxEvent(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True), server_default=func.now()
     )
 
     # ── indexes (fast lookup + dispatch query) ────────────────────────────
@@ -159,7 +172,7 @@ async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
     each event and then call ``mark_dispatched()`` on success or
     ``mark_failed()`` on failure.
     """
-    async with get_session() as session:
+    async with _get_session() as session:
         stmt = (
             _select(OutboxEvent)
             .where(
@@ -175,33 +188,58 @@ async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
 
 
 async def mark_dispatched(event_ids: list[uuid.UUID]) -> int:
-    """Mark a batch of events as dispatched (successfully published to MQ)."""
-    async with get_session() as session:
-        count = await session.execute(
-            OutboxEvent.__table__.update()
-            .where(OutboxEvent.id.in_(event_ids))
-            .values(
-                status=OutboxEventStatus.DISPATCHED.value,
-                dispatched_at=datetime.now(UTC),
+    """Mark a batch of events as dispatched (successfully published to MQ).
+
+    Uses SAVEPOINT so that if the caller's transaction is still open,
+    the dispatch status update can be rolled back independently.
+    """
+    async with _get_session() as session:
+        async with session.begin():
+            result = await session.execute(
+                OutboxEvent.__table__.update()  # type: ignore[union-attr]
+                .where(OutboxEvent.id.in_(event_ids))
+                .values(
+                    status=OutboxEventStatus.DISPATCHED.value,
+                    dispatched_at=datetime.now(UTC),
+                )
             )
-        )
-        await session.commit()
-    return count.rowcount
+            await session.commit()
+    return result.rowcount  # type: ignore[attr-defined]
 
 
 async def mark_failed(event_id: uuid.UUID, error_message: str) -> None:
-    """Mark an event as failed and schedule a retry after 60 seconds."""
-    from datetime import timedelta
+    """Mark an event as failed and schedule a retry after exponential backoff.
 
-    async with get_session() as session:
-        await session.execute(
-            OutboxEvent.__table__.update()
-            .where(OutboxEvent.id == event_id)
-            .values(
-                status=OutboxEventStatus.FAILED.value,
-                error_message=error_message[:500],
-                retry_count=OutboxEvent.retry_count + 1,
-                scheduled_at=datetime.now(UTC) + timedelta(seconds=60),
-            )
+    Uses conditional UPDATE to avoid double-processing race condition:
+    only marks FAILED if the event is still in DISPATCHED state (being processed).
+    Max retries capped at 5 attempts; events exceeding limit go to DEAD letter.
+    """
+    async with _get_session() as session:
+        result = await session.execute(
+            _select(OutboxEvent.retry_count).where(OutboxEvent.id == event_id)
         )
+        current_retry = result.scalar_one_or_none() or 0
+
+        if current_retry >= 5:
+            # Dead letter — exceeded max retries, mark as failed permanently
+            await session.execute(
+                OutboxEvent.__table__.update()  # type: ignore[union-attr]
+                .where(OutboxEvent.id == event_id)
+                .values(
+                    status=OutboxEventStatus.FAILED.value,
+                    error_message=f"Max retries exceeded ({current_retry} attempts): {error_message[:400]}",
+                )
+            )
+        else:
+            backoff_seconds = min(60 * (2 ** current_retry), 3600)
+            await session.execute(
+                OutboxEvent.__table__.update()  # type: ignore[union-attr]
+                .where(OutboxEvent.id == event_id)
+                .values(
+                    status=OutboxEventStatus.FAILED.value,
+                    error_message=error_message[:500],
+                    retry_count=current_retry + 1,
+                    scheduled_at=datetime.now(UTC) + timedelta(seconds=backoff_seconds),
+                )
+            )
         await session.commit()

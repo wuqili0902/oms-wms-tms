@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 logger = logging.getLogger(__name__)
 
@@ -325,8 +326,12 @@ async def update_order_status(db: AsyncSession, order_id: str, target: str, oper
 
 
 async def delete_order(db: AsyncSession, order_id: str) -> None:
-    """Delete an order (soft delete)."""
-    result = await db.execute(select(Order).where(Order.id == _to_uuid(order_id)))
+    """Delete an order (soft delete), cascading to related records."""
+    result = await db.execute(
+        select(Order)
+        .where(Order.id == _to_uuid(order_id))
+        .options(selectinload(Order.items_list), selectinload(Order.status_logs))
+    )
     order = result.scalar_one_or_none()
     if not order:
         raise NotFoundException(message=f"Order {order_id} not found")
@@ -335,8 +340,18 @@ async def delete_order(db: AsyncSession, order_id: str) -> None:
     if current in ("completed", "cancelled", "failed"):
         raise ValidationException(message=f"Cannot delete order in '{current}' state")
 
+    cascade_ts = _now()
     order.is_deleted = True
-    order.deleted_at = _now()
+    order.deleted_at = cascade_ts
+
+    for item in order.items_list:
+        item.is_deleted = True
+        item.deleted_at = cascade_ts
+
+    for log in order.status_logs:
+        log.is_deleted = True
+        log.deleted_at = cascade_ts
+
     await db.commit()
 
 

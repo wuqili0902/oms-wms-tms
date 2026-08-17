@@ -4,10 +4,12 @@ Allows operations staff to:
   - **Split** a single order into multiple child orders
   - **Merge** multiple orders into a single fulfilment shipment
 """
+import logging
 import uuid
 from decimal import Decimal
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,6 +22,8 @@ from src.oms.models import (
     SplitChildOrder,
 )
 from src.oms.service import _order_to_dict, _to_uuid
+
+logger = logging.getLogger(__name__)
 
 
 async def split_order(
@@ -136,17 +140,34 @@ async def merge_orders(
     count = await db.execute(select(func.count()).select_from(MergeGroup))
     merge_code = code or f"MG-{count.scalar() + 1:04d}"
 
-    group = MergeGroup(
-        id=uuid.uuid4(),
-        code=merge_code,
-        warehouse_id=_to_uuid(warehouse_id) if warehouse_id else None,
-        status="active",
-        total_items=total_items,
-        total_amount=total_amount,
-        notes=note,
-    )
-    db.add(group)
-    await db.flush()
+    # Retry on unique constraint violation (concurrent merges may generate same code)
+    max_retries = 3
+    group = None
+    for attempt in range(max_retries):
+        try:
+            group = MergeGroup(
+                id=uuid.uuid4(),
+                code=merge_code,
+                warehouse_id=_to_uuid(warehouse_id) if warehouse_id else None,
+                status="active",
+                total_items=total_items,
+                total_amount=total_amount,
+                notes=note,
+            )
+            db.add(group)
+            await db.flush()
+            break  # Success — no IntegrityError raised
+        except IntegrityError:
+            db.expire_all()
+            if attempt < max_retries - 1:
+                count = await db.execute(select(func.count()).select_from(MergeGroup))
+                merge_code = f"MG-{count.scalar() + 1:04d}"
+                logger.warning("MergeGroup code collision on '%s', retrying...", merge_code)
+            else:
+                raise ValidationException(message="Could not generate unique merge code — try again")
+
+    if group is None:
+        raise ValidationException(message="Could not create merge group")
 
     for order in orders:
         link = SplitChildOrder(

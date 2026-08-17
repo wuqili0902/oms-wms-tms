@@ -53,7 +53,7 @@
             <el-button size="small" type="success" link :disabled="row.status==='completed'||row.status==='cancelled'" @click="handleSplit(row)">拆单</el-button>
             <el-button size="small" type="info" link :disabled="row.status==='completed'||row.status==='cancelled'" @click="handleMerge(row)">合并</el-button>
             <el-button size="small" type="danger" link :disabled="row.status==='cancelled'" @click="handleCancel(row)">取消</el-button>
-            <el-button size="small" type="danger" link :disabled="row.status!=='draft'&&row.status!=='cancelled'" @click="handleDelete(row)">删除</el-button>
+            <el-button size="small" type="danger" link :disabled="row.status!=='draft'" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -220,7 +220,7 @@ async function fetchOrders() {
     const data = res.data ?? {}
     orders.value = data.items ?? []
     total.value = data.total ?? 0
-  } catch (e: any) { orders.value = []; total.value = 0; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
   loading.value = false
 }
 
@@ -263,7 +263,7 @@ async function handleCancel(row: Order) {
     await apiClient.put(`/orders/${row.id}/status`, { status: 'cancelled' })
     ElMessage.success('已取消')
     fetchOrders()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
 }
 
 async function handleDelete(row: Order) {
@@ -272,7 +272,7 @@ async function handleDelete(row: Order) {
     await apiClient.delete(`/orders/${row.id}`)
     ElMessage.success('已删除')
     fetchOrders()
-  } catch { /* ignore */ }
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
 }
 
 function handleSplit(row: Order) {
