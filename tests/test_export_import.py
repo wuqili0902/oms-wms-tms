@@ -78,7 +78,7 @@ class TestImportCsvHandler:
     async def test_import_csv_handler_success(self):
         from src.core._import import ImportResult, import_csv_handler
 
-        async def mock_handler(csv_text):
+        async def mock_handler(csv_text, db):
             return ImportResult(success=3), None
 
         result = await import_csv_handler(b"a,b\n1,2\n3,4\n5,6", None, mock_handler)
@@ -89,7 +89,7 @@ class TestImportCsvHandler:
     async def test_import_csv_handler_with_error(self):
         from src.core._import import ImportResult, import_csv_handler
 
-        async def mock_handler(csv_text):
+        async def mock_handler(csv_text, db):
             return ImportResult(success=0, errors=[{"row": 1, "error": "bad"}] ), None
 
         result = await import_csv_handler("a,b\n1,2", None, mock_handler)
@@ -99,7 +99,7 @@ class TestImportCsvHandler:
     @pytest.mark.asyncio
     async def test_import_csv_handler_unicode_error(self):
         from src.core._import import import_csv_handler
-        result = await import_csv_handler(b"\xff\xfe\x00\x01", None, lambda x: (None, None))
+        result = await import_csv_handler(b"\xff\xfe\x00\x01", None, lambda x, db: (None, None))
         assert result["success"] == 0
         assert "UTF-8" in result["errors"][0]["error"]
 
@@ -122,7 +122,7 @@ class TestImportCsvHandler:
     async def test_import_csv_handler_handler_error(self):
         from src.core._import import ImportResult, import_csv_handler
 
-        async def mock_handler(csv_text):
+        async def mock_handler(csv_text, db):
             return ImportResult(success=0), RuntimeError("handler failed")
 
         result = await import_csv_handler("a,b\n1,2", None, mock_handler)
@@ -133,44 +133,38 @@ class TestHandleOrdersImport:
     """Covers core/_import/import_orders.py handle_orders_import."""
 
     @pytest.mark.asyncio
-    async def test_orders_import_success(self):
-        import csv
-        import io
-
+    async def test_orders_import_success(self, db_session):
         from src.core._import.import_orders import handle_orders_import
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow(["customer_id", "items", "priority"])
-        w.writerow(["abc123", '[{"sku":"S1","qty":2}]', "high"])
-        result, error = await handle_orders_import(buf.getvalue())
+        csv_text = "customer_id,items,priority\nIMPORT-CUST-01,\"[]\",medium\n"
+        result, error = await handle_orders_import(csv_text, db_session)
         assert error is None
         assert result.success == 1
         assert result.errors == []
 
     @pytest.mark.asyncio
-    async def test_orders_import_missing_customer_id(self):
+    async def test_orders_import_missing_customer_id(self, db_session):
         from src.core._import.import_orders import handle_orders_import
         csv_text = "customer_id,items\n,\n"
-        result, error = await handle_orders_import(csv_text)
+        result, error = await handle_orders_import(csv_text, db_session)
         assert error is None
         assert result.success == 0
         assert len(result.errors) == 1
         assert "customer_id" in result.errors[0]["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_orders_import_invalid_json(self):
+    async def test_orders_import_invalid_json(self, db_session):
         from src.core._import.import_orders import handle_orders_import
         csv_text = "customer_id,items\nc1,\"{bad\"\n"
-        result, error = await handle_orders_import(csv_text)
+        result, error = await handle_orders_import(csv_text, db_session)
         assert error is None
         assert result.success == 0
         assert len(result.errors) == 1
 
     @pytest.mark.asyncio
-    async def test_orders_import_whitespace_customer(self):
+    async def test_orders_import_whitespace_customer(self, db_session):
         from src.core._import.import_orders import handle_orders_import
         csv_text = "customer_id\n   \n"
-        result, error = await handle_orders_import(csv_text)
+        result, error = await handle_orders_import(csv_text, db_session)
         assert error is None
         assert result.success == 0
 
@@ -179,35 +173,46 @@ class TestHandleInventoryImport:
     """Covers core/_import/import_inventory.py handle_inventory_import."""
 
     @pytest.mark.asyncio
-    async def test_inventory_import_success(self):
+    async def test_inventory_import_success(self, db_session):
         from src.core._import.import_inventory import handle_inventory_import
-        csv_text = "sku_id,warehouse_id,quantity,min_qty\ns1,w1,10,2\n"
-        result, error = await handle_inventory_import(csv_text)
+        sku = SKU(id=uuid.uuid4(), sku="IMPORT-SKU-01", name="Import SKU")
+        wh = Warehouse(id=uuid.uuid4(), code="IMPORT-WH-01", name="Import WH")
+        db_session.add_all([sku, wh])
+        await db_session.commit()
+
+        csv_text = f"sku_id,warehouse_id,quantity,min_qty\n{sku.id},{wh.id},10,2\n"
+        result, error = await handle_inventory_import(csv_text, db_session)
         assert error is None
         assert result.success == 1
 
     @pytest.mark.asyncio
-    async def test_inventory_import_missing_fields(self):
+    async def test_inventory_import_missing_fields(self, db_session):
         from src.core._import.import_inventory import handle_inventory_import
         csv_text = "sku_id,warehouse_id\ns1,\n"
-        result, error = await handle_inventory_import(csv_text)
+        result, error = await handle_inventory_import(csv_text, db_session)
         assert error is None
         assert result.success == 0
         assert len(result.errors) == 1
 
     @pytest.mark.asyncio
-    async def test_inventory_import_invalid_quantity(self):
+    async def test_inventory_import_invalid_quantity(self, db_session):
         from src.core._import.import_inventory import handle_inventory_import
-        csv_text = "sku_id,warehouse_id,quantity\ns1,w1,abc\n"
-        result, error = await handle_inventory_import(csv_text)
+        sku = SKU(id=uuid.uuid4(), sku="IMPORT-SKU-Q", name="Q SKU")
+        wh = Warehouse(id=uuid.uuid4(), code="IMPORT-WH-Q", name="Q WH")
+        db_session.add_all([sku, wh])
+        await db_session.commit()
+
+        csv_text = f"sku_id,warehouse_id,quantity\n{sku.id},{wh.id},abc\n"
+        result, error = await handle_inventory_import(csv_text, db_session)
         assert error is None
         assert result.success == 0
+        assert len(result.errors) == 1
 
     @pytest.mark.asyncio
-    async def test_inventory_import_empty_row_skipped(self):
+    async def test_inventory_import_empty_row_skipped(self, db_session):
         from src.core._import.import_inventory import handle_inventory_import
         csv_text = "sku_id,warehouse_id\n\n"
-        result, error = await handle_inventory_import(csv_text)
+        result, error = await handle_inventory_import(csv_text, db_session)
         assert error is None
         assert result.success == 0
 

@@ -50,9 +50,9 @@ async def cleanup_expired_tokens(self):
     """
     from src.auth.token_store import token_store
 
-    before = len(token_store._store)
-    token_store.cleanup_expired()
-    after = len(token_store._store)
+    before = len(token_store._memory)
+    token_store._memory.clear()
+    after = len(token_store._memory)
     removed = before - after
     if removed:
         logger.info("Cleaned up %d expired tokens (in-memory store)", removed)

@@ -3,13 +3,14 @@ import csv
 import io
 import json
 import logging
+from typing import Any
 
 from src.core._import import ImportResult
 
 logger = logging.getLogger(__name__)
 
 
-async def handle_orders_import(csv_text: str) -> tuple[ImportResult, Exception | None]:
+async def handle_orders_import(csv_text: str, db: Any) -> tuple[ImportResult, Exception | None]:
     """Parse orders CSV and create order records.
 
     Expected columns (order-dependent):
@@ -21,6 +22,8 @@ async def handle_orders_import(csv_text: str) -> tuple[ImportResult, Exception |
     Returns:
         Tuple[ImportResult, Exception | None]
     """
+    from src.oms import service as oms_service
+
     results = ImportResult()
     reader = csv.DictReader(io.StringIO(csv_text))
 
@@ -31,12 +34,18 @@ async def handle_orders_import(csv_text: str) -> tuple[ImportResult, Exception |
                 raise ValueError("Missing required field: customer_id")
 
             items_raw = row.get("items", "[]").strip()
-            _items = json.loads(items_raw) if items_raw else []
+            items = json.loads(items_raw) if items_raw else []
 
-            _priority = row.get("priority", "medium").strip().lower() or "medium"
-            _notes = row.get("notes", "").strip()
+            priority = row.get("priority", "medium").strip().lower() or "medium"
+            notes = row.get("notes", "").strip()
 
-            # TODO: call oms_service.create_order(db, ...) here
+            order_data = {
+                "customer_id": customer_id,
+                "items": items,
+                "priority": priority,
+                "notes": notes,
+            }
+            await oms_service.create_order(db, order_data)
             results.success += 1
         except Exception as e:
             logger.warning("Row %d failed: %s", row_num, e)
