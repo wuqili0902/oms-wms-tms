@@ -1,10 +1,12 @@
-"""Rate limiter using Redis token bucket algorithm.
+"""Rate limiter using Redis sliding window log algorithm.
 
 This module provides a rate limiting decorator that can be applied to API endpoints
 to limit the number of requests per user or IP address within a specified time window.
 """
 
 import functools
+import time
+import uuid
 from collections.abc import Callable
 
 import redis.asyncio as aioredis
@@ -15,15 +17,10 @@ from src.config import settings
 
 
 class RateLimiter:
-    """Rate limiter using Redis token bucket algorithm.
+    """Rate limiter using Redis sliding window log algorithm.
 
-    This class implements a token bucket rate limiting strategy where tokens are added
-    to the bucket at a fixed rate up to a maximum capacity. Each request consumes
-    one or more tokens from the bucket. If there aren't enough tokens, the request is denied.
-
-    Attributes:
-        redis_url (str): URL of the Redis instance to use for rate limiting
-        client (Optional[aioredis.Redis]): Redis client connection
+    Each request is added to a sorted set with the current timestamp as score.
+    Old entries outside the window are trimmed, and ZCARD gives the count.
     """
 
     def __init__(self, redis_url: str | None = None) -> None:
@@ -62,58 +59,36 @@ class RateLimiter:
     ) -> bool:
         """Check if a request is within the rate limit.
 
-        Args:
-            key (str): Unique identifier for the client (user ID or IP address)
-            requests (int): Maximum number of requests allowed in the time window.
-                Defaults to ``settings.rate_limit_requests``.
-            window (int): Time window in seconds. Defaults to ``settings.rate_limit_window``.
-
-        Returns:
-            bool: True if request is allowed, False if rate limit exceeded
+        Returns True if allowed, False if rate limit exceeded.
+        When Redis is unavailable, returns False (fail-closed).
         """
         requests = requests or settings.rate_limit_requests
         window = window or settings.rate_limit_window
 
         if not self._connected:
-            # Graceful degradation - allow all requests if Redis is unavailable
-            return True
+            return False  # fail-closed
 
         try:
             bucket_key = f"rate_limit:{key}"
-            current_time = await self.client.time()
-            now_seconds = current_time[0] if isinstance(current_time, (list, tuple)) else int(current_time)
+            now = time.time()
+            window_start = now - window
+            member = f"{now}:{uuid.uuid4().hex[:8]}"
 
-            # Use ZRANGE to get tokens in the current window
-            start_window = now_seconds - window
-            end_window = now_seconds
-
-            # Add token for this request and check count
             pipe = self.client.pipeline()
-            pipe.zadd(bucket_key, {f"{start_window}:{end_window}": "1"})
+            pipe.zadd(bucket_key, {member: now})
+            pipe.zremrangebyscore(bucket_key, "-inf", window_start)
             pipe.zcard(bucket_key)
+            pipe.expire(bucket_key, window)
             results = await pipe.execute()
 
-            if isinstance(results[1], int):
-                # If we got a count, check against limit
-                return results[1] <= requests
-            else:
-                # Redis returned an error or unexpected response - allow request
-                return True
+            count = results[2] if isinstance(results[2], int) else 0
+            return count <= requests
 
-        except Exception as e:
-            print(f"Error checking rate limit: {e}")
-            # Graceful degradation on errors
-            return True
+        except Exception:
+            return False  # fail-closed
 
     async def get_rate_limit_headers(self, key: str) -> dict[str, str]:
-        """Get rate limiting headers for the response.
-
-        Args:
-            key (str): Unique identifier for the client
-
-        Returns:
-            dict: Rate limit headers to add to the response
-        """
+        """Get rate limiting headers for the response."""
         if not self._connected:
             return {}
 
@@ -122,26 +97,20 @@ class RateLimiter:
 
         try:
             bucket_key = f"rate_limit:{key}"
-            current_time = await self.client.time()
-            now_seconds = current_time[0] if isinstance(current_time, (list, tuple)) else int(current_time)
+            now = time.time()
+            window_start = now - window
 
-            # Get token count in the window
-            start_window = now_seconds - window
-            end_window = now_seconds
-
-            count = await self.client.zcount(bucket_key, start_window, end_window)
+            count = await self.client.zcount(bucket_key, window_start, now)
 
             if isinstance(count, int):
                 return {
                     "X-Rate-Limit": str(requests),
                     "X-Rate-Remaining": str(max(0, requests - count)),
                     "X-Rate-Window": str(window),
-                    "X-Rate-Reset": str(end_window),
+                    "X-Rate-Reset": str(int(now + window)),
                 }
-            else:
-                return {}
-        except Exception as e:
-            print(f"Error getting rate limit headers: {e}")
+            return {}
+        except Exception:
             return {}
 
 

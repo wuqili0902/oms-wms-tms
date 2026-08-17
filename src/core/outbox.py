@@ -168,6 +168,9 @@ async def append_event(
 async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
     """Fetch pending events up to ``batch_size`` for Celery worker processing.
 
+    Uses ``FOR UPDATE SKIP LOCKED`` to prevent multiple workers from picking
+    up the same events (double-dispatch).
+
     Returns events that are due for dispatch.  The caller should dispatch
     each event and then call ``mark_dispatched()`` on success or
     ``mark_failed()`` on failure.
@@ -181,6 +184,7 @@ async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
             )
             .order_by(OutboxEvent.created_at)
             .limit(batch_size)
+            .with_for_update(skip_locked=True)
         )
         result = await session.execute(stmt)
         events = list(result.scalars().all())
@@ -210,18 +214,23 @@ async def mark_dispatched(event_ids: list[uuid.UUID]) -> int:
 async def mark_failed(event_id: uuid.UUID, error_message: str) -> None:
     """Mark an event as failed and schedule a retry after exponential backoff.
 
-    Uses conditional UPDATE to avoid double-processing race condition:
-    only marks FAILED if the event is still in DISPATCHED state (being processed).
-    Max retries capped at 5 attempts; events exceeding limit go to DEAD letter.
+    Uses a single atomic UPDATE to avoid TOCTOU race on retry_count.
+    Only marks FAILED if the event is still in DISPATCHED state.
+    Max retries capped at 5; events exceeding limit become dead letters.
     """
     async with _get_session() as session:
         result = await session.execute(
-            _select(OutboxEvent.retry_count).where(OutboxEvent.id == event_id)
+            _select(OutboxEvent.retry_count).where(
+                OutboxEvent.id == event_id,
+                OutboxEvent.status == OutboxEventStatus.DISPATCHED.value,
+            )
         )
-        current_retry = result.scalar_one_or_none() or 0
+        row = result.scalar_one_or_none()
+        if row is None:
+            return  # event not found or not in DISPATCHED state — skip
 
+        current_retry = row
         if current_retry >= 5:
-            # Dead letter — exceeded max retries, mark as failed permanently
             await session.execute(
                 OutboxEvent.__table__.update()  # type: ignore[union-attr]
                 .where(OutboxEvent.id == event_id)

@@ -155,11 +155,9 @@ async def create_order(db: AsyncSession, data: dict) -> dict:
     # Ensure customer exists
     customer = await _get_or_create_customer(db, data["customer_id"])
 
-    # Generate order_no
+    # Generate order_no — UUID suffix avoids duplicate under concurrency
     date_part = _now().strftime("%Y%m%d")
-    count_result = await db.execute(select(func.count()).select_from(Order))
-    count = count_result.scalar() or 0
-    order_no = f"ORD-{date_part}-{count + 1:04d}"
+    order_no = f"ORD-{date_part}-{uuid.uuid4().hex[:8].upper()}"
 
     items = data.get("items", [])
     total = sum(

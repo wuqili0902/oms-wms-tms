@@ -113,53 +113,49 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 class _BodyBuffer:
     """Wrap a *receive* callable so that body data can be read multiple times.
 
-    The first call reads all chunks from the underlying receive into an internal
-    buffer.  Subsequent calls return from this buffer, allowing downstream
-    handlers (FastAPI's body parser) to parse the same request body.
+    The first call to ``read_all()`` consumes all chunks from the underlying
+    receive into an internal buffer.  Subsequent ``__call__`` invocations
+    replay the buffered data in 8KB chunks so that downstream handlers
+    (FastAPI's body parser) can parse the same request body.
+
+    Call ``read_all()`` first (for audit logging), then pass the same
+    ``_BodyBuffer`` instance as the ``receive`` to FastAPI.
     """
 
     def __init__(self, receive: Receive) -> None:
         self._receive = receive
         self._chunks: list[bytes] = []
-        self._index = 0
+        self._byte_offset = 0
         self._done = False
 
     async def read_all(self) -> bytes:
-        """Consume all body chunks and return them as a single blob.
-
-        Per ASGI spec, an empty ``body`` chunk signals the end of the request body.
-        We stop reading on that signal rather than waiting for ``http.disconnect``,
-        which may never arrive (e.g., with httpx's in-process transport).
-        """
+        """Consume all body chunks and return them as a single blob."""
         if not self._chunks and not self._done:
             while True:
                 message = await self._receive()
                 body = message.get("body", b"")
-                if not body:  # empty body signals end of request per ASGI spec
+                if not body:
                     break
                 self._chunks.append(body)
+            self._done = True
         return b"".join(self._chunks)
 
     async def __call__(self) -> dict:
-        """Return the next chunk or disconnect."""
-        if not self._chunks and not self._done:
-            while True:
-                message = await self._receive()
-                body = message.get("body", b"")
-                if not body:  # empty body signals end of request per ASGI spec
-                    break
-                self._chunks.append(body)
+        """Replay buffered data in 8KB chunks, or signal disconnect."""
+        if not self._done:
+            await self.read_all()
 
-        # Return buffered data in chunks of up to 8KB
         total_len = sum(len(c) for c in self._chunks)
         if not self._chunks:
             return {"type": "http.disconnect"}
-        if self._index < total_len:
-            offset = sum(len(c) for c in self._chunks[:self._index])
-            chunk_size = min(8192, total_len - offset)
-            data = b"".join(self._chunks)[offset : offset + chunk_size]
-            self._index += 1
+
+        if self._byte_offset < total_len:
+            flat = b"".join(self._chunks)
+            chunk_size = min(8192, total_len - self._byte_offset)
+            data = flat[self._byte_offset : self._byte_offset + chunk_size]
+            self._byte_offset += chunk_size
             return {"type": "http.request", "body": data}
+
         return {"type": "http.disconnect"}
 
 
@@ -179,12 +175,9 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         request_id = scope.get("request_id", "unknown")
         client_ip = request.client.host if request.client else "unknown"
 
-        # Wrap receive so downstream handlers can still read the body.
-        # We extract the body for logging via a _BodyReplay, then pass a fresh
-        # replay to FastAPI so it can parse the same request body.
+        # Single buffer: read_all() for audit, then replay to FastAPI
         wrapped = _BodyBuffer(receive)
 
-        # Only log write operations
         if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
             user_id = await self._get_user_id(request)
             resource = scope.get("path", "/")
@@ -194,8 +187,8 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 request.method, resource, user_id, client_ip, request_id, body_summary,
             )
 
-        # Pass a fresh replay so FastAPI can still read the body
-        await self.app(scope, _BodyReplay(wrapped), send)
+        # Pass the same wrapped buffer — read_all() already populated it
+        await self.app(scope, wrapped, send)
 
     async def _get_user_id(self, request: Request) -> str:
         """Extract user identity from JWT in Authorization header."""
@@ -210,15 +203,14 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 pass
         return "anonymous"
 
-    async def _extract_request_body(self, receive: Receive) -> Any | None:
+    async def _extract_request_body(self, buffer: _BodyBuffer) -> Any | None:
         """Extract and serialize the request body for audit logging.
 
-        Reads all chunks from *receive* into a buffer so that downstream handlers
-        (FastAPI's body parser) can still read them via the wrapped *receive*.
+        Calls ``read_all()`` on the buffer to populate it, then returns
+        a truncated summary.  The buffer can still replay to FastAPI afterward.
         """
         try:
-            replay = _BodyReplay(receive)
-            raw_body = await replay.read_all()  # type: ignore[attr-defined]
+            raw_body = await buffer.read_all()
 
             body_str = raw_body.decode("utf-8", errors="replace")
             try:
@@ -238,55 +230,6 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         except (json.JSONDecodeError, RuntimeError) as e:
             logger.warning("Audit log extract failed: %s", e)
             return "unable to parse request body"
-
-
-class _BodyReplay:
-    """Wrap *receive* so that after we call ``read_all()`` the body is re-injected.
-
-    ASGI's ``receive`` is a one-shot stream — once data is consumed by ``read_all()``,
-    downstream handlers (FastAPI's body parser) see nothing.  This wrapper stores all
-    raw chunks and replays them on subsequent calls so that FastAPI can still parse
-    the request body after we've logged it for audit purposes.
-    """
-
-    __slots__ = ("_receive", "_chunks")
-
-    def __init__(self, receive: Receive) -> None:
-        self._receive = receive
-        self._chunks: list[bytes] = []
-
-    async def read_all(self) -> bytes:
-        """Consume the entire body and return it as a single bytes object."""
-        while True:
-            message = await self._receive()
-            body = message.get("body", b"")
-            if not body:  # empty body signals end of request per ASGI spec
-                break
-            self._chunks.append(body)
-        return b"".join(self._chunks)
-
-    async def __call__(self) -> dict:
-        # First call after read_all(): return buffered data in chunks
-        if not self._chunks:
-            # Drain the real stream into our buffer
-            while True:
-                message = await self._receive()
-                body = message.get("body", b"")
-                if not body:  # empty body signals end of request per ASGI spec
-                    break
-                self._chunks.append(body)
-
-        # Return buffered data in chunks of up to 8KB (mimics _BodyBuffer replay)
-        total_len = sum(len(c) for c in self._chunks)
-        if not self._chunks:
-            return {"type": "http.disconnect"}
-
-        offset = 0
-        chunk_size = min(8192, total_len - offset)
-        data = b"".join(self._chunks)[offset : offset + chunk_size]
-        # Remove the returned portion from buffer so we don't replay it again
-        self._chunks[0:1] = []  # pop first chunk if fully consumed
-        return {"type": "http.request", "body": data}
 
 
 __all__ = ["TraceContext", "RequestIDMiddleware", "RequestLoggingMiddleware",

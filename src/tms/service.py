@@ -416,7 +416,8 @@ async def list_transport_orders(
 
 
 _transport_status_transitions: dict[TransportStatus, list[TransportStatus]] = {
-    TransportStatus.DRAFT: [TransportStatus.DISPATCHED, TransportStatus.CANCELLED],
+    # Allow direct transit when order has no pickup yet (e.g. carrier pickup flow)
+    TransportStatus.DRAFT: [TransportStatus.DISPATCHED, TransportStatus.IN_TRANSIT, TransportStatus.CANCELLED],
     TransportStatus.DISPATCHED: (
         TransportStatus.PICKUP_COMPLETED,
         TransportStatus.IN_TRANSIT,
@@ -428,8 +429,6 @@ _transport_status_transitions: dict[TransportStatus, list[TransportStatus]] = {
     TransportStatus.DELIVERED: [],
     TransportStatus.EXCEPTION: [TransportStatus.DISPATCHED, TransportStatus.DELIVERED, TransportStatus.CANCELLED],
     TransportStatus.CANCELLED: [],
-    # Allow direct transit when order has no pickup yet (e.g. carrier pickup flow)
-    TransportStatus.DRAFT: [TransportStatus.DISPATCHED, TransportStatus.IN_TRANSIT, TransportStatus.CANCELLED],
 }
 
 
@@ -959,11 +958,14 @@ def _dijkstra(
             # Estimate cost for this segment
             # Try to find a carrier route from origin_city→dest_city matching these hubs
             seg_cost = dist * Decimal("0.5")  # fallback ₽/km
-            # Check carrier route pricing — use the first matching carrier
+            # Check carrier route pricing — find cheapest matching route
+            best_price = None
             for (oc, dc, cc), price in price_map.items():
-                if oc == origin_city or True:  # fallback: use any route price
-                    seg_cost = weight_kg * price
-                    break
+                if oc == origin_city and dc == dest_city:
+                    if best_price is None or price < best_price:
+                        best_price = price
+            if best_price is not None:
+                seg_cost = weight_kg * best_price
 
             new_cost = node.priority + seg_cost
             if new_cost < best.get(next_hub, inf_val):
@@ -1156,12 +1158,12 @@ async def create_tracking_event(db: AsyncSession, data: dict) -> dict:
         remark=data.get("remark"),
     )
     db.add(event)
-    await db.commit()
 
-    # Update parent order when delivered
+    # Update parent order before commit — otherwise the change is lost
     if data["event_type"] == "delivered" and not order.actual_delivery_time:
         order.actual_delivery_time = _now()
 
+    await db.commit()
     await db.refresh(event)
     return model_to_dict(event)
 

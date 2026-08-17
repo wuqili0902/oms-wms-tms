@@ -1,5 +1,6 @@
 """Inventory-related background tasks."""
 import logging
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -27,7 +28,7 @@ async def sync_inventory(self) -> dict:
         for item in items:
             try:
                 session.add(SyncLog(
-                    id=self.request.id, device_id=item.warehouse_id,
+                    id=uuid.uuid4(), device_id=item.warehouse_id,
                     sync_type=SyncLogType.UPLOAD, status=SyncLogStatus.COMPLETED,
                     records_count=count, started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
                 ))
@@ -77,7 +78,12 @@ async def check_low_stock_alerts(self) -> dict:
 
 @celery.task(bind=True, name="tasks.inventory.release_locked")
 async def release_locked_inventory_for_cancelled_orders(self) -> dict:
-    """Release locked inventory for cancelled orders."""
+    """Release locked inventory for cancelled orders.
+
+    NOTE: Inventory model lacks an order_id FK, so we cannot scope releases
+    to specific orders.  This releases ALL locked inventory globally.
+    TODO: Add order_id FK to Inventory model to enable scoped release.
+    """
 
     async with async_session_factory() as session:
         result = await session.execute(

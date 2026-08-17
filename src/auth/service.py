@@ -97,12 +97,13 @@ async def create_tokens(user: dict) -> dict:
 
 async def refresh_tokens(refresh_token: str) -> dict | None:
     """Validate and rotate a refresh token."""
-    username = await token_store.pop(refresh_token)
-    if not username:
-        return None
+    # Decode BEFORE popping — if decode fails, token stays valid
     try:
         payload = decode_token(refresh_token)
     except (TokenExpired, TokenInvalid):
+        return None
+    username = await token_store.pop(refresh_token)
+    if not username:
         return None
     token_data = {"sub": username, "uid": payload.get("uid")}
     new_access = create_access_token(token_data)
