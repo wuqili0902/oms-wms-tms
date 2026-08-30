@@ -28,7 +28,7 @@ from src.oms import service as oms_service
 from src.tms import service as tms_service
 from src.wms import service as wms_service
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(get_current_user)])
 
 templates = Jinja2Templates(directory="src/admin/templates")
 
@@ -55,7 +55,6 @@ def _get_flashes(request: Request) -> list[tuple[str, str]]:
 async def dashboard(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     from asyncio import gather
     stats_task = analytics_service.get_dashboard_stats(db)
@@ -91,7 +90,6 @@ async def dashboard(
 async def list_orders(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     orders, total = await oms_service.list_orders(db, page=1, page_size=100)
     return _render(
@@ -106,7 +104,6 @@ async def order_detail(
     request: Request,
     order_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     try:
         order = await oms_service.get_order(db, order_id)
@@ -132,7 +129,6 @@ async def order_detail(
 async def create_order(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     form = await request.form()
     data = {
@@ -171,7 +167,6 @@ async def update_order_status(
 async def create_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     form = await request.form()
     data = {
@@ -194,7 +189,6 @@ async def toggle_user_active(
     request: Request,
     user_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     import uuid as _uuid
 
@@ -213,7 +207,6 @@ async def delete_user(
     request: Request,
     user_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     import uuid as _uuid
 
@@ -231,7 +224,6 @@ async def delete_user(
 async def create_warehouse(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     form = await request.form()
     data = {k: v for k, v in form.items()}
@@ -248,7 +240,6 @@ async def update_warehouse(
     wh_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     form = await request.form()
     data = {k: v for k, v in form.items() if k != "_method"}
@@ -266,7 +257,6 @@ async def delete_warehouse(
     wh_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     await wms_service.delete_warehouse(db, wh_id)
     return _render(
@@ -292,7 +282,6 @@ async def edit_warehouse(
 async def list_warehouses(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     warehouses = await wms_service.list_warehouses(db)
     return _render(
@@ -312,7 +301,6 @@ async def list_warehouses(
 async def list_inventory(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     inventory = await wms_service.query_inventory(db)
     return _render(
@@ -332,7 +320,6 @@ async def list_inventory(
 async def list_devices(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     devices = await tms_service.list_devices(db)
     return _render(
@@ -352,7 +339,6 @@ async def list_devices(
 async def list_label_templates(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     templates_list = await barcode_service.list_templates(db)
     return _render(
@@ -372,7 +358,6 @@ async def list_label_templates(
 async def list_users(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     users = await auth_service.list_users(db)
     # Strip sensitive fields for display
@@ -396,7 +381,6 @@ async def list_users(
 @router.get("/export/orders")
 async def export_orders_csv(
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     rows = await export_orders(db)
     columns = ["order_no", "status", "customer_id", "total_amount", "created_at", "updated_at"]
@@ -410,7 +394,6 @@ async def export_orders_csv(
 @router.get("/export/inventory")
 async def export_inventory_csv(
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     rows = await export_inventory(db)
     columns = ["sku_id", "warehouse_id", "quantity", "locked_qty", "min_qty", "updated_at"]
@@ -424,7 +407,6 @@ async def export_inventory_csv(
 @router.get("/import", response_class=HTMLResponse)
 async def import_page(
     request: Request,
-    current_user: dict = Depends(get_current_user),
 ):
     return _render(request, "admin/import.html", {
         "active": "import", "flashes": _get_flashes(request),
@@ -435,7 +417,6 @@ async def import_page(
 async def import_orders(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     form = await request.form()
     file = form.get("file")
@@ -453,7 +434,6 @@ async def import_orders(
 async def import_inventory(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     form = await request.form()
     file = form.get("file")
@@ -473,7 +453,6 @@ async def import_inventory(
 async def list_webhooks(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     from src.webhooks.models import WebhookTarget
     result = await db.execute(select(WebhookTarget).order_by(WebhookTarget.created_at.desc()))
@@ -499,7 +478,6 @@ async def list_webhooks(
 async def create_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     import json
 
@@ -522,7 +500,6 @@ async def create_webhook(
 async def delete_webhook(
     target_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     from sqlalchemy import delete as sa_delete
 

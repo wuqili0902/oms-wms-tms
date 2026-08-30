@@ -7,7 +7,7 @@ try:
 except ImportError:
     sentry_sdk = None  # type: ignore[name-defined]
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -111,8 +111,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
     lifespan=lifespan,
 )
 
@@ -160,8 +160,8 @@ app.include_router(webhooks_router)
 
 # Root-level health endpoint (used by Docker/K8s liveness probes)
 @app.get("/health", include_in_schema=False)
-async def root_health():
-    return await health_check()
+async def root_health(response: Response):
+    return await health_check(response)
 
 # Prometheus metrics
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")

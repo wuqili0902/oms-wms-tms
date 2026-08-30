@@ -19,16 +19,17 @@ async def auth_headers(async_client):
 class TestTrackingEvents:
     """Test tracking event CRUD via API."""
 
-    async def test_list_tracking_events(self, async_client):
+    async def test_list_tracking_events(self, async_client, auth_headers):
         create_resp = await async_client.post("/api/v1/transport-orders", json={
             "carrier_code": "sf_express",
             "pickup_warehouse_id": str(uuid_mod.uuid4()),
             "delivery_name": "Bob",
             "delivery_address": {"city": "Beijing"},
-        })
+        }, headers=auth_headers)
         order = create_resp.json()
         resp = await async_client.get(
-            f"/api/v1/transport-orders/{order['id']}/tracking-events"
+            f"/api/v1/transport-orders/{order['id']}/tracking-events",
+            headers=auth_headers,
         )
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
@@ -37,16 +38,18 @@ class TestTrackingEvents:
 class TestPOD:
     """Test Proof of Delivery endpoints via API."""
 
-    async def test_create_pod(self, async_client):
+    async def test_create_pod(self, async_client, auth_headers):
         create_resp = await async_client.post("/api/v1/transport-orders", json={
             "carrier_code": "sf_express",
             "pickup_warehouse_id": str(uuid_mod.uuid4()),
             "delivery_name": "Alice",
             "delivery_address": {"city": "Beijing"},
-        })
+        }, headers=auth_headers)
         order = create_resp.json()
         resp = await async_client.post(
-            f"/api/v1/transport-orders/{order['id']}/pod", json={"signed_by": "Bob"}
+            f"/api/v1/transport-orders/{order['id']}/pod",
+            json={"signed_by": "Bob"},
+            headers=auth_headers,
         )
         assert resp.status_code in (200, 201, 404)
 
@@ -122,27 +125,27 @@ class TestFreightCalc:
 class TestAdminRoutes:
     """Test admin pages load correctly."""
 
-    async def test_admin_transport_orders(self, async_client):
-        r = await async_client.get("/admin/transport-orders")
+    async def test_admin_transport_orders(self, async_client, auth_headers):
+        r = await async_client.get("/admin/transport-orders", headers=auth_headers)
         assert r.status_code in (200, 307)
 
 
 class TestMLForecast:
     """Test ML forecast endpoint."""
 
-    async def test_ml_forecast_observations(self, async_client):
+    async def test_ml_forecast_observations(self, async_client, auth_headers):
         resp = await async_client.post("/api/v1/forecast/observations", json={
             "origin_city": "Wuhan",
             "destination_city": "Changsha",
             "count": 50.0,
-        })
+        }, headers=auth_headers)
         assert resp.status_code == 200
 
-    async def test_ml_forecast_api(self, async_client):
+    async def test_ml_forecast_api(self, async_client, auth_headers):
         fc = await async_client.get("/api/v1/forecast", params={
             "origin_city": "Wuhan",
             "destination_city": "Changsha",
-        })
+        }, headers=auth_headers)
         points = fc.json()
         assert len(points) > 0
 
@@ -208,19 +211,19 @@ class TestOrderForecaster:
 class TestMLForecastService:
     """Test ML forecast service directly."""
 
-    async def test_forecast_service(self, async_client):
+    async def test_forecast_service(self, async_client, auth_headers):
         resp = await async_client.post("/api/v1/forecast/observations", json={
             "origin_city": "Wuhan",
             "destination_city": "Changsha",
             "count": 50.0,
-        })
+        }, headers=auth_headers)
         assert resp.status_code == 200
 
-    async def test_get_forecast(self, async_client):
+    async def test_get_forecast(self, async_client, auth_headers):
         fc = await async_client.get("/api/v1/forecast", params={
             "origin_city": "Wuhan",
             "destination_city": "Changsha",
-        })
+        }, headers=auth_headers)
         points = fc.json()
         assert len(points) > 0
 
@@ -229,76 +232,94 @@ class TestAdminForecastPage:
     """Test ML forecast admin page."""
 
     async def test_ml_forecast_page(self, auth_headers, async_client):
-        r = await async_client.get("/admin/ml/forecast")
+        r = await async_client.get("/admin/ml/forecast", headers=auth_headers)
         assert r.status_code in (200, 307)
 
 
 class TestListTransportOrders:
     """Test list / transport-orders endpoint."""
 
-    async def test_list_transport_orders(self, async_client):
+    async def test_list_transport_orders(self, async_client, auth_headers):
         await async_client.post("/api/v1/transport-orders", json={
             "carrier_code": "sf_express",
             "pickup_warehouse_id": str(uuid_mod.uuid4()),
             "delivery_name": "Alice",
             "delivery_address": {"city": "Beijing"},
-        })
-        resp = await async_client.get("/api/v1/transport-orders")
+        }, headers=auth_headers)
+        resp = await async_client.get("/api/v1/transport-orders", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert "items" in data
         assert "total" in data
         assert data["page"] == 1
 
-    async def test_list_transport_orders_with_filters(self, async_client):
-        resp = await async_client.get("/api/v1/transport-orders?status=draft&carrier_code=sf_express")
+    async def test_list_transport_orders_with_filters(self, async_client, auth_headers):
+        resp = await async_client.get(
+            "/api/v1/transport-orders?status=draft&carrier_code=sf_express",
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
 
 
 class TestGetPOD:
     """Test get / transport-orders/{order_id}/pod endpoint."""
 
-    async def test_get_pod_not_found(self, async_client):
+    async def test_get_pod_not_found(self, async_client, auth_headers):
         resp = await async_client.get(
-            f"/api/v1/transport-orders/{uuid_mod.uuid4()}/pod"
+            f"/api/v1/transport-orders/{uuid_mod.uuid4()}/pod",
+            headers=auth_headers,
         )
         assert resp.status_code == 404
 
-    async def test_get_pod_success(self, async_client):
+    async def test_get_pod_success(self, async_client, auth_headers):
         create_resp = await async_client.post("/api/v1/transport-orders", json={
             "carrier_code": "sf_express",
             "pickup_warehouse_id": str(uuid_mod.uuid4()),
             "delivery_name": "Bob",
             "delivery_address": {"city": "Shanghai"},
-        })
+        }, headers=auth_headers)
         order_id = create_resp.json()["id"]
-        await async_client.post(f"/api/v1/transport-orders/{order_id}/pod", json={"signed_by": "Bob"})
-        resp = await async_client.get(f"/api/v1/transport-orders/{order_id}/pod")
+        await async_client.post(
+            f"/api/v1/transport-orders/{order_id}/pod",
+            json={"signed_by": "Bob"},
+            headers=auth_headers,
+        )
+        resp = await async_client.get(
+            f"/api/v1/transport-orders/{order_id}/pod",
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
 
 
 class TestUpdatePOD:
     """Test put / transport-orders/{order_id}/pod endpoint."""
 
-    async def test_update_pod_not_found(self, async_client):
+    async def test_update_pod_not_found(self, async_client, auth_headers):
         resp = await async_client.put(
-            f"/api/v1/transport-orders/{uuid_mod.uuid4()}/pod", json={"signed_by": "Alice"}
+            f"/api/v1/transport-orders/{uuid_mod.uuid4()}/pod",
+            json={"signed_by": "Alice"},
+            headers=auth_headers,
         )
         assert resp.status_code == 404
 
-    async def test_update_pod_success(self, async_client):
+    async def test_update_pod_success(self, async_client, auth_headers):
         create_resp = await async_client.post("/api/v1/transport-orders", json={
             "carrier_code": "sf_express",
             "pickup_warehouse_id": str(uuid_mod.uuid4()),
             "delivery_name": "Charlie",
             "delivery_address": {"city": "Guangzhou"},
-        })
+        }, headers=auth_headers)
         order_id = create_resp.json()["id"]
-        await async_client.post(f"/api/v1/transport-orders/{order_id}/pod", json={"signed_by": "Charlie"})
-        resp = await async_client.put(f"/api/v1/transport-orders/{order_id}/pod", json={
-            "signed_by": "Charlie Updated",
-            "notes": "Delivered on time",
-        })
+        await async_client.post(
+            f"/api/v1/transport-orders/{order_id}/pod",
+            json={"signed_by": "Charlie"},
+            headers=auth_headers,
+        )
+        resp = await async_client.put(
+            f"/api/v1/transport-orders/{order_id}/pod",
+            json={"signed_by": "Charlie Updated", "notes": "Delivered on time"},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
 
 
@@ -324,16 +345,22 @@ class TestListReturnOrders:
 class TestGetReturnOrder:
     """Test get / return-orders/{return_id} endpoint."""
 
-    async def test_get_return_order_not_found(self, async_client):
-        resp = await async_client.get(f"/api/v1/return-orders/{uuid_mod.uuid4()}")
+    async def test_get_return_order_not_found(self, async_client, auth_headers):
+        resp = await async_client.get(
+            f"/api/v1/return-orders/{uuid_mod.uuid4()}",
+            headers=auth_headers,
+        )
         assert resp.status_code == 404
 
-    async def test_get_return_order_success(self, async_client):
+    async def test_get_return_order_success(self, async_client, auth_headers):
         create_resp = await async_client.post("/api/v1/return-orders", json={
             "reason": "damaged", "pickup_address": {"city": "Shenzhen"}, "refund_amount": "100",
-        })
+        }, headers=auth_headers)
         return_id = create_resp.json()["id"]
-        resp = await async_client.get(f"/api/v1/return-orders/{return_id}")
+        resp = await async_client.get(
+            f"/api/v1/return-orders/{return_id}",
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
 
 
@@ -365,24 +392,23 @@ class TestListExceptions:
 class TestCalculateFreight:
     """Test post / freight/calculate endpoint."""
 
-    async def test_calculate_freight_no_tier(self, async_client):
+    async def test_calculate_freight_no_tier(self, async_client, auth_headers):
         resp = await async_client.post("/api/v1/freight/calculate", json={
             "carrier_code": "ems", "weight": 5,
-        })
+        }, headers=auth_headers)
         assert resp.status_code == 422
 
-    async def test_calculate_freight_success(self, async_client):
+    async def test_calculate_freight_success(self, async_client, auth_headers):
         await async_client.post("/api/v1/freight-tiers", json={
             "carrier_code": "sf_express",
             "rule_type": "weight_tiered",
             "min_value": 0,
             "max_value": 10.0,
             "price_per_unit": 8.5,
-        })
+        }, headers=auth_headers)
         resp = await async_client.post("/api/v1/freight/calculate", json={
             "carrier_code": "sf_express", "weight": 5,
-        })
+        }, headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert "total_freight_yuan" in data
-

@@ -24,7 +24,7 @@ class TestHealth:
     async def test_health_degraded(self, client):
         with patch("src.api.v1.health.check_db_health", return_value=False):
             resp = await client.get("/health")
-        assert resp.status_code == 200
+        assert resp.status_code == 503
         data = resp.json()
         assert data["status"] == "degraded"
         assert data["checks"]["database"] == "unhealthy"
@@ -56,7 +56,7 @@ class TestReadiness:
             patch("src.cache.redis_client.redis_health_check", return_value=True),
         ):
             resp = await client.get("/api/v1/ready")
-        assert resp.status_code == 200
+        assert resp.status_code == 503
         data = resp.json()
         assert data["status"] == "degraded"
         assert data["checks"]["database"] == "unhealthy"
@@ -68,7 +68,7 @@ class TestReadiness:
             patch("src.cache.redis_client.redis_health_check", return_value=False),
         ):
             resp = await client.get("/api/v1/ready")
-        assert resp.status_code == 200
+        assert resp.status_code == 503
         data = resp.json()
         assert data["status"] == "degraded"
         assert data["checks"]["database"] == "healthy"
@@ -80,7 +80,7 @@ class TestReadiness:
             patch("src.cache.redis_client.redis_health_check", side_effect=Exception("timeout")),
         ):
             resp = await client.get("/api/v1/ready")
-        assert resp.status_code == 200
+        assert resp.status_code == 503
         data = resp.json()
         assert data["status"] == "degraded"
         assert data["checks"]["redis"] == "unavailable"
@@ -91,6 +91,6 @@ class TestReadiness:
             patch("src.cache.redis_client.redis_health_check", return_value=False),
         ):
             resp = await client.get("/api/v1/ready")
-        assert resp.status_code == 200
+        assert resp.status_code == 503
         data = resp.json()
         assert data["status"] == "degraded"

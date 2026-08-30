@@ -149,6 +149,9 @@ async def notification_websocket(websocket: WebSocket):
     except (ValueError, json.JSONDecodeError, KeyError, WebSocketDisconnect):
         await websocket.close(code=4001)
         return
+    except Exception:
+        await websocket.close(code=4001)
+        return
 
     await ws_manager.connect(user_id, websocket)
     try:

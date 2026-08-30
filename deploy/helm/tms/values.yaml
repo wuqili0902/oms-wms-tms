@@ -23,7 +23,8 @@ postgresql:
   auth:
     database: oms_wms_tms
     username: postgres
-    password: changeme
+    password: ""  # MUST be set via secret or --set in production
+    existingSecret: oms-wms-tms-db
   primary:
     persistence:
       size: 10Gi
@@ -31,7 +32,9 @@ postgresql:
 redis:
   enabled: true
   auth:
-    enabled: false
+    enabled: true
+    password: ""  # MUST be set via secret or --set in production
+    existingSecret: oms-wms-tms-redis
   master:
     persistence:
       size: 5Gi

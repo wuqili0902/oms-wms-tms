@@ -30,7 +30,7 @@ from src.tms.schemas import (
     TransportSegmentResponse,
 )
 
-router = APIRouter(tags=["transport"])
+router = APIRouter(tags=["transport"], dependencies=[Depends(get_current_user)])
 
 
 # ── Transport Order Endpoints ────────────────────────────────────────────────
@@ -174,7 +174,6 @@ async def estimate_freight(
 async def register_device(
     data: dict,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """Register a terminal device (legacy TMS)."""
     try:
@@ -187,7 +186,6 @@ async def register_device(
 async def get_device(
     dev_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """Get a terminal device."""
     try:
@@ -201,7 +199,6 @@ async def update_device(
     dev_id: str,
     data: dict,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """Update device fields."""
     try:
@@ -229,7 +226,6 @@ async def list_devices(
     status: str | None = Query(None),
     device_type: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """List terminal devices."""
     return await tms_service.list_devices(db, warehouse_id=warehouse_id, status=status, device_type=device_type)
@@ -239,7 +235,6 @@ async def list_devices(
 async def create_session(
     dev_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """Create a device session."""
     try:
@@ -253,7 +248,6 @@ async def end_session(
     dev_id: str,
     session_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """End a device session."""
     try:
@@ -266,7 +260,6 @@ async def end_session(
 async def list_sessions(
     dev_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
 ):
     """List sessions for a device."""
     try:

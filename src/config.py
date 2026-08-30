@@ -30,6 +30,10 @@ class Settings(BaseSettings):
             warnings.warn(
                 "SECRET_KEY is set to a known default. Set a strong random value in production."
             )
+        if not self.database_url and not self.testing:
+            raise ValueError(
+                "DATABASE_URL must be set via environment variable or .env file."
+            )
         if self.cors_origins == '["*"]' and not self.debug:
             import warnings
             warnings.warn(
@@ -44,9 +48,9 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         return json.loads(self.cors_origins)
 
-    # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/oms_wms_tms"
-    database_sync_url: str = "postgresql://postgres:postgres@localhost:5432/oms_wms_tms"
+    # Database — MUST be set via DATABASE_URL env var in production
+    database_url: str = ""
+    database_sync_url: str = ""
     db_pool_size: int = 20
     db_max_overflow: int = 10
     db_pool_pre_ping: bool = True

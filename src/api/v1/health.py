@@ -1,5 +1,5 @@
 """Health check endpoints with DB and Redis probes."""
-from fastapi import APIRouter
+from fastapi import APIRouter, Response, status
 
 from src.config import settings
 from src.core.database import check_db_health
@@ -8,8 +8,10 @@ router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-async def health_check():
+async def health_check(response: Response):
     db_ok = await check_db_health()
+    if not db_ok:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return {
         "status": "ok" if db_ok else "degraded",
         "service": settings.app_name,
@@ -21,7 +23,7 @@ async def health_check():
 
 
 @router.get("/ready")
-async def readiness_check():
+async def readiness_check(response: Response):
     db_ok = await check_db_health()
     redis_ok = False
     try:
@@ -32,6 +34,8 @@ async def readiness_check():
         pass
 
     all_healthy = db_ok and redis_ok
+    if not all_healthy:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return {
         "status": "ready" if all_healthy else "degraded",
         "service": settings.app_name,

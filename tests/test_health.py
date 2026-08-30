@@ -31,7 +31,11 @@ async def test_readiness_check(async_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_openapi_docs(async_client: AsyncClient):
-    """Test that OpenAPI docs are accessible."""
+    """Test that OpenAPI docs are only accessible in debug mode."""
+    from src.config import settings
     response = await async_client.get("/docs")
-    assert response.status_code == 200
-    assert "swagger" in response.text.lower()
+    if settings.debug:
+        assert response.status_code == 200
+        assert "swagger" in response.text.lower()
+    else:
+        assert response.status_code == 404
