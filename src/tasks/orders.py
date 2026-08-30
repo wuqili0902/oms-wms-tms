@@ -26,6 +26,7 @@ async def process_stale_orders(self):
     """
     async with async_session_context() as session:
         try:
+            # Use midnight UTC (aware) as the daily cutoff — preserves tzinfo unlike .replace()
             cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
             result = await session.execute(
                 select(Order).where(

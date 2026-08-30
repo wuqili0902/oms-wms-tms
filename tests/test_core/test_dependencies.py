@@ -128,10 +128,13 @@ class TestRequirePermission:
             assert exc.value.status_code == 403
             assert "User identity not found" in exc.value.detail
 
-    async def test_returns_user_when_no_permissions_required(self):
+    async def test_raises_403_when_no_permissions_required(self):
+        # An empty require_permission() call is a programming mistake — refusing
+        # access loudly avoids the latent "no perms = full access" vector.
         check = require_permission()
-        result = await check({"sub": "anyone"})
-        assert result == {"sub": "anyone"}
+        with pytest.raises(HTTPException) as exc:
+            await check({"sub": "anyone"})
+        assert exc.value.status_code == 403
 
     async def test_multiple_permissions_required_grants(self):
         mock_session = AsyncMock(spec=AsyncSession)

@@ -67,9 +67,11 @@ apiClient.interceptors.response.use(
       }
     }
 
-    const msg = error.response?.data && typeof error.response.data === 'object' && 'detail' in (error.response.data as object)
-      ? (error.response.data as any).detail
-      : error.message
+    const raw = error.response?.data && typeof error.response.data === 'object' && 'detail' in (error.response.data as object)
+      ? String((error.response.data as any).detail)
+      : String(error.message ?? '')
+    // Escape HTML to prevent stored XSS from server error messages
+    const msg = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     ElMessage.error(msg)
     return Promise.reject(error)
   },

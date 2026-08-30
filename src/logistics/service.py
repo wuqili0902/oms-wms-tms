@@ -13,7 +13,9 @@ from src.models.base import model_to_dict
 
 
 async def create_waybill(db: AsyncSession, req: CreateWaybillRequest) -> dict:
-    code = validate_carrier(req.carrier_code) or "zto"
+    code = validate_carrier(req.carrier_code)
+    if not code:
+        raise ValidationException(message=f"无效的物流商编码: {req.carrier_code}")
     tracking = generate_tracking_number(code, req.order_id)
     carrier_name = CARRIER_NAMES.get(code, "")
 

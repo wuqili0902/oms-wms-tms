@@ -1,5 +1,7 @@
 """Logistics (electronic waybill) API endpoints."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi import status as http_status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +19,7 @@ from src.logistics.service import (
 )
 
 router = APIRouter(prefix="/logistics", tags=["Logistics"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/waybill/create")
@@ -28,7 +31,6 @@ async def create_waybill_endpoint(
     try:
         result = await create_waybill(db, body)
     except Exception as e:
-        logger = request.app.state.logger
         logger.error("[logistics] create_waybill failed for order %s: %s", body.order_id, e)
         raise HTTPException(
             status_code=http_status.HTTP_502_BAD_GATEWAY,
@@ -51,7 +53,6 @@ async def list_waybill_endpoint(
     try:
         result = await list_waybills(db, page=page, page_size=page_size, status=status, carrier=carrier, q=q)
     except Exception as e:
-        logger = request.app.state.logger
         logger.error("[logistics] list_waybill failed: %s", e)
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -86,7 +87,6 @@ async def track_waybill_endpoint(
     try:
         result = await kdniao_query_tracking(tracking)
     except Exception as e:
-        logger = request.app.state.logger
         logger.error("[logistics] track failed for %s: %s", tracking, e)
         raise HTTPException(
             status_code=http_status.HTTP_502_BAD_GATEWAY,
@@ -98,13 +98,17 @@ async def track_waybill_endpoint(
 
 @router.post("/waybill/{tracking}/print")
 async def print_waybill_endpoint(
+    request: Request,
     tracking: str,
     db: AsyncSession = Depends(get_db),
 ):
     url = print_callback_url(tracking)
     try:
-        await mark_printed(db, tracking)
-    except Exception:
-        pass
+        result = await mark_printed(db, tracking)
+        logger.info("[logistics] marked %s printed (count=%s)", tracking, result.get("print_count"))
+    except Exception as e:
+        # Best-effort bookkeeping: the printer still needs the callback url even
+        # if marking print failed (e.g. waybill not found in this DB).
+        logger.error("[logistics] mark_printed failed for %s: %s", tracking, e)
 
     return {"print_callback_url": url}

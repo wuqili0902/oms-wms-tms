@@ -16,8 +16,7 @@ from src.tasks.base import BaseTask
 
 logger = logging.getLogger(__name__)
 
-# Remote sync endpoint
-SYNC_URL = f"http://{settings.host}:{settings.port}/api/v1/sync/push"
+# Remote sync endpoint — computed at call time so hot-reloaded settings take effect.
 
 
 @app.task(base=BaseTask, bind=True, max_retries=3, countdown=30)
@@ -46,7 +45,8 @@ async def process_pda_sync_queue(self, local_db_path: str = "wms_pda.db"):
                     "operation": record.operation,
                     "payload": json.loads(record.payload),
                 }
-                resp = await client.post(SYNC_URL, json={"batch": [payload]})
+                sync_url = f"http://{settings.host}:{settings.port}/api/v1/sync/push"
+                resp = await client.post(sync_url, json={"batch": [payload]})
                 resp.raise_for_status()
                 pushed_ids.append(record.id)
             except Exception as exc:

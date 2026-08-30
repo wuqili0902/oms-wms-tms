@@ -30,7 +30,7 @@ async def sync_inventory(self) -> dict:
                 session.add(SyncLog(
                     id=uuid.uuid4(), device_id=item.warehouse_id,
                     sync_type=SyncLogType.UPLOAD, status=SyncLogStatus.COMPLETED,
-                    records_count=count, started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
+                    records_count=1, started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
                 ))
             except Exception:
                 logger.exception("Failed to create SyncLog for inventory item %s", item.sku_id)

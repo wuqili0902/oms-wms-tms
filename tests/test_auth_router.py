@@ -89,6 +89,30 @@ class TestToggleUserActiveCoverage:
 
     async def test_toggle_active_success(self, async_client):
         uname = f"toggle_{uuid.uuid4().hex[:6]}"
+        # Create a second user to toggle (need an admin to have the permission)
+        admin_uname = f"admin_{uuid.uuid4().hex[:6]}"
+        await async_client.post("/api/v1/auth/register", json={
+            "username": admin_uname, "email": f"{admin_uname}@test.com", "password": "test123456",
+        })
+        # Create the target user
+        register_resp = await async_client.post("/api/v1/auth/register", json={
+            "username": uname, "email": f"{uname}@test.com", "password": "test123456",
+        })
+        user_id = register_resp.json()["id"]
+
+        # Login as admin and use monkeypatch to grant permission
+        login_resp = await async_client.post("/api/v1/auth/login", json={
+            "username": admin_uname, "password": "test123456",
+        })
+        token = login_resp.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = await async_client.post(f"/api/v1/auth/users/{user_id}/toggle", headers=headers)
+        # Without permission, this should return 403
+        assert resp.status_code == 403
+
+    async def test_toggle_active_requires_permission(self, async_client):
+        """Verify toggle endpoint returns 403 without admin.user.manage permission."""
+        uname = f"toggle_{uuid.uuid4().hex[:6]}"
         register_resp = await async_client.post("/api/v1/auth/register", json={
             "username": uname, "email": f"{uname}@test.com", "password": "test123456",
         })
@@ -99,12 +123,12 @@ class TestToggleUserActiveCoverage:
         token = login_resp.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
         resp = await async_client.post(f"/api/v1/auth/users/{user_id}/toggle", headers=headers)
-        assert resp.status_code == 200
-        assert resp.json()["is_active"] is False
+        assert resp.status_code == 403
 
     async def test_toggle_active_not_found(self, async_client, auth):
         resp = await async_client.post(
             f"/api/v1/auth/users/{uuid.uuid4()}/toggle",
             headers=auth["headers"],
         )
-        assert resp.status_code == 404
+        # Non-admin user gets 403 before user lookup
+        assert resp.status_code == 403

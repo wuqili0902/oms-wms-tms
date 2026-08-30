@@ -347,22 +347,18 @@ async def create_transport_order(db: AsyncSession, data: dict) -> dict:
         driver_phone=data.get("driver_phone"),
         notes=data.get("notes"),
     )
+    # Create order + initial CREATED event atomically so a partial failure
+    # doesn't leave an order without its first tracking event.
     db.add(order)
+    evt = TrackingEvent(
+        id=uuid.uuid4(),
+        transport_order_id=order.id,
+        event_type=TrackingEventType.CREATED,
+        location_name=(data.get("pickup_address") or {}).get("city") or "Warehouse",
+    )
+    db.add(evt)
+
     await db.commit()
-
-    # Auto-create a CREATED tracking event for the new order
-    try:
-        evt = TrackingEvent(
-            id=uuid.uuid4(),
-            transport_order_id=order.id,
-            event_type=TrackingEventType.CREATED,
-            location_name=data.get("pickup_address", {}).get("city") or "Warehouse",
-        )
-        db.add(evt)
-        await db.commit()
-    except Exception:
-        logger.warning("Best-effort tracking event failed for transport order %s", order.id)
-
     await db.refresh(order)
     return model_to_dict(order)
 
@@ -456,7 +452,9 @@ async def change_transport_status(db: AsyncSession, order_id: str, new_status: s
     now = _now()
     order.updated_at = now
 
-    if target == TransportStatus.IN_TRANSIT and not order.actual_pickup_time:
+    # actual_pickup_time should be set on PICKUP_COMPLETED, not IN_TRANSIT.
+    # An order may go DRAFT → IN_TRANSIT directly (carrier pickup flow) without a pickup event.
+    if target == TransportStatus.PICKUP_COMPLETED and not order.actual_pickup_time:
         order.actual_pickup_time = now
     elif target == TransportStatus.DELIVERED:
         order.actual_delivery_time = now
@@ -891,7 +889,7 @@ async def find_best_route_plan(
                     pickup_city = (order.pickup_address or {}).get("city", "")
                     delivery_city = (order.delivery_address or {}).get("city", "")
                     weight_kg = str(order.total_weight_kg or "1")
-                    cache_key = f"route:{pickup_city}:{delivery_city}:{weight_kg}"
+                    cache_key = f"route:{transport_order_id}:{pickup_city}:{delivery_city}:{weight_kg}"
                     cached = await r.get(cache_key)
                     if cached:
                         return json.loads(cached)
@@ -905,7 +903,7 @@ async def find_best_route_plan(
 
         async with get_redis() as r:
             if r:
-                cache_key = f"route:{pickup_city}:{delivery_city}:{weight_kg}"
+                cache_key = f"route:{transport_order_id}:{pickup_city}:{delivery_city}:{weight_kg}"
                 await r.setex(cache_key, _ROUTE_CACHE_TTL, json.dumps(result))
     except Exception:
         logger.warning("Route plan cache write failed")
@@ -927,6 +925,7 @@ def _dijkstra(
     # cost = distance * price_per_km  (approximate if no exact carrier route)
     inf_val = Decimal("Infinity")
     best: dict[str, Decimal] = {}  # hub_code → best cost so far
+    path_by_hub: dict[str, _PriorityNode] = {}  # hub_code → node that set the current best
 
     # Starting nodes — find carrier routes from origin_city to first hub
     start_hubs = [origin]
@@ -935,15 +934,15 @@ def _dijkstra(
         # Estimate starting cost using generic ₽/km if no carrier route
         start_cost = Decimal("0")
         best[sh] = start_cost
-        heap.append(
-            _PriorityNode(
-                priority=start_cost,
-                hub_code=sh,
-                path=[sh],
-                total_distance=Decimal("0"),
-                total_hours=Decimal("0"),
-            )
+        start_node = _PriorityNode(
+            priority=start_cost,
+            hub_code=sh,
+            path=[sh],
+            total_distance=Decimal("0"),
+            total_hours=Decimal("0"),
         )
+        heap.append(start_node)
+        path_by_hub[sh] = start_node
 
     heapq.heapify(heap)
 
@@ -970,71 +969,37 @@ def _dijkstra(
             new_cost = node.priority + seg_cost
             if new_cost < best.get(next_hub, inf_val):
                 best[next_hub] = new_cost
-                heapq.heappush(
-                    heap,
-                    _PriorityNode(
-                        priority=new_cost,
-                        hub_code=next_hub,
-                        path=node.path + [next_hub],
-                        total_distance=node.total_distance + dist,
-                        total_hours=node.total_hours + hours,
-                    ),
+                pushed = _PriorityNode(
+                    priority=new_cost,
+                    hub_code=next_hub,
+                    path=node.path + [next_hub],
+                    total_distance=node.total_distance + dist,
+                    total_hours=node.total_hours + hours,
                 )
+                heapq.heappush(heap, pushed)
+                path_by_hub[next_hub] = pushed
 
     # Check if destination was reached
     if destination not in best:
         return None
 
-    # Find the node with destination
-    for item in heap:
-        if item.hub_code == destination:
-            return {
-                "path": item.path,
-                "total_distance": item.total_distance,
-                "total_hours": item.total_hours,
-                "total_cost": best[destination],
-                "seg_distances": [
-                    Decimal(str(graph[item.path[i]][j][1]))
-                    for i in range(len(item.path) - 1)
-                    for j, (nh, _, _) in enumerate(graph.get(item.path[i], []))
-                    if nh == item.path[i + 1]
-                ],
-                "seg_hours": [
-                    Decimal(str(graph[item.path[i]][j][2]))
-                    for i in range(len(item.path) - 1)
-                    for j, (nh, _, _) in enumerate(graph.get(item.path[i], []))
-                    if nh == item.path[i + 1]
-                ],
-            }
-
-    # Search result from visited path
-    # Reconstruct from best distances — not ideal, use fallback direct path
+    winner = path_by_hub[destination]
     return {
-        "path": [origin, destination],
-        "total_distance": sum(
-            dist
-            for _next, dist, _hours in graph.get(origin, [])
-            if _next == destination
-        ) or Decimal("0"),
-        "total_hours": sum(
-            hours
-            for _next, _dist, hours in graph.get(origin, [])
-            if _next == destination
-        ) or Decimal("0"),
-        "total_cost": best.get(destination, Decimal("0")),
+        "path": winner.path,
+        "total_distance": winner.total_distance,
+        "total_hours": winner.total_hours,
+        "total_cost": best[destination],
         "seg_distances": [
-            sum(
-                dist
-                for _next, dist, _hours in graph.get(origin, [])
-                if _next == destination
-            ) or Decimal("0"),
+            Decimal(str(graph[winner.path[i]][j][1]))
+            for i in range(len(winner.path) - 1)
+            for j, (nh, _, _) in enumerate(graph.get(winner.path[i], []))
+            if nh == winner.path[i + 1]
         ],
         "seg_hours": [
-            sum(
-                hours
-                for _next, _dist, hours in graph.get(origin, [])
-                if _next == destination
-            ) or Decimal("0"),
+            Decimal(str(graph[winner.path[i]][j][2]))
+            for i in range(len(winner.path) - 1)
+            for j, (nh, _, _) in enumerate(graph.get(winner.path[i], []))
+            if nh == winner.path[i + 1]
         ],
     }
 
@@ -1209,13 +1174,9 @@ async def create_pod(db: AsyncSession, data_or_transport_order_id: str | dict, d
             transport_order_id=_to_uuid(real_data["transport_order_id"]),
             signed_by=(data or {}).get("signed_by", "unknown"),
             signature_type=(data or {}).get("signature_type", "physical"),
-            signature_image_url=data_or_transport_order_id
-                if isinstance(data_or_transport_order_id, str)
-                else None,
+            signature_image_url=(data or {}).get("signature_image_url"),
             delivery_photo_urls=(data or {}).get("delivery_photo_urls") or [],
-            delivered_to_address=real_data.get("delivered_to_address")
-                if data is not None
-                else data_or_transport_order_id,
+            delivered_to_address=real_data.get("delivered_to_address"),
             notes=real_data.get("notes"),
         )
         db.add(pod)

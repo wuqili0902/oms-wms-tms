@@ -19,7 +19,7 @@ from src.auth.schemas import (
     UserResponse,
 )
 from src.core.database import get_db
-from src.core.dependencies import get_current_user
+from src.core.dependencies import get_current_user, require_permission
 from src.core.exceptions import NotFoundException, ValidationException
 from src.core.rate_limiter import rate_limit
 
@@ -46,6 +46,7 @@ async def login(request: Request, data: UserLogin, db: AsyncSession = Depends(ge
     return TokenResponse(**tokens)
 
 
+@rate_limit(requests=10, window=60)
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(request: RefreshRequest):
     tokens = await auth_service.refresh_tokens(request.refresh_token)
@@ -206,7 +207,7 @@ async def remove_permission_from_role(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/users/{user_id}/toggle")
+@router.post("/users/{user_id}/toggle", dependencies=[Depends(require_permission("admin.user.manage"))])
 async def toggle_user_active_state(
     user_id: str,
     db: AsyncSession = Depends(get_db),

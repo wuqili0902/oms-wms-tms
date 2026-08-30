@@ -48,25 +48,34 @@ async def _do_dispatch(db, event: WebhookEvent, payload: dict):
         "target_ids": [str(t.id) for t in matching],
     }
 
-    # Write delivery logs with PENDING status inside caller's transaction
+    # Deliver webhooks immediately (synchronous for backward compatibility).
+    # Collect per-delivery results first, then write logs — so each log reflects the
+    # actual outcome instead of being marked SUCCESS unconditionally.
+    payload_json = json.dumps(payload, ensure_ascii=False, default=str)
+
+    delivery_results: list[dict] = []
+    async with httpx.AsyncClient(timeout=15) as client:
+        for target in matching:
+            result = await _deliver(db, client, target, event, payload_json)
+            delivery_results.append(result)
+
+    # Write delivery logs reflecting the actual delivery outcome (committed in caller's transaction)
     delivery_logs: list[WebhookDeliveryLog] = []
-    for target in matching:
+    for target, result in zip(matching, delivery_results):
+        status = DeliveryStatus.SUCCESS if result["success"] else DeliveryStatus.FAILED
         log = WebhookDeliveryLog(
             target_id=target.id,
             event=event.value,
-            payload=json.dumps(payload, ensure_ascii=False, default=str),
-            status=DeliveryStatus.PENDING,
+            payload=payload_json,
+            status=status,
+            status_code=result["status_code"],
+            response_body=result["response_body"],
+            duration_ms=result["duration_ms"],
         )
         db.add(log)
         delivery_logs.append(log)
 
     await db.flush()
-
-    # Deliver webhooks immediately (synchronous for backward compatibility)
-    payload_json = json.dumps(payload, ensure_ascii=False, default=str)
-    async with httpx.AsyncClient(timeout=15) as client:
-        for target, log in zip(matching, delivery_logs):
-            await _deliver(db, client, target, event, payload_json, log)
 
     # Append outbox event for async Celery dispatch (committed in caller's transaction)
     try:
@@ -94,8 +103,8 @@ async def dispatch_event(event: WebhookEvent, payload: dict, db=None):
         await _do_dispatch(db, event, payload)
 
 
-async def _deliver(db, client, target: WebhookTarget, event: WebhookEvent, payload: str, log: WebhookDeliveryLog):
-    """Deliver a single webhook and update the existing delivery log."""
+async def _deliver(db, client, target: WebhookTarget, event: WebhookEvent, payload: str) -> dict:
+    """Deliver a single webhook. Returns the outcome captured in the delivery log."""
     headers = {"Content-Type": "application/json", "X-Webhook-Event": event.value}
     if target.secret:
         timestamp = str(int(time.time()))
@@ -108,17 +117,22 @@ async def _deliver(db, client, target: WebhookTarget, event: WebhookEvent, paylo
     try:
         resp = await client.post(target.url, content=payload, headers=headers)
         elapsed = int((time.monotonic() - start) * 1000)
-        log.status_code = resp.status_code
-        log.status = DeliveryStatus.SUCCESS if resp.is_success else DeliveryStatus.FAILED
-        log.response_body = resp.text[:1000]
-        log.duration_ms = elapsed
+        logger.info("Webhook %s -> %s delivered in %dms (status=%d)", event.value, target.url, elapsed, resp.status_code)
+        return {
+            "success": resp.is_success,
+            "status_code": resp.status_code,
+            "response_body": resp.text[:1000],
+            "duration_ms": elapsed,
+        }
     except Exception as e:
         elapsed = int((time.monotonic() - start) * 1000)
-        logger.warning("Webhook %s -> %s failed: %s", event.value, target.url, e)
-        log.status_code = None
-        log.status = DeliveryStatus.FAILED
-        log.response_body = str(e)[:1000]
-        log.duration_ms = elapsed
+        logger.warning("Webhook %s -> %s failed after %dms: %s", event.value, target.url, elapsed, e)
+        return {
+            "success": False,
+            "status_code": None,
+            "response_body": str(e)[:1000],
+            "duration_ms": elapsed,
+        }
 
 
 async def _deliver_async(

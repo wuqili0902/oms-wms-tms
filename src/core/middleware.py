@@ -203,14 +203,50 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 pass
         return "anonymous"
 
-    async def _extract_request_body(self, buffer: _BodyBuffer) -> Any | None:
+    _SENSITIVE_KEYS = frozenset({
+        "password", "passwd", "pwd", "token", "refresh_token", "access_token",
+        "secret", "api_key", "apikey", "authorization", "credit_card",
+        "card_number", "cvv", "ssn", "id_number",
+    })
+
+    def _redact(self, value: Any) -> Any:
+        """Recursively redact sensitive fields from a parsed JSON structure.
+
+        Any dict key whose lowercased name contains a sensitive substring is
+        replaced with ``***REDACTED***``; nested dicts/lists are walked so
+        secrets buried deeper than the top level are not serialized verbatim.
+        Non-sensitive scalars are stringified and truncated to bound log size.
+        """
+        if isinstance(value, dict):
+            return {
+                k: ("***REDACTED***" if any(s in str(k).lower() for s in self._SENSITIVE_KEYS) else self._redact(v))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [self._redact(item) for item in value]
+        return str(value)[:100]
+
+    async def _read_raw_body(self, buffer: _BodyBuffer) -> bytes:
+        """Return raw request body bytes from a _BodyBuffer or a Starlette Request."""
+        read_all = getattr(buffer, "read_all", None)
+        if callable(read_all):
+            return await read_all()
+        body_method = getattr(buffer, "body", None)
+        if callable(body_method):
+            return await body_method()
+        return getattr(buffer, "_body", b"")
+
+    async def _extract_request_body(self, buffer: _BodyBuffer, logger=None) -> Any | None:
         """Extract and serialize the request body for audit logging.
 
-        Calls ``read_all()`` on the buffer to populate it, then returns
-        a truncated summary.  The buffer can still replay to FastAPI afterward.
+        Reads the raw body (via ``read_all()`` on a _BodyBuffer or ``body()`` on
+        a Request), then returns a truncated summary (first 20 keys/items) with
+        sensitive fields redacted. Redaction recurses into nested structures so
+        secrets buried deeper than the top level are not serialized verbatim.
+        The buffer can still replay to FastAPI afterward.
         """
         try:
-            raw_body = await buffer.read_all()
+            raw_body = await self._read_raw_body(buffer)
 
             body_str = raw_body.decode("utf-8", errors="replace")
             try:
@@ -219,16 +255,22 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 return "unable to parse request body"
 
             if isinstance(body, dict):
-                return {
-                    k: str(v)[:100] for k, v in list(body.items())[:20]
-                }  # First 20 keys, values truncated to 100 chars
+                redacted = {}
+                for k, v in list(body.items())[:20]:  # First 20 keys bound log size
+                    if any(s in str(k).lower() for s in self._SENSITIVE_KEYS):
+                        redacted[k] = "***REDACTED***"
+                    else:
+                        redacted[k] = self._redact(v)  # recurse to catch nested secrets
+                return redacted
+
             elif isinstance(body, list):
-                return [str(item)[:100] for item in body[:20]]  # First 20 items
+                return [self._redact(item) for item in body[:20]]  # First 20 items
             else:
-                return str(body)[:500]  # Truncate large bodies
+                return str(body)[:500]  # Truncate large scalar bodies
 
         except (json.JSONDecodeError, RuntimeError) as e:
-            logger.warning("Audit log extract failed: %s", e)
+            target = logger if logger is not None else logging.getLogger(__name__)
+            target.warning("Audit log extract failed: %s", e)
             return "unable to parse request body"
 
 

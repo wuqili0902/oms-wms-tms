@@ -434,6 +434,7 @@ class ReturnStatus(StrEnum):
     RETURNED_TO_WAREHOUSE = "returned_to_warehouse"
     REFUNDED = "refunded"
     CLOSED = "closed"
+    CANCELLED = "cancelled"
 
 
 class ReturnShipmentStatus(StrEnum):

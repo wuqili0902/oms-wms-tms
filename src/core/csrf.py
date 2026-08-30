@@ -43,9 +43,9 @@ def _verify_extend_signature(request: Request) -> bool:
     """
     path = request.url.path
 
-    # Only check /api/v1/extend/* paths
+    # Only check /api/v1/extend/* paths; reject all other API methods
     if not path.startswith("/api/v1/extend"):
-        return True  # No signature required for non-extend routes in this middleware
+        return False  # Non-extend routes must have their own auth (e.g. JWT)
 
     actual_sig = request.headers.get("X-Extend-Signature", "")
     if not actual_sig:
@@ -68,7 +68,14 @@ def _verify_extend_signature(request: Request) -> bool:
         logger.warning("X-Extend-Timestamp expired on %s (ts=%s)", path, timestamp_str)
         return False
 
-    client_ip = request.client.host if request.client else "unknown"
+    # Prefer X-Real-Ip (set by reverse proxy) over XFF; fall back to direct client.
+    real_ip = request.headers.get("X-Real-Ip") or request.headers.get("x-real-ip")
+    if real_ip:
+        client_ip = real_ip.split(",")[0].strip()
+    elif request.client:
+        client_ip = request.client.host
+    else:
+        client_ip = "unknown"
     msg = f"{path}:{timestamp_str}:{client_ip}"
     expected_sig = hmac.new(
         settings.secret_key.encode(),

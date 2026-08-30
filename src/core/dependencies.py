@@ -7,6 +7,9 @@
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.core.database import get_db
 
 
 async def get_current_user(
@@ -108,23 +111,24 @@ async def _get_user_permissions(db, username):
 
 
 def require_permission(*required_perms: str):
-    """Dependency factory for RBAC permission checking."""
+    """Dependency factory for RBAC permission checking.
+
+    Raises 403 if the current user does not have all required permissions.
+    An empty list is rejected — at least one permission must be supplied.
+    """
 
     async def _check(
         current_user: dict = Depends(get_current_user),
-        db = None,
+        db: AsyncSession = Depends(get_db),
     ):
-        from src.core.database import get_db
-
         if not required_perms:
-            return current_user
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="At least one permission is required")
 
         username = current_user.get("sub", "")
         if not username:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User identity not found")
 
-        async with get_db() as db_session:
-            user_perms = await _get_user_permissions(db_session, username)
+        user_perms = await _get_user_permissions(db, username)
         for perm in required_perms:
             if perm not in user_perms:
                 raise HTTPException(

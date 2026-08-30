@@ -56,7 +56,7 @@ def parse_order_create(payload: dict) -> ERPMessage:
         payload={
             "source": "shopify",
             "shopify_order_id": str(payload.get("id", "")),
-            "order_number": int(payload.get("order_number", 0) or 0),
+            "order_number": str(payload.get("order_number", "")),
             "customer_email": str(payload.get("email", "") or ""),
             "customer_name": "",
             "shipping_address": payload.get("shipping_address") or {},
@@ -84,10 +84,10 @@ def parse_fulfillment(payload: dict) -> ERPMessage:
         created_at=datetime.now(UTC),
         payload={
             "source": "shopify",
-            "shopify_order_id": str(payload.get("id", "")),
+            "shopify_order_id": str(payload.get("id") or ""),
             "fulfillment_status": "fulfilled",
-            "tracking_company": str(first.get("tracking_company") or ""),
-            "tracking_number": str(first.get("tracking_number") or ""),
+            "tracking_company": first.get("tracking_company") or "",
+            "tracking_number": first.get("tracking_number") or "",
             "fulfilled_at": str(first.get("created_at") or ""),
         },
     )
