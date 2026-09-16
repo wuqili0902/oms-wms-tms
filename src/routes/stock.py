@@ -8,6 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
+from src.core.dependencies import get_current_user
 from src.core.exceptions import NotFoundException
 from src.models.base import model_to_dict
 from src.models.wms import (
@@ -18,7 +19,7 @@ from src.models.wms import (
     StockOutLine,
 )
 
-router = APIRouter(tags=["Stock In/Out"])
+router = APIRouter(tags=["Stock In/Out"], dependencies=[Depends(get_current_user)])
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -41,7 +42,19 @@ async def _get_stock_out(db: AsyncSession, id: str) -> StockOut:
 # ── Stock In CRUD ───────────────────────────────────────────────────
 
 
-@router.post("/stock-in")
+def _extract_qty(line_data: dict) -> Decimal:
+    """Extract quantity from a line dict, accepting 'qty', 'quantity', 'qty_received', or 'qty_shipped'."""
+    for key in ("qty", "quantity", "qty_received", "qty_shipped"):
+        # 显式存在性检查:合法的 0 值视为有效,不把 falsy 的 0 当成缺失字段
+        if key in line_data and line_data[key] is not None:
+            return Decimal(str(line_data[key]))
+    raise HTTPException(
+        status_code=422,
+        detail="Each line must have 'qty', 'quantity', 'qty_received', or 'qty_shipped'",
+    )
+
+
+@router.post("/stock-in", status_code=201)
 async def create_stock_in(req: dict, session: Annotated[AsyncSession, Depends(get_db)]):
     """Create a Stock In record with line items."""
     data = req.get("data", {})
@@ -70,12 +83,12 @@ async def create_stock_in(req: dict, session: Annotated[AsyncSession, Depends(ge
         ref_no=data.get("ref_no"),
         reference_type=data.get("reference_type"),
         supplier_id=_uuid.UUID(data["supplier_id"]) if data.get("supplier_id") else None,
-        total_qty=(sum((Decimal(str(ln.get("qty"))) for ln in lines), Decimal(0))).quantize(Decimal("0.0001")),
+        total_qty=(sum((_extract_qty(ln) for ln in lines), Decimal(0))).quantize(Decimal("0.0001")),
     )
     session.add(obj)
 
     for line_data in lines:
-        qty = Decimal(str(line_data["qty"]))
+        qty = _extract_qty(line_data)
         obj.lines.append(StockInLine(
             stock_in_id=obj.id,
             sku=line_data.get("sku"),
@@ -137,7 +150,7 @@ async def update_stock_in(id: str, req: dict, session: Annotated[AsyncSession, D
 # ── Stock Out CRUD ───────────────────────────────────────────────────
 
 
-@router.post("/stock-out")
+@router.post("/stock-out", status_code=201)
 async def create_stock_out(req: dict, session: Annotated[AsyncSession, Depends(get_db)]):
     """Create a Stock Out record with line items."""
     data = req.get("data", {})
@@ -157,12 +170,12 @@ async def create_stock_out(req: dict, session: Annotated[AsyncSession, Depends(g
         type=data.get("type", "SALE"),
         ref_no=data.get("ref_no"),
         reference_type=data.get("reference_type"),
-        total_qty=(sum((Decimal(str(ln.get("qty"))) for ln in lines), Decimal(0))).quantize(Decimal("0.0001")),
+        total_qty=(sum((_extract_qty(ln) for ln in lines), Decimal(0))).quantize(Decimal("0.0001")),
     )
     session.add(obj)
 
     for line_data in lines:
-        qty = Decimal(str(line_data["qty"]))
+        qty = _extract_qty(line_data)
         obj.lines.append(StockOutLine(
             stock_out_id=obj.id,
             sku=line_data.get("sku"),
