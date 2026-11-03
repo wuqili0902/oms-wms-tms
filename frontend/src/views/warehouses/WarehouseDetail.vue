@@ -132,6 +132,7 @@ import { useRoute } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const route = useRoute()
 const wh = ref<any>(null)
@@ -159,7 +160,7 @@ async function submitEdit() {
     showEdit.value = false
     const res = await apiClient.get(`/warehouses/${route.params.id}`)
     wh.value = res.data?.data ?? res.data
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '保存失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '保存失败')) }
   editLoading.value = false
 }
 
@@ -182,7 +183,7 @@ async function submitCreateLoc() {
     ElMessage.success('创建成功')
     showCreateLoc.value = false
     fetchLocations()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '创建失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '创建失败')) }
   locCreating.value = false
 }
 
@@ -202,7 +203,7 @@ async function submitEditLoc() {
     ElMessage.success('保存成功')
     showEditLoc.value = false
     fetchLocations()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '保存失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '保存失败')) }
   locUpdating.value = false
 }
 
@@ -213,7 +214,7 @@ async function deleteLoc(row: any) {
     ElMessage.success('删除成功')
     fetchLocations()
   } catch (e: any) {
-    if (!e?.response && e !== true) ElMessage.error(e?.response?.data?.detail ?? '删除失败')
+    if (!e?.response && e !== true) ElMessage.error(errText(e, '删除失败'))
   }
 }
 

@@ -38,10 +38,13 @@
         </el-form-item>
         <el-form-item label="类型">
           <el-select v-model="form.type" style="width:100%">
+            <!-- The values are StockInType (src/models/wms_enum.py): the server
+                 stores this string verbatim, and TRANSFER / MANUAL — the values
+                 offered here before — name no document type in the system. -->
             <el-option label="采购入库" value="PURCHASE" />
             <el-option label="退货入库" value="RETURN" />
-            <el-option label="调拨入库" value="TRANSFER" />
-            <el-option label="手动入库" value="MANUAL" />
+            <el-option label="调拨入库" value="TRANSFER_IN" />
+            <el-option label="调整入库" value="ADJUSTMENT" />
           </el-select>
         </el-form-item>
         <el-form-item label="参考号">
@@ -84,6 +87,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import apiClient from '../../api'
 import { usePagination } from '../../composables/usePagination'
+import { errText } from '../../api/errors'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -103,7 +107,7 @@ const form = reactive({
 
 function resetForm() {
   form.warehouse_id = ''
-  form.type = 'MANUAL'
+  form.type = 'PURCHASE'
   form.ref_no = ''
   form.lines = []
 }
@@ -117,7 +121,7 @@ async function fetchRecords() {
     if (!Array.isArray(d) && d.total) total.value = d.total
     else total.value = records.value.length
   } catch (e: any) {
-    ElMessage.error('获取入库记录失败: ' + (e?.response?.data?.detail ?? e.message))
+    ElMessage.error('获取入库记录失败: ' + (errText(e)))
     records.value = []
   } finally { loading.value = false }
 }
@@ -127,7 +131,7 @@ async function fetchWarehouses() {
     const res = await apiClient.get('/warehouses')
     const d = res.data?.data ?? res.data
     warehouses.value = Array.isArray(d) ? d : d?.items ?? []
-  } catch (e: any) { ElMessage.error('获取仓库列表失败: ' + (e?.response?.data?.detail ?? e.message)) }
+  } catch (e: any) { ElMessage.error('获取仓库列表失败: ' + (errText(e))) }
 }
 
 async function submit() {
@@ -142,7 +146,7 @@ async function submit() {
     showCreate.value = false
     fetchRecords()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '创建失败')
+    ElMessage.error(errText(e, '创建失败'))
   } finally { saving.value = false }
 }
 
@@ -152,7 +156,7 @@ async function showDetail(row: any) {
     detail.value = res.data?.data ?? res.data
     showDetailDialog.value = true
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '获取详情失败')
+    ElMessage.error(errText(e, '获取详情失败'))
   }
 }
 

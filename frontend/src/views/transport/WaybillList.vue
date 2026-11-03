@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 interface Waybill {
   id: string
@@ -64,7 +65,7 @@ async function fetchList() {
     list.value = d.items ?? []
     total.value = d.total ?? 0
   } catch (e: any) {
-    ElMessage.error('查询面单失败: ' + (e?.response?.data?.detail ?? e.message))
+    ElMessage.error('查询面单失败: ' + (errText(e)))
   } finally {
     loading.value = false
   }

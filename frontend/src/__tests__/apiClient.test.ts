@@ -89,6 +89,52 @@ describe('api client', () => {
     apiClient.defaults.adapter = adapter
   })
 
+  it('surfaces the documented error envelope, and hands it to the view', async () => {
+    const adapter = apiClient.defaults.adapter
+    apiClient.defaults.adapter = (async () => Promise.reject({
+      message: 'Request failed with status code 422',
+      config: { url: '/return-orders' },
+      response: {
+        status: 422,
+        data: { success: false, error: { code: 'VALIDATION_ERROR', message: "reason must be one of: damaged, wrong_item" } },
+      },
+    })) as any
+    const err = await apiClient.get('/return-orders').catch((e) => e)
+    expect(mocks.error).toHaveBeenCalledWith("reason must be one of: damaged, wrong_item")
+    expect(err.userMessage).toBe("reason must be one of: damaged, wrong_item")
+    apiClient.defaults.adapter = adapter
+  })
+
+  it('prefers the envelope over the legacy detail when a response carries both', async () => {
+    const adapter = apiClient.defaults.adapter
+    apiClient.defaults.adapter = (async () => Promise.reject({
+      message: 'Request failed with status code 409',
+      config: { url: '/stock/adjust' },
+      response: {
+        status: 409,
+        data: { detail: 'Conflict', error: { code: 'CONFLICT', message: '库存已被并发修改，请重新读取后重试' } },
+      },
+    })) as any
+    await apiClient.post('/stock/adjust', {}).catch(() => undefined)
+    expect(mocks.error).toHaveBeenCalledWith('库存已被并发修改，请重新读取后重试')
+    apiClient.defaults.adapter = adapter
+  })
+
+  it('shows a message containing angle brackets exactly as the server wrote it', async () => {
+    // Element Plus renders ElMessage's text, not HTML, so escaping here would put
+    // "&lt;" in front of the operator.  The server quotes values as Python reprs.
+    const adapter = apiClient.defaults.adapter
+    apiClient.defaults.adapter = (async () => Promise.reject({
+      message: 'Request failed with status code 422',
+      config: { url: '/devices' },
+      response: { status: 422, data: { success: false, error: { code: 'VALIDATION_ERROR', message: "device_code must be one of: pda, phone, got 'PDA<1'" } } },
+    })) as any
+    const err = await apiClient.post('/devices', {}).catch((e) => e)
+    expect(mocks.error).toHaveBeenCalledWith("device_code must be one of: pda, phone, got 'PDA<1'")
+    expect(err.userMessage).toContain("got 'PDA<1'")
+    apiClient.defaults.adapter = adapter
+  })
+
   it('does not redirect for 401 on /auth/login', async () => {
     const adapter = apiClient.defaults.adapter
     apiClient.defaults.adapter = (async () => Promise.reject({

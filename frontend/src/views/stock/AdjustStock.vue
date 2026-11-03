@@ -18,7 +18,9 @@
           </template>
         </el-table-column>
         <el-table-column prop="reason" label="原因" min-width="160" />
-        <el-table-column prop="operator" label="操作人" width="100" />
+        <!-- The audit row names its operator as operator_id (a users.id); there is
+             no "operator" field, so this column was blank on every row. -->
+        <el-table-column prop="operator_id" label="操作人" width="220" />
         <el-table-column prop="created_at" label="时间" width="175" />
       </el-table>
       <div style="display:flex;justify-content:flex-end;margin-top:12px">
@@ -41,7 +43,17 @@
           <div style="color:#999;font-size:12px">正数=盘盈，负数=盘亏</div>
         </el-form-item>
         <el-form-item label="原因">
-          <el-input v-model.trim="form.reason" placeholder="盘点差异/损耗/报废" />
+          <!-- A free-text box wrote anything into a String(32) column that the
+               server documents as AdjustReason; a value over 32 characters used to
+               fail at COMMIT, and a 盘亏 reason typed in prose matched no query.
+               The options are the server vocabulary (src/models/wms_enum.py). -->
+          <el-select v-model="form.reason" clearable placeholder="选择差异原因" style="width:100%">
+            <el-option label="破损" value="DAMAGE" />
+            <el-option label="过期" value="EXPIRED" />
+            <el-option label="丢失" value="LOST" />
+            <el-option label="盘盈找货" value="FOUND" />
+            <el-option label="盘点错误" value="COUNT_ERROR" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -57,6 +69,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import apiClient from '../../api'
 import { usePagination } from '../../composables/usePagination'
+import { errText } from '../../api/errors'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -88,7 +101,7 @@ async function fetchLogs() {
     if (!Array.isArray(d) && d.total) total.value = d.total
     else total.value = logs.value.length
   } catch (e: any) {
-    ElMessage.error('获取调整记录失败: ' + (e?.response?.data?.detail ?? e.message))
+    ElMessage.error('获取调整记录失败: ' + (errText(e)))
     logs.value = []
   } finally { loading.value = false }
 }
@@ -98,7 +111,7 @@ async function fetchWarehouses() {
     const res = await apiClient.get('/warehouses')
     const d = res.data?.data ?? res.data
     warehouses.value = Array.isArray(d) ? d : d?.items ?? []
-  } catch (e: any) { ElMessage.error('获取仓库列表失败: ' + (e?.response?.data?.detail ?? e.message)) }
+  } catch (e: any) { ElMessage.error('获取仓库列表失败: ' + (errText(e))) }
 }
 
 async function submit() {
@@ -108,12 +121,17 @@ async function submit() {
   }
   saving.value = true
   try {
-    await apiClient.post('/adjust-stock', { data: { sku_id: form.sku_id, warehouse_id: form.warehouse_id, quantity: form.quantity, reason: form.reason } })
+    // reason is an AdjustReason value or absent; "" is not a value the server accepts.
+    await apiClient.post('/adjust-stock', { data: {
+      sku_id: form.sku_id, warehouse_id: form.warehouse_id, quantity: form.quantity,
+      reason: form.reason || undefined,
+    } })
     ElMessage.success('调整已提交')
     showAdjust.value = false
     fetchLogs()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '调整失败')
+    // Every error this API answers is {success:false, error:{code,message}}.
+    ElMessage.error(errText(e, '调整失败'))
   } finally { saving.value = false }
 }
 

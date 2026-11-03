@@ -61,6 +61,7 @@ import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { usePagination } from '../../composables/usePagination'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const loading = ref(false)
 const notifications = ref<any[]>([])
@@ -112,7 +113,7 @@ async function markRead(row: any) {
   try {
     await apiClient.post(`/notifications/${row.id}/read`)
     row.is_read = true
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '标记已读失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '标记已读失败')) }
 }
 
 async function markAllRead() {
@@ -120,7 +121,7 @@ async function markAllRead() {
     await apiClient.post('/notifications/read-all')
     ElMessage.success('已全部标为已读')
     notifications.value.forEach(n => (n.is_read = true))
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '标记全部已读失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '标记全部已读失败')) }
 }
 
 async function fetchPreferences() {
@@ -139,7 +140,7 @@ async function submitPreferences() {
     await apiClient.put('/notifications/preferences', prefForm)
     ElMessage.success('偏好设置已保存')
     showPreferences.value = false
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '保存失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '保存失败')) }
   prefLoading.value = false
 }
 

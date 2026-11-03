@@ -265,6 +265,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import apiClient from '../../api'
 import type { FormInstance, FormRules } from 'element-plus'
+import { errText } from '../../api/errors'
 
 const router = useRouter()
 const activeTab = ref('list')
@@ -323,7 +324,7 @@ async function fetchWarehouses() {
     const body = res.data?.data ?? res.data ?? {}
     warehouses.value = body.items ?? body ?? []
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     warehouses.value = []
   }
   loading.value = false
@@ -339,7 +340,7 @@ async function fetchInventory() {
     const body = res.data?.data ?? res.data ?? []
     inventory.value = Array.isArray(body) ? body : []
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     inventory.value = []
   }
   invLoading.value = false
@@ -358,7 +359,7 @@ async function showLocations(row: any) {
     const body = res.data?.data ?? res.data ?? {}
     locations.value = body.items ?? body ?? []
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     locations.value = []
   }
   locLoading.value = false
@@ -374,7 +375,7 @@ async function submitCreate() {
     showCreate.value = false
     fetchWarehouses()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
   creating.value = false
 }
@@ -387,7 +388,7 @@ async function submitLocation() {
     showAddLocation.value = false
     showLocations(currentWarehouse.value!)
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
   locCreating.value = false
 }
@@ -418,7 +419,7 @@ async function submitAdjust() {
     showAdjust.value = false
     fetchInventory()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
   adjusting.value = false
 }
@@ -432,7 +433,7 @@ async function fetchMovements() {
     const body = res.data?.data ?? res.data ?? []
     movements.value = Array.isArray(body) ? body : []
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     movements.value = []
   }
   movLoading.value = false
@@ -445,7 +446,7 @@ async function fetchWaves() {
     const body = res.data?.data ?? res.data ?? []
     waves.value = Array.isArray(body) ? body : (body.items ?? [])
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     waves.value = []
   }
   waveLoading.value = false
@@ -463,7 +464,7 @@ async function submitWave() {
     showCreateWave.value = false
     fetchWaves()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
   waveCreating.value = false
 }
@@ -474,7 +475,7 @@ async function startWave(row: any) {
     ElMessage.success('波次已开始')
     fetchWaves()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
 }
 
@@ -484,7 +485,7 @@ async function completeWave(row: any) {
     ElMessage.success('波次已完成')
     fetchWaves()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
 }
 

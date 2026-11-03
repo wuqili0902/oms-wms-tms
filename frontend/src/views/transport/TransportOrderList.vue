@@ -185,6 +185,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import apiClient from '../../api'
 import { useExport } from '../../composables/useExport'
+import { errText } from '../../api/errors'
 
 const { downloadCSV } = useExport()
 const router = useRouter()
@@ -241,7 +242,7 @@ async function fetchOrders() {
     const body = res.data?.data ?? res.data ?? {}
     orders.value = body.items ?? []
     total.value = body.total ?? 0
-  } catch (e: any) { orders.value = []; total.value = 0; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { orders.value = []; total.value = 0; ElMessage.error(errText(e)) }
   loading.value = false
 }
 
@@ -256,7 +257,7 @@ async function viewTracking(row: any) {
     const res = await apiClient.get(`/transport-orders/${row.id}/tracking`)
     const body = res.data?.data ?? res.data ?? []
     trackingEvents.value = Array.isArray(body) ? body : []
-  } catch (e: any) { trackingEvents.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { trackingEvents.value = []; ElMessage.error(errText(e)) }
 }
 
 async function viewRoute(row: any) {
@@ -314,7 +315,7 @@ async function submitCreate() {
     showCreate.value = false
     fetchOrders()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '运单创建失败')
+    ElMessage.error(errText(e, '运单创建失败'))
   }
   creating.value = false
 }

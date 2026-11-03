@@ -13,11 +13,15 @@
             <template #empty><el-empty description="暂无数据" /></template>
             <el-table-column prop="code" label="编码" width="100" />
             <el-table-column prop="name" label="名称" width="180" />
-            <el-table-column prop="type" label="类型" width="120" />
+            <el-table-column prop="type" label="类型" width="120">
+              <template #default="{ row }">{{ hubTypeLabel(row.type) }}</template>
+            </el-table-column>
             <el-table-column prop="city" label="城市" width="120" />
-            <el-table-column label="状态" width="80">
+            <el-table-column prop="capacity_weight_kg" label="容量(kg)" width="100" />
+            <el-table-column prop="contact_name" label="联系人" width="100" />
+            <el-table-column label="状态" width="90">
               <template #default="{ row }">
-                <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small">{{ row.status }}</el-tag>
+                <el-tag :type="row.status === 'open' ? 'success' : 'info'" size="small">{{ hubStatusLabel(row.status) }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column prop="created_at" label="创建时间" width="175" />
@@ -78,10 +82,15 @@
         <el-form-item label="名称"><el-input v-model="hubForm.name" /></el-form-item>
         <el-form-item label="类型">
           <el-select v-model="hubForm.type" style="width:100%">
-            <el-option label="主站" value="primary" /><el-option label="副站" value="secondary" /><el-option label="货运站" value="cargo_station" />
+            <el-option v-for="t in HUB_TYPES" :key="t.value" :label="t.label" :value="t.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="城市"><el-input v-model="hubForm.city" /></el-form-item>
+        <el-form-item label="容量(kg)">
+          <el-input-number v-model="hubForm.capacity_weight_kg" :min="0" :precision="2" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="联系人"><el-input v-model="hubForm.contact_name" /></el-form-item>
+        <el-form-item label="联系电话"><el-input v-model="hubForm.contact_phone" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showCreateHub = false">取消</el-button>
@@ -95,10 +104,20 @@
         <el-form-item label="名称"><el-input v-model="hubEditForm.name" /></el-form-item>
         <el-form-item label="类型">
           <el-select v-model="hubEditForm.type" style="width:100%">
-            <el-option label="主站" value="primary" /><el-option label="副站" value="secondary" /><el-option label="货运站" value="cargo_station" />
+            <el-option v-for="t in HUB_TYPES" :key="t.value" :label="t.label" :value="t.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="城市"><el-input v-model="hubEditForm.city" /></el-form-item>
+        <el-form-item label="容量(kg)">
+          <el-input-number v-model="hubEditForm.capacity_weight_kg" :min="0" :precision="2" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="联系人"><el-input v-model="hubEditForm.contact_name" /></el-form-item>
+        <el-form-item label="联系电话"><el-input v-model="hubEditForm.contact_phone" /></el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="hubEditForm.status" style="width:100%">
+            <el-option v-for="s in HUB_STATUSES" :key="s.value" :label="s.label" :value="s.value" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showEditHub = false">取消</el-button>
@@ -145,6 +164,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const activeTab = ref('hubs')
 const hubLoading = ref(false); const hubCreating = ref(false)
@@ -152,52 +172,70 @@ const routeLoading = ref(false); const routeCreating = ref(false)
 const connLoading = ref(false); const connCreating = ref(false)
 const hubs = ref<any[]>([]); const carrierRoutes = ref<any[]>([]); const connections = ref<any[]>([])
 const showCreateHub = ref(false); const showCreateRoute = ref(false); const showCreateConn = ref(false)
-const showEditHub = ref(false); const editHubId = ref<number|null>(null)
-const hubForm = reactive({ code: '', name: '', type: 'primary', city: '' })
-const hubEditForm = reactive({ code: '', name: '', type: 'primary', city: '' })
+const showEditHub = ref(false); const editHubId = ref<string|null>(null)
+// The hub's type and status are the API's vocabulary (TransferHubType,
+// HubStatus): the selects below offer those values and nothing else, so a
+// 422 naming the vocabulary the server accepts is not reachable from here.
+const HUB_TYPES = [
+  { value: 'primary', label: '主站' },
+  { value: 'secondary', label: '副站' },
+  { value: 'cargo_station', label: '货运站' },
+]
+const HUB_STATUSES = [
+  { value: 'open', label: '开放' },
+  { value: 'maintenance', label: '维护中' },
+  { value: 'closed', label: '停用' },
+]
+const hubTypeLabel = (v: string) => HUB_TYPES.find(t => t.value === v)?.label ?? v
+const hubStatusLabel = (v: string) => HUB_STATUSES.find(s => s.value === v)?.label ?? v
+const hubForm = reactive({ code: '', name: '', type: 'primary', city: '', capacity_weight_kg: 0, contact_name: '', contact_phone: '' })
+const hubEditForm = reactive({ code: '', name: '', type: 'primary', city: '', capacity_weight_kg: 0, contact_name: '', contact_phone: '', status: 'open' })
 const hubUpdating = ref(false)
 const routeForm = reactive({ carrier_code: 'sf_express', origin_city: '', dest_city: '', distance_km: 100, transit_hours: 24, base_price_per_kg: 10 })
 const connForm = reactive({ from_hub_code: '', to_hub_code: '', distance_km: 100, transit_hours: 6 })
 
 async function fetchHubs() {
   hubLoading.value = true
-  try { const res = await apiClient.get('/transfer-hubs'); const d = res.data?.data ?? res.data ?? []; hubs.value = Array.isArray(d) ? d : (d.items ?? []) } catch (e: any) { hubs.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  try { const res = await apiClient.get('/transfer-hubs'); const d = res.data?.data ?? res.data ?? []; hubs.value = Array.isArray(d) ? d : (d.items ?? []) } catch (e: any) { hubs.value = []; ElMessage.error(errText(e, '枢纽列表加载失败')) }
   hubLoading.value = false
 }
 async function fetchRoutes() {
   routeLoading.value = true
-  try { const res = await apiClient.get('/carrier-routes'); const d = res.data?.data ?? res.data ?? []; carrierRoutes.value = Array.isArray(d) ? d : (d.items ?? []) } catch (e: any) { carrierRoutes.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  try { const res = await apiClient.get('/carrier-routes'); const d = res.data?.data ?? res.data ?? []; carrierRoutes.value = Array.isArray(d) ? d : (d.items ?? []) } catch (e: any) { carrierRoutes.value = []; ElMessage.error(errText(e, '路由列表加载失败')) }
   routeLoading.value = false
 }
 async function fetchConns() {
   connLoading.value = true
-  try { const res = await apiClient.get('/hub-connections'); const d = res.data?.data ?? res.data ?? []; connections.value = Array.isArray(d) ? d : (d.items ?? []) } catch (e: any) { connections.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  try { const res = await apiClient.get('/hub-connections'); const d = res.data?.data ?? res.data ?? []; connections.value = Array.isArray(d) ? d : (d.items ?? []) } catch (e: any) { connections.value = []; ElMessage.error(errText(e, '连接列表加载失败')) }
   connLoading.value = false
 }
 async function submitHub() {
   hubCreating.value = true
-  try { await apiClient.post('/transfer-hubs', hubForm); ElMessage.success('创建成功'); showCreateHub.value = false; fetchHubs() } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '枢纽创建失败') }
+  try { await apiClient.post('/transfer-hubs', hubForm); ElMessage.success('创建成功'); showCreateHub.value = false; fetchHubs() } catch (e: any) { ElMessage.error(errText(e, '枢纽创建失败')) }
   hubCreating.value = false
 }
 async function editHub(row: any) {
-  editHubId.value = row.id
+  editHubId.value = String(row.id)
   hubEditForm.code = row.code || ''; hubEditForm.name = row.name || ''
   hubEditForm.type = row.type || 'primary'; hubEditForm.city = row.city || ''
+  hubEditForm.capacity_weight_kg = Number(row.capacity_weight_kg ?? 0) || 0
+  hubEditForm.contact_name = row.contact_name || ''; hubEditForm.contact_phone = row.contact_phone || ''
+  hubEditForm.status = row.status || 'open'
   showEditHub.value = true
 }
 async function submitEditHub() {
   hubUpdating.value = true
-  try { await apiClient.patch(`/transfer-hubs/${editHubId.value}`, hubEditForm); ElMessage.success('已更新'); showEditHub.value = false; fetchHubs() } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '枢纽更新失败') }
+  try { await apiClient.patch(`/transfer-hubs/${editHubId.value}`, hubEditForm); ElMessage.success('已更新'); showEditHub.value = false; fetchHubs() } catch (e: any) { ElMessage.error(errText(e, '枢纽更新失败')) }
   hubUpdating.value = false
 }
 async function submitRoute() {
   routeCreating.value = true
-  try { await apiClient.post('/carrier-routes', routeForm); ElMessage.success('创建成功'); showCreateRoute.value = false; fetchRoutes() } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '线路创建失败') }
+  try { await apiClient.post('/carrier-routes', routeForm); ElMessage.success('创建成功'); showCreateRoute.value = false; fetchRoutes() } catch (e: any) { ElMessage.error(errText(e, '线路创建失败')) }
   routeCreating.value = false
 }
 async function submitConn() {
   connCreating.value = true
-  try { await apiClient.post('/hub-connections', connForm); ElMessage.success('创建成功'); showCreateConn.value = false; fetchConns() } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '连接创建失败') }
+  try { await apiClient.post('/hub-connections', connForm); ElMessage.success('创建成功'); showCreateConn.value = false; fetchConns() } catch (e: any) { ElMessage.error(errText(e, '连接创建失败')) }
   connCreating.value = false
 }
 onMounted(() => { fetchHubs(); fetchRoutes(); fetchConns() })

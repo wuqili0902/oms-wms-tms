@@ -16,7 +16,7 @@
         <el-table-column prop="transport_order_no" label="运单号" width="160" />
         <el-table-column label="类型" width="140">
           <template #default="{ row }">
-            <el-tag :type="row.exception_type === 'delayed' ? 'warning' : 'danger'" size="small">{{ row.exception_type }}</el-tag>
+            <el-tag :type="row.type === 'delayed' ? 'warning' : 'danger'" size="small">{{ row.type }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="description" label="描述" min-width="200" />
@@ -43,14 +43,15 @@
         <el-descriptions :column="2" border>
           <el-descriptions-item label="运单号">{{ detail.transport_order_no || '—' }}</el-descriptions-item>
           <el-descriptions-item label="类型">
-            <el-tag :type="detail.exception_type === 'delayed' ? 'warning' : 'danger'" size="small">{{ detail.exception_type }}</el-tag>
+            <el-tag :type="detail.type === 'delayed' ? 'warning' : 'danger'" size="small">{{ detail.type }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="detail.status === 'resolved' ? 'success' : 'danger'" size="small">{{ detail.status }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ detail.created_at }}</el-descriptions-item>
           <el-descriptions-item label="描述" :span="2">{{ detail.description || '无' }}</el-descriptions-item>
-          <el-descriptions-item v-if="detail.resolved_at" label="处理时间">{{ detail.resolved_at }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.status === 'resolved'" label="处理时间">{{ detail.updated_at }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.resolution_notes" label="处理备注" :span="2">{{ detail.resolution_notes }}</el-descriptions-item>
         </el-descriptions>
       </template>
     </el-dialog>
@@ -124,7 +125,7 @@ async function fetchExceptions() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     exceptions.value = items
-  } catch (e: any) { exceptions.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { exceptions.value = []; ElMessage.error(e?.userMessage ?? e.message) }
   loading.value = false
 }
 
@@ -139,7 +140,7 @@ async function submitCreate() {
     showCreate.value = false
     fetchExceptions()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '异常报告失败')
+    ElMessage.error(e?.userMessage ?? '异常报告失败')
   }
   creating.value = false
 }
@@ -166,10 +167,12 @@ async function submitResolve() {
 async function viewDetail(row: any) {
   detail.value = null; showDetail.value = true
   try {
-    const res = await apiClient.get(`/exceptions?exception_id=${row.id}`)
-    const items = res.data?.data ?? res.data ?? []
-    detail.value = (Array.isArray(items) ? items : (items.items ?? [])).find((e: any) => e.id === row.id) || { ...row }
-  } catch (e: any) { detail.value = { ...row }; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+    // The API answers one exception by id.  This used to query the list with an
+    // ``exception_id`` parameter the route ignores, and that list defaults to
+    // status="open" — a resolved exception's 详情 showed none of its resolution.
+    const res = await apiClient.get(`/exceptions/${row.id}`)
+    detail.value = res.data?.data ?? res.data
+  } catch (e: any) { detail.value = { ...row }; ElMessage.error(e?.userMessage ?? e.message) }
 }
 
 onMounted(fetchExceptions)

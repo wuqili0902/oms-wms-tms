@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const props = defineProps<{ params: { tracking: string } }>()
 const router = useRouter()
@@ -18,7 +19,7 @@ async function fetchWaybill() {
     const res = await apiClient.get(`/logistics/waybill/${tracking.value}`)
     waybill.value = res.data?.data ?? res.data
   } catch (e: any) {
-    ElMessage.error('查询面单失败: ' + (e?.response?.data?.detail ?? e.message))
+    ElMessage.error('查询面单失败: ' + (errText(e)))
   } finally {
     loading.value = false
   }
@@ -35,7 +36,7 @@ async function handlePrint() {
     ElMessage.success('已提交打印')
     setTimeout(() => window.print(), 500)
   } catch (e: any) {
-    ElMessage.error('打印失败: ' + (e?.response?.data?.detail ?? e.message))
+    ElMessage.error('打印失败: ' + (errText(e)))
   } finally {
     printing.value = false
   }

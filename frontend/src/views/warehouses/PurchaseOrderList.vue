@@ -100,6 +100,7 @@ import { ElMessage } from 'element-plus'
 import { Delete } from '@element-plus/icons-vue'
 import { usePagination } from '../../composables/usePagination'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const loading = ref(false)
 const creating = ref(false)
@@ -127,7 +128,7 @@ async function fetchPOs() {
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     purchaseOrders.value = items
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     purchaseOrders.value = []
   }
   loading.value = false
@@ -139,7 +140,7 @@ async function viewDetail(row: any) {
     const res = await apiClient.get(`/warehouses/purchase-orders/${row.id}`)
     detail.value = res.data?.data ?? res.data
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     detail.value = { ...row }
   }
 }
@@ -156,7 +157,7 @@ async function submitCreate() {
     showCreate.value = false
     fetchPOs()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '采购单创建失败')
+    ElMessage.error(errText(e, '采购单创建失败'))
   }
   creating.value = false
 }

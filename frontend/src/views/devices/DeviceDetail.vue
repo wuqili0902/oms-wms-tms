@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import StatusTag from '@/components/StatusTag.vue'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const props = defineProps<{ params: { dev_id: string } }>()
 
@@ -45,7 +46,7 @@ async function fetchSessions(): Promise<void> {
 async function fetchSyncLogs(): Promise<void> {
   try {
     syncLogs.value = await apiClient.get(`/devices/${props.params.dev_id}/sync`) as any[]
-  } catch (e: any) { ElMessage.error('获取同步日志失败: ' + (e?.response?.data?.detail ?? e.message)); syncLogs.value = [] }
+  } catch (e: any) { ElMessage.error('获取同步日志失败: ' + (errText(e))); syncLogs.value = [] }
 }
 
 onMounted(() => { fetchDevice(); fetchSessions(); fetchSyncLogs() })

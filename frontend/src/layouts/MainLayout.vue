@@ -82,6 +82,13 @@
           <el-icon><Connection /></el-icon>
           <template #title>集成连接器</template>
         </el-menu-item>
+        <!-- 连接器管理 used to be a screen file with no route at all, reachable
+             only by typing the URL; it now lists connectors from
+             GET /connectors/status, so it belongs in the menu. -->
+        <el-menu-item index="/connectors/manage">
+          <el-icon><Setting /></el-icon>
+          <template #title>连接器管理</template>
+        </el-menu-item>
         <el-menu-item index="/webhooks">
           <el-icon><Link /></el-icon>
           <template #title>Webhooks</template>
@@ -145,6 +152,7 @@ import { useNetworkStatus } from '../composables/useNetworkStatus'
 import { ElBadge, ElMessage } from 'element-plus'
 import apiClient from '../api'
 import { Odometer, List, HomeFilled, Van, PriceTag, Setting, User, ArrowDown, Expand, Fold, Monitor, Iphone, Bell, Connection, Link, DataAnalysis } from '@element-plus/icons-vue'
+import { errText } from '../api/errors'
 
 const route = useRoute()
 const router = useRouter()
@@ -170,7 +178,7 @@ async function fetchUnreadCount() {
     const d = res.data?.data ?? res.data ?? {}
     const items = Array.isArray(d) ? d : (d.items ?? [])
     unreadCount.value = d.total ?? items.length ?? 0
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(errText(e)) }
 }
 
 onMounted(() => {

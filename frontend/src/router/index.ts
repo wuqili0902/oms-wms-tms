@@ -45,8 +45,11 @@ const router = createRouter({
         { path: 'pda', name: 'Pda', meta: { title: 'PDA 作业' }, component: () => import('../views/pda/PdaPage.vue') },
         { path: 'notifications', name: 'Notifications', meta: { title: '通知中心' }, component: () => import('../views/notifications/NotificationList.vue') },
         { path: 'connectors', name: 'Connectors', meta: { title: '集成连接器' }, component: () => import('../views/connectors/ConnectorList.vue') },
-        { path: 'connectors/amazon-config/:connectorId', name: 'AmazonConfig', meta: { title: 'Amazon 配置' }, component: () => import('../views/connectors/AmazonConfig.vue') },
-        { path: 'connectors/shopify-config/:connectorId', name: 'ShopifyConfig', meta: { title: 'Shopify 配置' }, component: () => import('../views/connectors/ShopifyConfig.vue') },
+        // 连接器管理 was a screen file with no route: unreachable, and wired to
+        // /connectors/status + /connectors/{id}/sync, which the API did not have.
+        { path: 'connectors/manage', name: 'ConnectorManage', meta: { title: '连接器管理' }, component: () => import('../views/connectors/index.vue') },
+        { path: 'connectors/amazon-config/:connectorId', name: 'AmazonConfig', meta: { title: 'Amazon 配置说明' }, component: () => import('../views/connectors/AmazonConfig.vue') },
+        { path: 'connectors/shopify-config/:connectorId', name: 'ShopifyConfig', meta: { title: 'Shopify 配置说明' }, component: () => import('../views/connectors/ShopifyConfig.vue') },
         { path: 'analytics', name: 'Analytics', meta: { title: '数据分析' }, component: () => import('../views/analytics/AnalyticsDetail.vue') },
         { path: 'webhooks', name: 'Webhooks', meta: { title: 'Webhooks' }, component: () => import('../views/webhooks/WebhookList.vue') },
         { path: 'admin/users', name: 'AdminUsers', meta: { title: '系统管理' }, component: () => import('../views/admin/UserList.vue') },

@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 interface BatchItem {
   order_id: string
@@ -11,6 +12,11 @@ interface BatchItem {
   carrier_code: string
   tracking?: string
   status?: string
+  // 面单号的出处，由后端在响应里给出：kdniao = 快递鸟返回的号；
+  // local_placeholder = 未配置快递鸟凭据时本机拼的号，快递侧并没有这张面单。
+  // 标签打印出来两种号码长得一样，所以这一列必须显形。
+  tracking_source?: string
+  tracking_note?: string
 }
 
 const carriers = [
@@ -122,19 +128,31 @@ async function createAllWaybills() {
         })
       )
     )
+    // 结果按 valid 的顺序回来：写回 items.value[i] 会把第 1 个结果写进第 1 行,
+    // 而第 1 行可能正是被过滤掉的那一行 —— 面单号与收件人就错配了。
     for (let i = 0; i < results.length; i++) {
       const r = results[i]
+      const row = valid[i]
       if (r.status === 'fulfilled') {
         const d = r.value.data?.data ?? r.value.data ?? {}
-        items.value[i].tracking = d.tracking_number
-        items.value[i].status = 'success'
+        row.tracking = d.tracking_number
+        row.tracking_source = d.tracking_source
+        row.tracking_note = d.tracking_source_note
+        row.status = 'success'
       } else {
-        items.value[i].status = 'failed'
+        row.status = 'failed'
       }
     }
-    ElMessage.success(`成功创建 ${results.filter(r => r.status === 'fulfilled').length} / ${results.length} 个面单`)
+    const ok = results.filter(r => r.status === 'fulfilled').length
+    const placeholders = valid.filter(r => r.tracking_source === 'local_placeholder').length
+    ElMessage.success(`成功创建 ${ok} / ${results.length} 个面单`)
+    if (placeholders) {
+      ElMessage.warning(
+        `其中 ${placeholders} 张面单号是本地生成的（未配置快递鸟凭据），快递侧没有这张面单，打印前请先确认`,
+      )
+    }
   } catch (e: any) {
-    ElMessage.error('批量下单失败: ' + (e?.response?.data?.detail ?? e.message))
+    ElMessage.error('批量下单失败: ' + (errText(e)))
   } finally {
     loading.value = false
   }
@@ -145,6 +163,14 @@ async function batchPrint() {
   if (!trackings.length) {
     ElMessage.warning('没有可打印的面单')
     return
+  }
+  const placeholderCount = items.value.filter(
+    i => i.tracking && i.tracking_source === 'local_placeholder',
+  ).length
+  if (placeholderCount) {
+    ElMessage.warning(
+      `${placeholderCount} 张面单号是本地生成的，快递侧没有这张面单：贴出去就是贴一个查不到的号码（配置 KDNIAO_EBUSINESS_ID / KDNIAO_API_KEY 后重新下单）`,
+    )
   }
   printing.value = true
   try {
@@ -164,7 +190,7 @@ async function batchPrint() {
       ElMessage.warning('未获取到打印回调地址')
     }
   } catch (e: any) {
-    ElMessage.error('批量打印失败: ' + (e?.response?.data?.detail ?? e.message))
+    ElMessage.error('批量打印失败: ' + (errText(e)))
   } finally {
     printing.value = false
   }
@@ -212,6 +238,16 @@ function downloadTemplate() {
         <el-button type="warning" :loading="printing" @click="batchPrint" :disabled="!items.some(i => i.tracking)">批量打印</el-button>
       </div>
 
+      <el-alert
+        v-if="items.some(i => i.tracking_source === 'local_placeholder')"
+        data-testid="placeholder-alert"
+        type="warning"
+        show-icon
+        :closable="false"
+        title="有面单号是本地生成的"
+        description="未配置快递鸟凭据（KDNIAO_EBUSINESS_ID / KDNIAO_API_KEY）时，面单号由服务器按前缀 + 日期 + 订单号拼出：标签打印出来和快递鸟返回的号码长得一模一样，但快递侧没有这张面单，轨迹查询也不会有任何结果。带「本地生成」标记的行请先补配置再重新下单。"
+      />
+
       <el-table :data="items" border v-loading="loading" max-height="600">
         <el-table-column type="index" width="50" />
         <el-table-column label="订单号" min-width="140">
@@ -241,9 +277,18 @@ function downloadTemplate() {
             </el-select>
           </template>
         </el-table-column>
-        <el-table-column label="面单号" width="160">
+        <el-table-column label="面单号" min-width="200">
           <template #default="{ row }">
-            <span v-if="row.tracking" class="tracking-cell">{{ row.tracking }}</span>
+            <template v-if="row.tracking">
+              <span class="tracking-cell">{{ row.tracking }}</span>
+              <el-tag
+                v-if="row.tracking_source === 'local_placeholder'"
+                type="warning"
+                size="small"
+                :title="row.tracking_note"
+              >本地生成</el-tag>
+              <el-tag v-else-if="row.tracking_source === 'kdniao'" type="success" size="small">快递鸟</el-tag>
+            </template>
             <el-tag v-else-if="row.status === 'failed'" type="danger" size="small">失败</el-tag>
             <span v-else>-</span>
           </template>

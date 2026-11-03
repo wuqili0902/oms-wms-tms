@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import apiClient from '@/api'
 import type { Address } from '@/types/address'
 import { usePagination } from '@/composables/usePagination'
+import { errText } from '../api/errors'
 
 export const useAddressStore = defineStore('address', () => {
   const addresses = ref<Address[]>([])
@@ -32,7 +33,7 @@ export const useAddressStore = defineStore('address', () => {
       }
       addresses.value = items
     } catch (e: any) {
-      addresses.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message)
+      addresses.value = []; ElMessage.error(errText(e))
     } finally {
       loading.value = false
     }
@@ -44,7 +45,7 @@ export const useAddressStore = defineStore('address', () => {
       await apiClient.post('/warehouses/addresses', payload)
       await fetchAddresses()
     } catch (e: any) {
-      ElMessage.error(e?.response?.data?.detail ?? '创建失败')
+      ElMessage.error(errText(e, '创建失败'))
       saving.value = false
     }
   }
@@ -55,7 +56,7 @@ export const useAddressStore = defineStore('address', () => {
       await apiClient.put(`/warehouses/addresses/${id}`, payload)
       await fetchAddresses()
     } catch (e: any) {
-      ElMessage.error(e?.response?.data?.detail ?? '更新失败')
+      ElMessage.error(errText(e, '更新失败'))
       saving.value = false
     }
   }
@@ -65,7 +66,7 @@ export const useAddressStore = defineStore('address', () => {
       await apiClient.delete(`/warehouses/addresses/${id}`)
       await fetchAddresses()
     } catch (e: any) {
-      ElMessage.error(e?.response?.data?.detail ?? '删除失败')
+      ElMessage.error(errText(e, '删除失败'))
     }
   }
 

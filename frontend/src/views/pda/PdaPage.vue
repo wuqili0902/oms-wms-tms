@@ -147,6 +147,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const activeTab = ref('mutation')
 const isMobile = ref(window.innerWidth < 768)
@@ -171,7 +172,7 @@ async function submitMutation() {
     const payload = { ...rest, payload: { quantity: qty, remark } }
     await apiClient.post('/pda/mutations', payload)
     ElMessage.success('变动已入队列')
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '提交失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '提交失败')) }
   mutLoading.value = false
 }
 
@@ -181,7 +182,7 @@ async function triggerSync() {
     const res = await apiClient.post('/pda/sync')
     if (res.data?.failed === 0) ElMessage.success(`同步完成，${res.data.accepted} 条处理成功`)
     fetchMutations()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '同步失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '同步失败')) }
   syncLoading.value = false
 }
 

@@ -53,6 +53,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { usePagination } from '../../composables/usePagination'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const loading = ref(false)
 const creating = ref(false)
@@ -71,7 +72,7 @@ async function fetchVendors() {
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     vendors.value = items
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     vendors.value = []
   }
   loading.value = false
@@ -87,7 +88,7 @@ async function submitCreate() {
     showCreate.value = false
     fetchVendors()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '供应商创建失败')
+    ElMessage.error(errText(e, '供应商创建失败'))
   }
   creating.value = false
 }

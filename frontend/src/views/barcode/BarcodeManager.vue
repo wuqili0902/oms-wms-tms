@@ -181,6 +181,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const activeTab = ref('generate')
 
@@ -218,7 +219,7 @@ async function generateBarcode() {
     const res = await apiClient.post('/barcode/generate', genForm)
     genResult.value = res.data?.data ?? res.data
     ElMessage.success('条码生成成功')
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '条码生成失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '条码生成失败')) }
   genLoading.value = false
 }
 
@@ -239,7 +240,7 @@ async function submitScan() {
     scanResult.value = true
     ElMessage.success('扫描记录成功')
     scanForm.raw_data = ''
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '扫描记录失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '扫描记录失败')) }
   scanLoading.value = false
 }
 
@@ -269,7 +270,7 @@ async function uploadExcel() {
     })
     excelResult.value = res.data ?? res.data?.data ?? res.data
     ElMessage.success('条码生成成功，请点击下载')
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '上传失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '上传失败')) }
   excelUploading.value = false
 }
 
@@ -304,7 +305,7 @@ async function submitTemplate() {
     ElMessage.success('模板创建成功')
     showCreateTemplate.value = false
     fetchTemplates()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '创建失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '创建失败')) }
   tmplCreating.value = false
 }
 

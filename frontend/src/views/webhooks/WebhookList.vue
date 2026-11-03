@@ -63,6 +63,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const loading = ref(false)
 const creating = ref(false)
@@ -79,7 +80,7 @@ async function fetchWebhooks() {
     const res = await apiClient.get('/webhooks?page=1&page_size=50')
     const body = res.data?.data ?? res.data ?? []
     webhooks.value = Array.isArray(body) ? body : (body.items ?? [])
-  } catch (e: any) { webhooks.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { webhooks.value = []; ElMessage.error(errText(e)) }
   loading.value = false
 }
 
@@ -90,7 +91,7 @@ async function submitCreate() {
     ElMessage.success('Webhook 创建成功')
     showCreate.value = false
     fetchWebhooks()
-    } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '创建失败') }
+    } catch (e: any) { ElMessage.error(errText(e, '创建失败')) }
   creating.value = false
 }
 
@@ -106,7 +107,7 @@ async function submitEdit() {
     await apiClient.put(`/webhooks/${editForm.id}`, { name: editForm.name, url: editForm.url, events: editForm.events })
     ElMessage.success('更新成功')
     showEdit.value = false; fetchWebhooks()
-    } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '更新失败') }
+    } catch (e: any) { ElMessage.error(errText(e, '更新失败')) }
   editing.value = false
 }
 
@@ -117,7 +118,7 @@ async function deleteWebhook(row: any) {
     ElMessage.success('已删除')
     fetchWebhooks()
   } catch (e: any) {
-    if (e?.response?.data?.detail) ElMessage.error(e.response.data.detail)
+    if (errText(e)) ElMessage.error(e.response.data.detail)
   }
 }
 

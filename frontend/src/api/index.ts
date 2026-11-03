@@ -67,11 +67,26 @@ apiClient.interceptors.response.use(
       }
     }
 
-    const raw = error.response?.data && typeof error.response.data === 'object' && 'detail' in (error.response.data as object)
-      ? String((error.response.data as any).detail)
-      : String(error.message ?? '')
-    // Escape HTML to prevent stored XSS from server error messages
-    const msg = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    // Every failure this API answers is the same envelope — {success: false,
+    // error: {code, message}} — and ``error.message`` is the sentence written
+    // for the person who made the request ("reason must be one of: damaged,
+    // wrong_item, …").  Reading only ``detail`` showed the technical string
+    // axios builds ("Request failed with status code 422") for a request the
+    // server explained.  ``detail`` stays as the legacy shape's field.
+    const payload = error.response?.data as any
+    const hasDetail = !!payload && typeof payload === 'object' && 'detail' in payload
+    const raw = (payload?.error?.message ? String(payload.error.message) : '')
+      || (hasDetail ? String(payload.detail) : '')
+      || String(error.message ?? '')
+    // No HTML escaping: Element Plus renders ``ElMessage``'s text without
+    // ``dangerouslyUseHTMLString``, so a message containing ``<`` is displayed as
+    // it is written — and escaping it would show ``&lt;`` to the operator instead
+    // of the character the server named.  The server's sentences quote values as
+    // Python reprs (``got 'PDA<1'``), which is exactly the case escaping broke.
+    const msg = raw
+    // The views toast their own failure text; this is the message the server
+    // sent, and they should show it rather than their own generic string.
+    ;(error as any).userMessage = msg
     ElMessage.error(msg)
     return Promise.reject(error)
   },

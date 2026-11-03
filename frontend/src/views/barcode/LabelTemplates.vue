@@ -87,6 +87,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import apiClient from '../../api'
 import { usePagination } from '../../composables/usePagination'
+import { errText } from '../../api/errors'
 
 const { page, pageSize, total, onPageChange, onSizeChange } = usePagination()
 
@@ -159,7 +160,7 @@ async function handleSubmit() {
     }
     dialogVisible.value = false
     fetchTemplates()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '操作失败') }
+  } catch (e: any) { ElMessage.error(errText(e, '操作失败')) }
   submitting.value = false
 }
 
@@ -169,7 +170,7 @@ function handleDelete(row: any) {
       await apiClient.delete(`/label-templates/${row.id}`)
       ElMessage.success('模板已删除')
       fetchTemplates()
-    } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? '删除失败') }
+    } catch (e: any) { ElMessage.error(errText(e, '删除失败')) }
   }).catch(() => {})
 }
 

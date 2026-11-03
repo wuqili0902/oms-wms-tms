@@ -159,6 +159,7 @@ import apiClient from '../../api'
 import { useExport } from '../../composables/useExport'
 import type { Order } from '../../api/types'
 import type { FormInstance, FormRules } from 'element-plus'
+import { errText } from '../../api/errors'
 
 const { downloadCSV } = useExport()
 const router = useRouter()
@@ -220,7 +221,7 @@ async function fetchOrders() {
     const data = res.data ?? {}
     orders.value = data.items ?? []
     total.value = data.total ?? 0
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(errText(e)) }
   loading.value = false
 }
 
@@ -245,7 +246,7 @@ async function submitCreate() {
     ElMessage.success('创建成功')
     showCreate.value = false
     fetchOrders()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(errText(e)) }
   creating.value = false
 }
 
@@ -254,7 +255,7 @@ async function handleStatus(row: Order, status: string) {
     await apiClient.put(`/orders/${row.id}/status`, { status })
     ElMessage.success(`订单已${statusLabel(status)}`)
     fetchOrders()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(errText(e)) }
 }
 
 async function handleCancel(row: Order) {
@@ -263,7 +264,7 @@ async function handleCancel(row: Order) {
     await apiClient.put(`/orders/${row.id}/status`, { status: 'cancelled' })
     ElMessage.success('已取消')
     fetchOrders()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(errText(e)) }
 }
 
 async function handleDelete(row: Order) {
@@ -272,7 +273,7 @@ async function handleDelete(row: Order) {
     await apiClient.delete(`/orders/${row.id}`)
     ElMessage.success('已删除')
     fetchOrders()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(errText(e)) }
 }
 
 function handleSplit(row: Order) {
@@ -289,7 +290,7 @@ async function submitSplit() {
     ElMessage.success('拆单成功')
     showSplit.value = false
     fetchOrders()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(errText(e)) }
   splitting.value = false
 }
 
@@ -309,7 +310,7 @@ async function submitMerge() {
     ElMessage.success('合并成功')
     showMerge.value = false
     fetchOrders()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(errText(e)) }
   merging.value = false
 }
 

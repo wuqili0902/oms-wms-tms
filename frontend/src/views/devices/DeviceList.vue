@@ -10,17 +10,21 @@
       <el-table :data="devices" stripe v-loading="loading" style="width:100%">
         <template #empty><el-empty description="暂无数据" /></template>
         <el-table-column type="index" label="#" width="50" />
-        <el-table-column prop="device_code" label="设备编码" width="140" />
+        <!-- The device record's own fields: code, status
+             (online / offline / disabled) and last_heartbeat_at. -->
+        <el-table-column prop="code" label="设备编码" width="140" />
         <el-table-column prop="name" label="名称" width="160" />
         <el-table-column label="类型" width="100">
-          <template #default="{ row }">{{ row.device_type || '—' }}</template>
+          <template #default="{ row }">{{ deviceTypeLabel(row.device_type) }}</template>
         </el-table-column>
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
-            <el-tag :type="row.is_online ? 'success' : 'danger'" size="small">{{ row.is_online ? '在线' : '离线' }}</el-tag>
+            <el-tag :type="row.status === 'online' ? 'success' : row.status === 'disabled' ? 'info' : 'danger'" size="small">
+              {{ statusLabel(row.status) }}
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="last_heartbeat" label="最后心跳" width="175" />
+        <el-table-column prop="last_heartbeat_at" label="最后心跳" width="175" />
         <el-table-column prop="created_at" label="注册时间" width="175" />
         <el-table-column label="操作" width="140">
           <template #default="{ row }">
@@ -40,10 +44,7 @@
         <el-form-item label="名称"><el-input v-model="editForm.name" /></el-form-item>
         <el-form-item label="类型">
           <el-select v-model="editForm.device_type" style="width:100%">
-            <el-option label="PDA" value="pda" />
-            <el-option label="扫描枪" value="scanner" />
-            <el-option label="打印机" value="printer" />
-            <el-option label="终端" value="terminal" />
+            <el-option v-for="t in DEVICE_TYPES" :key="t.value" :label="t.label" :value="t.value" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -63,10 +64,7 @@
         </el-form-item>
         <el-form-item label="类型">
           <el-select v-model="createForm.device_type" style="width:100%">
-            <el-option label="PDA" value="pda" />
-            <el-option label="扫描枪" value="scanner" />
-            <el-option label="打印机" value="printer" />
-            <el-option label="终端" value="terminal" />
+            <el-option v-for="t in DEVICE_TYPES" :key="t.value" :label="t.label" :value="t.value" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -92,6 +90,20 @@ const showCreate = ref(false)
 const showEdit = ref(false)
 const editId = ref<number|null>(null)
 const { page, pageSize, total, onPageChange, onSizeChange } = usePagination()
+// The device types the API records (TerminalDeviceType in src/tms/models.py);
+// "terminal" was this screen's own word and the endpoint refused it.
+const DEVICE_TYPES = [
+  { value: 'pda', label: 'PDA' },
+  { value: 'phone', label: '手机' },
+  { value: 'scanner', label: '扫描枪' },
+  { value: 'printer', label: '打印机' },
+]
+function deviceTypeLabel(t: string) {
+  return DEVICE_TYPES.find((x) => x.value === t)?.label || t || '—'
+}
+function statusLabel(s: string) {
+  return ({ online: '在线', offline: '离线', disabled: '停用' } as Record<string, string>)[s] || s || '—'
+}
 const createForm = reactive({ device_code: '', name: '', device_type: 'pda' })
 const editForm = reactive({ device_code: '', name: '', device_type: 'pda' })
 
@@ -104,7 +116,7 @@ async function fetchDevices() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     devices.value = items
-  } catch (e: any) { devices.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { devices.value = []; ElMessage.error(e?.userMessage ?? e.message) }
   loading.value = false
 }
 
@@ -117,13 +129,13 @@ async function submitCreate() {
     ElMessage.success('设备注册成功')
     showCreate.value = false
     fetchDevices()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(e?.userMessage ?? e.message) }
   creating.value = false
 }
 
 async function editDevice(row: any) {
   editId.value = row.id
-  editForm.device_code = row.device_code || ''
+  editForm.device_code = row.code || ''
   editForm.name = row.name || ''
   editForm.device_type = row.device_type || 'pda'
   showEdit.value = true
@@ -136,7 +148,7 @@ async function submitEdit() {
     ElMessage.success('设备已更新')
     showEdit.value = false
     fetchDevices()
-  } catch (e: any) { ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { ElMessage.error(e?.userMessage ?? e.message) }
   editing.value = false
 }
 

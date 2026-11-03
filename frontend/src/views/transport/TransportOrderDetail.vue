@@ -58,13 +58,20 @@
         </div>
       </template>
       <template v-if="pod">
+        <!-- The POD record's own fields: signed_by, created_at, and
+             delivery_photo_urls, which the API stores as {url, timestamp}. -->
         <el-descriptions :column="2" border>
-          <el-descriptions-item label="签收人">{{ pod.receiver_name || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="签收时间">{{ pod.delivery_time || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="签收人">{{ pod.signed_by || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="签收时间">{{ pod.created_at || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="签收方式">{{ pod.signature_type === 'digital' ? '电子签名' : '纸面签收' }}</el-descriptions-item>
+          <el-descriptions-item label="签名" v-if="pod.signature_image_url">
+            <el-image :src="pod.signature_image_url" style="width:120px;height:60px;object-fit:cover" />
+          </el-descriptions-item>
           <el-descriptions-item label="备注" :span="2">{{ pod.notes || '无' }}</el-descriptions-item>
         </el-descriptions>
-        <div v-if="pod.photos?.length" style="display:flex;gap:8px;margin-top:12px">
-          <el-image v-for="(url, idx) in pod.photos" :key="idx" :src="url" style="width:120px;height:120px;border-radius:4px;object-fit:cover" />
+        <div v-if="pod.delivery_photo_urls?.length" style="display:flex;gap:8px;margin-top:12px">
+          <el-image v-for="(photo, idx) in pod.delivery_photo_urls" :key="idx" :src="photo.url"
+                    style="width:120px;height:120px;border-radius:4px;object-fit:cover" />
         </div>
       </template>
       <el-empty v-else description="暂无签收凭证" />
@@ -111,7 +118,7 @@
             <el-option label="破损异常" value="exception_damaged" />
           </el-select>
         </el-form-item>
-        <el-form-item label="位置"><el-input v-model="trackForm.location" /></el-form-item>
+        <el-form-item label="位置"><el-input v-model="trackForm.location_name" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showAddTracking = false">取消</el-button>
@@ -141,7 +148,10 @@ const podLoading = ref(false)
 function printOrder() { window.print() }
 const trackLoading = ref(false)
 const podForm = reactive({ receiver_name: '', notes: '' })
-const trackForm = reactive({ event_type: 'in_transit', location: '' })
+// ``location_name`` is the field the tracking endpoint records; ``location``
+// was the key this form invented, and the endpoint refuses a key it does not
+// read rather than dropping it into a NULL column.
+const trackForm = reactive({ event_type: 'in_transit', location_name: '' })
 
 function statusLabel(s: string) {
   const map: Record<string, string> = { draft: '草稿', dispatched: '已发车', pickup_completed: '已提货', in_transit: '在途', out_for_delivery: '派送中', delivered: '已签收', exception: '异常', cancelled: '已取消' }

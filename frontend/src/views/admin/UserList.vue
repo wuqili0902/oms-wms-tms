@@ -203,6 +203,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import apiClient from '../../api'
 import type { FormInstance, FormRules } from 'element-plus'
+import { errText } from '../../api/errors'
 
 const activeTab = ref('users')
 
@@ -254,7 +255,7 @@ async function fetchUsers() {
     const res = await apiClient.get('/auth/users')
     users.value = res.data?.data ?? res.data ?? []
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     users.value = []
   }
   loading.value = false
@@ -266,7 +267,7 @@ async function fetchRoles() {
     const res = await apiClient.get('/auth/roles')
     roles.value = res.data?.data ?? res.data ?? []
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     roles.value = []
   }
   roleLoading.value = false
@@ -278,7 +279,7 @@ async function fetchPerms() {
     const res = await apiClient.get('/auth/permissions')
     permissions.value = res.data?.data ?? res.data ?? []
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     permissions.value = []
   }
   permLoading.value = false
@@ -294,7 +295,7 @@ async function submitUser() {
     showCreateUser.value = false
     fetchUsers()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
   userCreating.value = false
 }
@@ -328,7 +329,7 @@ async function submitAssignRole() {
     else ElMessage.warning(`角色分配部分失败: ${failed.length}/${results.length}`)
     showAssignRole.value = false
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
   assigningRole.value = false
 }
@@ -352,7 +353,7 @@ async function submitAssignPerm() {
     else ElMessage.warning(`权限分配部分失败: ${failed.length}/${results.length}`)
     showAssignPerm.value = false
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
   assigningPerm.value = false
 }
@@ -374,7 +375,7 @@ async function submitRole() {
     showCreateRole.value = false
     fetchRoles()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
   roleCreating.value = false
 }
@@ -395,7 +396,7 @@ async function submitEditRole() {
     showEditRole.value = false
     fetchRoles()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
   roleUpdating.value = false
 }
@@ -431,7 +432,7 @@ async function submitPerm() {
     showCreatePerm.value = false
     fetchPerms()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
   }
   permCreating.value = false
 }

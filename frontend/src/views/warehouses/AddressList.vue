@@ -93,6 +93,7 @@ import { ElMessage } from 'element-plus'
 import { usePagination } from '../../composables/usePagination'
 import apiClient from '../../api'
 import StatusTag from '@/components/StatusTag.vue'
+import { errText } from '../../api/errors'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -112,7 +113,7 @@ async function fetchAddresses() {
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     addresses.value = items
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     addresses.value = []
   }
   loading.value = false
@@ -127,7 +128,7 @@ async function submit() {
     ElMessage.success('保存成功')
     showCreate.value ? (showCreate.value = false, fetchAddresses()) : ((showEdit.value = false), fetchAddresses())
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '地址保存失败')
+    ElMessage.error(errText(e, '地址保存失败'))
   }
   saving.value = false
 }

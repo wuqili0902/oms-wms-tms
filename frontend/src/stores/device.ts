@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import apiClient from '@/api'
 import type { Device, SessionLog } from '@/types/device'
+import { errText } from '../api/errors'
 
 export const useDeviceStore = defineStore('device', () => {
   const devices = ref<Device[]>([])
@@ -58,7 +59,7 @@ export const useDeviceStore = defineStore('device', () => {
     try {
       await apiClient.post(`/devices/${deviceId}/sessions`)
     } catch (e: any) {
-      ElMessage.error(e?.response?.data?.detail ?? '创建会话失败')
+      ElMessage.error(errText(e, '创建会话失败'))
     }
   }
 

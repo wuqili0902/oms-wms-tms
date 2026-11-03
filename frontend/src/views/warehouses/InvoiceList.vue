@@ -128,6 +128,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { usePagination } from '../../composables/usePagination'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const activeTab = ref('invoices')
 const invLoading = ref(false)
@@ -156,7 +157,7 @@ async function fetchInvoices() {
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     invoices.value = items
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     invoices.value = []
   }
   invLoading.value = false
@@ -172,7 +173,7 @@ async function fetchMemos() {
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     creditMemos.value = items
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     creditMemos.value = []
   }
   memoLoading.value = false
@@ -189,7 +190,7 @@ async function submitInvoice() {
     showCreateInvoice.value = false
     fetchInvoices()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '发票创建失败')
+    ElMessage.error(errText(e, '发票创建失败'))
   }
   invCreating.value = false
 }
@@ -202,7 +203,7 @@ async function submitMemo() {
     showCreateMemo.value = false
     fetchMemos()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '贷项通知单创建失败')
+    ElMessage.error(errText(e, '贷项通知单创建失败'))
   }
   memoCreating.value = false
 }
@@ -213,7 +214,7 @@ async function viewInvoice(row: any) {
     const res = await apiClient.get(`/warehouses/invoices/${row.id}`)
     invDetail.value = res.data?.data ?? res.data
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     invDetail.value = { ...row }
   }
 }
@@ -224,7 +225,7 @@ async function viewMemo(row: any) {
     const res = await apiClient.get(`/warehouses/credit-memos/${row.id}`)
     memoDetail.value = res.data?.data ?? res.data
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? e.message)
+    ElMessage.error(errText(e))
     memoDetail.value = { ...row }
   }
 }

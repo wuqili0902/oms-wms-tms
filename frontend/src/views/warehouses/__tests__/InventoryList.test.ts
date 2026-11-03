@@ -3,27 +3,36 @@ import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
 
+// Rows shaped as ``GET /warehouses/inventory`` answers (``InventoryResponse``).
+// The mock used to carry ``product_name``, ``location_name``,
+// ``quantity_on_hand``, ``reorder_level`` and ``unit_price``; no endpoint of
+// this API returns any of those names, so the assertions written against them
+// proved that a table rendered fields the server never sends.
 const mockInventory = [
   {
     id: 'inv-1',
+    warehouse_id: 'wh-1',
+    location_id: 'loc-1',
     sku: 'SKU-A1',
-    product_name: '测试商品A',
-    warehouse_name: '上海仓',
-    location_name: 'A-01',
-    quantity_on_hand: 15,
-    reorder_level: 10,
-    unit_price: 12.5,
+    quantity: 15,
+    reserved_qty: 2,
+    available_qty: 13,
+    batch_no: 'B-A1',
+    expiry_date: '2026-12-31',
+    created_at: '2026-07-01T10:00:00',
     updated_at: '2026-08-01T10:00:00',
   },
   {
     id: 'inv-2',
+    warehouse_id: 'wh-1',
+    location_id: 'loc-2',
     sku: 'SKU-B2',
-    product_name: '测试商品B',
-    warehouse_name: '杭州仓',
-    location_name: 'B-02',
-    quantity_on_hand: 3,
-    reorder_level: 5,
-    unit_price: 8,
+    quantity: 3,
+    reserved_qty: 0,
+    available_qty: 3,
+    batch_no: 'B-B2',
+    expiry_date: null,
+    created_at: '2026-07-02T10:00:00',
     updated_at: '2026-08-02T10:00:00',
   },
 ]
@@ -53,9 +62,10 @@ vi.mock('../../../services/inventory', () => ({
   getInventory: vi.fn(() => Promise.resolve({ data: mockInventory })),
   adjustStock: vi.fn(() => Promise.resolve({ data: { ok: true } })),
   createStockIn: vi.fn(() => Promise.resolve({ data: { ok: true } })),
+  getLocations: vi.fn(() => Promise.resolve({ data: { items: [{ id: 'loc-1', location_code: 'A-01-1-1' }] } })),
 }))
 
-import { getInventory, adjustStock, createStockIn } from '../../../services/inventory'
+import { getInventory, adjustStock, createStockIn, getLocations } from '../../../services/inventory'
 import apiClient from '../../../api'
 import InventoryList from '../InventoryList.vue'
 
@@ -76,16 +86,24 @@ describe('InventoryList.vue', () => {
     expect(wrapper.text()).toContain('库存管理')
     expect(getInventory).toHaveBeenCalled()
     expect(wrapper.text()).toContain('SKU-A1')
-    expect(wrapper.text()).toContain('测试商品A')
-    expect(wrapper.text()).toContain('上海仓')
+    expect(wrapper.text()).toContain('B-A1')
   })
 
-  it('shows low-stock highlight for items below reorder level', async () => {
+  it('names the warehouse a row sits in', async () => {
     const wrapper = mountInventory()
     await wrapper.vm.$nextTick()
     await new Promise((r) => setTimeout(r, 50))
-    const spans = wrapper.findAll('span').filter((s) => s.text() === '3')
-    expect(spans.length).toBeGreaterThan(0)
+    // The inventory rows carry a warehouse id; the screen resolves the name
+    // from the warehouses it loaded, because the inventory endpoint does not.
+    expect(wrapper.text()).toContain('上海仓')
+  })
+
+  it('renders the quantities the API reports', async () => {
+    const wrapper = mountInventory()
+    await wrapper.vm.$nextTick()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(wrapper.text()).toContain('15')
+    expect(wrapper.text()).toContain('13')
   })
 
   it('renders warehouses loaded from API', async () => {
@@ -142,9 +160,10 @@ describe('InventoryList.vue', () => {
     expect(createStockIn).toHaveBeenCalledTimes(1)
     const payload = (createStockIn as any).mock.calls[0][0]
     expect(payload.warehouse_id).toBe('wh-1')
-    expect(payload.items).toEqual([
-      { sku: 'SKU-A1', quantity: 5 },
-      { sku: 'SKU-B2', quantity: 1 },
+    // The service's contract is the server's: lines, each with qty.
+    expect(payload.lines).toEqual([
+      { sku: 'SKU-A1', qty: 5 },
+      { sku: 'SKU-B2', qty: 1 },
     ])
   })
 
@@ -161,9 +180,11 @@ describe('InventoryList.vue', () => {
     expect(wrapper.text()).toContain('变化数量')
 
     const form = (wrapper.vm as any).adjustForm
-    form.item_id = 'inv-1'
-    form.quantity_change = -5
-    form.reason_code = 'DAMAGE'
+    form.warehouse_id = 'wh-1'
+    form.location_id = 'loc-1'
+    form.sku = 'SKU-A1'
+    form.quantity = -5
+    form.reason = 'DAMAGE'
 
     const submitBtn = wrapper.findAllComponents({ name: 'ElButton' }).find((b) => b.text().includes('提交调整'))
     await submitBtn!.trigger('click')
@@ -171,11 +192,52 @@ describe('InventoryList.vue', () => {
     await new Promise((r) => setTimeout(r, 50))
 
     expect(adjustStock).toHaveBeenCalledTimes(1)
+    // The payload is ``InventoryAdjust``: a signed quantity on a location's SKU.
     expect(adjustStock).toHaveBeenCalledWith({
-      item_id: 'inv-1',
-      quantity_change: -5,
+      warehouse_id: 'wh-1',
+      location_id: 'loc-1',
+      sku: 'SKU-A1',
+      quantity: -5,
       reason: 'DAMAGE',
+      batch_no: undefined,
+      picking_strategy: 'fefo',
     })
+  })
+
+  it('refuses to submit an adjustment with no location', async () => {
+    const wrapper = mountInventory()
+    await wrapper.vm.$nextTick()
+    await new Promise((r) => setTimeout(r, 50))
+
+    const adjustBtn = wrapper.findAllComponents({ name: 'ElButton' }).find((b) => b.text().includes('库存调整'))
+    await adjustBtn!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const form = (wrapper.vm as any).adjustForm
+    form.warehouse_id = 'wh-1'
+    form.location_id = ''
+    form.sku = 'SKU-A1'
+    form.quantity = -5
+
+    const submitBtn = wrapper.findAllComponents({ name: 'ElButton' }).find((b) => b.text().includes('提交调整'))
+    await submitBtn!.trigger('click')
+    await wrapper.vm.$nextTick()
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(adjustStock).not.toHaveBeenCalled()
+  })
+
+  it('loads the bins of the warehouse being adjusted', async () => {
+    const wrapper = mountInventory()
+    await wrapper.vm.$nextTick()
+    await new Promise((r) => setTimeout(r, 50))
+
+    const form = (wrapper.vm as any).adjustForm
+    form.warehouse_id = 'wh-1'
+    await (wrapper.vm as any).onAdjustWarehouse()
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(getLocations).toHaveBeenCalledWith('wh-1')
   })
 
   it('handles inventory fetch error gracefully', async () => {

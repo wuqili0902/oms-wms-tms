@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import apiClient from '../../api'
+import { errText } from '../../api/errors'
 
 const carriers = [
   { value: 'sf', label: '顺丰速运' },
@@ -55,7 +56,7 @@ async function queryQuote() {
     quoted.value = true
     if (!results.value.length) ElMessage.info('未获取到报价')
   } catch (e: any) {
-    ElMessage.error('查询报价失败: ' + (e?.response?.data?.detail ?? e.message))
+    ElMessage.error('查询报价失败: ' + (errText(e)))
   } finally {
     loading.value = false
   }

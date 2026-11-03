@@ -67,7 +67,12 @@
           <el-input v-model="createForm.order_no" />
         </el-form-item>
         <el-form-item label="原因">
-          <el-input v-model="createForm.reason" type="textarea" :rows="3" />
+          <el-select v-model="createForm.reason" style="width:100%">
+            <el-option v-for="r in RETURN_REASONS" :key="r.value" :label="r.label" :value="r.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="详细说明">
+          <el-input v-model="createForm.reason_detail" type="textarea" :rows="3" placeholder="选填，描述具体情况" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -94,7 +99,19 @@ const showDetail = ref(false)
 const detail = ref<any>(null)
 const filter = reactive({ return_no: '', status: '' })
 const { page, pageSize, total, onPageChange, onSizeChange } = usePagination()
-const createForm = reactive({ order_no: '', reason: '' })
+// The reason a return is filed for is one of the codes the API records
+// (ReturnReason in src/tms/models.py); the details of this particular return
+// are a separate field.  A free-text reason was refused by the API as of the
+// typed body — before it, it was a 500.
+const RETURN_REASONS = [
+  { value: 'damaged', label: '商品破损' },
+  { value: 'wrong_item', label: '发错商品' },
+  { value: 'quality_issue', label: '质量问题' },
+  { value: 'customer_retrieval', label: '客户拒收' },
+  { value: 'address_error', label: '地址错误' },
+  { value: 'duplicate_order', label: '重复下单' },
+]
+const createForm = reactive({ order_no: '', reason: 'damaged', reason_detail: '' })
 
 async function fetchReturns() {
   loading.value = true
@@ -108,11 +125,11 @@ async function fetchReturns() {
     if (Array.isArray(d)) { items = d; total.value = d.length }
     else { items = d.items ?? []; total.value = d.total ?? d.items?.length ?? 0 }
     returns.value = items
-  } catch (e: any) { returns.value = []; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { returns.value = []; ElMessage.error(e?.userMessage ?? e.message) }
   loading.value = false
 }
 
-function resetCreateForm() { createForm.order_no = ''; createForm.reason = '' }
+function resetCreateForm() { createForm.order_no = ''; createForm.reason = 'damaged'; createForm.reason_detail = '' }
 
 async function submitCreate() {
   creating.value = true
@@ -122,7 +139,7 @@ async function submitCreate() {
     showCreate.value = false
     fetchReturns()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail ?? '退货单创建失败')
+    ElMessage.error(e?.userMessage ?? '退货单创建失败')
   }
   creating.value = false
 }
@@ -145,7 +162,7 @@ async function viewDetail(row: any) {
   try {
     const res = await apiClient.get(`/return-orders/${row.id}`)
     detail.value = res.data?.data ?? res.data
-  } catch (e: any) { detail.value = { ...row }; ElMessage.error(e?.response?.data?.detail ?? e.message) }
+  } catch (e: any) { detail.value = { ...row }; ElMessage.error(e?.userMessage ?? e.message) }
 }
 
 onMounted(fetchReturns)
