@@ -59,17 +59,29 @@ dmypy.json
 # Ruff
 .ruff_cache/
 
-# Debug scripts
-__debug_*.py
-debug_*.py
-_check_*.py
-_debug_*.py
-_list_*.py
-fix_*.py
-smoke_test.py
+# Debug scripts — root-anchored on purpose.  Unanchored, these patterns hid
+# files in every directory: "smoke_test.py" matched tests/smoke_test.py, so a
+# real end-to-end test was invisible to git (and, with python_files=test_*.py,
+# invisible to pytest's default run as well) for as long as it existed.
+/__debug_*.py
+/debug_*.py
+/_check_*.py
+/_debug_*.py
+/_list_*.py
+/fix_*.py
+/fix_*.txt
+/smoke_test.py
 pyright_out.txt
 ruff_remaining.txt
 temp_cov.txt
+
+# Ad-hoc captures from debugging runs.  login.json holds a live admin
+# access/refresh token and dash.json a real API response with order/user UUIDs —
+# neither belongs in history, and .gitignore can't un-publish one once committed.
+/login.json
+/dash.json
+/NUL
+/claude-*.bat
 
 # OS
 Thumbs.db
