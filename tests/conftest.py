@@ -199,6 +199,22 @@ class _SharedSession:
         self.transaction = await self.connection.begin()
         self.session = AsyncSession(bind=self.connection, expire_on_commit=False)
         await self.session.begin_nested()
+        # NOTE, not a to-do: setup() must NOT wipe tables the way db_session does.
+        # Tried it — it breaks the suite: tests/test_smoke.py seeds in a class-scoped
+        # fixture that runs before this one (the wipe deleted the seeded order and the
+        # test got 404), and the DELETE takes a write lock that collides with the
+        # class fixture's own SQLite connection ("database is locked", 7 failures and
+        # 6 errors, reproducibly, in runs 1 and 2).
+        #
+        # What setup() cannot do is undo a test's commits, and teardown() cannot
+        # either: session.commit() inside begin_nested() bubbles past the savepoint
+        # into the outer transaction, so transaction.rollback() has nothing left to
+        # roll back.  Measured, not assumed — a row written this way was still in the
+        # file after teardown().  A test that reaches a service through the API
+        # therefore leaves its rows behind for the rest of the run, and the next
+        # _SharedSession test sees rows it never created.  tests/test_pda_service.py
+        # hit that (data[0] was the previous test's api-pda-001); it clears the queue
+        # table itself, which is where the fix belongs — see that file's _clear_queue.
 
     async def teardown(self):
         if self.session:

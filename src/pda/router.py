@@ -63,8 +63,16 @@ async def list_mutations(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    # created_at is not a total order: mutations written in the same flush can carry
+    # the same timestamp, and SQLite then breaks the tie however it likes (rowid order
+    # of the pages it happens to read).  With skip/limit sitting on top of that, page 1
+    # and page 2 can show the same mutation twice, or skip one — a queue the PDA
+    # replays exactly once per row.  id is unique, so the order is stable.
     result = await db.execute(
-        select(PendingMutation).order_by(PendingMutation.created_at.desc()).offset(skip).limit(limit)
+        select(PendingMutation)
+        .order_by(PendingMutation.created_at.desc(), PendingMutation.id.desc())
+        .offset(skip)
+        .limit(limit)
     )
     rows = result.scalars().all()
     return [

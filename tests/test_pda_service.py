@@ -7,6 +7,23 @@ from sqlalchemy import delete as sa_delete
 from src.pda.models import PendingMutation, SyncOperation
 
 
+async def _clear_queue(session) -> None:
+    """Empty the PDA queue, durably, before a test starts measuring it.
+
+    teardown() cannot undo a test's commits: ``session.commit()`` inside
+    ``begin_nested()`` bubbles past the savepoint into the outer transaction, so
+    ``transaction.rollback()`` has nothing left to roll back (note in
+    tests/conftest.py).  These API tests therefore inherit whatever the previous one
+    committed, and the list test reads the queue's *first* row — with a leftover
+    ``api-pda-001`` from the create test sitting in front of its own row it asserted
+    somebody else's device_id, which surfaced as a failure on some full runs and not
+    others.  The delete is committed, not just flushed, on purpose: only a durable
+    delete stops the next test from seeing those rows again.
+    """
+    await session.execute(sa_delete(PendingMutation))
+    await session.commit()
+
+
 @pytest.fixture
 async def clean_pda(db_session):
     from src.core.outbox import OutboxEvent
@@ -87,6 +104,7 @@ async def test_pda_create_mutation_api(sqlite_engine):
 
     shared = _SharedSession(sqlite_engine)
     await shared.setup()
+    await _clear_queue(shared.session)
 
     async def _override():
         yield shared.session
@@ -125,6 +143,7 @@ async def test_pda_list_mutations_api(sqlite_engine):
 
     shared = _SharedSession(sqlite_engine)
     await shared.setup()
+    await _clear_queue(shared.session)
 
     await enqueue_mutation(
         shared.session, device_id="pda-list",
@@ -164,6 +183,7 @@ async def test_pda_sync_mutations_api(sqlite_engine):
 
     shared = _SharedSession(sqlite_engine)
     await shared.setup()
+    await _clear_queue(shared.session)
 
     await enqueue_mutation(
         shared.session, device_id="api-pda-002",
