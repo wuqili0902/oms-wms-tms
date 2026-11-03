@@ -5,8 +5,10 @@ to limit the number of requests per user or IP address within a specified time w
 """
 
 import functools
+import logging
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable
 
 import redis.asyncio as aioredis
@@ -14,6 +16,8 @@ from fastapi import HTTPException, Request
 from starlette.responses import JSONResponse
 
 from src.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
@@ -23,10 +27,21 @@ class RateLimiter:
     Old entries outside the window are trimmed, and ZCARD gives the count.
     """
 
+    # Redis can blip.  While it is unreachable the limiter still has to answer
+    # (a limiter that silently disables itself is not a limiter), so counts fall
+    # back to an in-process window — weaker than the shared one (per worker, not
+    # per cluster) but real — and a periodic probe reconnects instead of leaving
+    # the process pinned to the fallback forever.
+    RECONNECT_INTERVAL_SECONDS = 30.0
+    RECONNECT_PROBE_TIMEOUT = 1.0
+    MAX_LOCAL_KEYS = 10_000
+
     def __init__(self, redis_url: str | None = None) -> None:
         self.redis_url = redis_url or settings.redis_url
         self.client: aioredis.Redis | None = None
         self._connected = False
+        self._local_windows: dict[str, deque[float]] = {}
+        self._next_reconnect_at = 0.0
 
     async def connect(self) -> bool:
         """Connect to Redis instance."""
@@ -41,7 +56,7 @@ class RateLimiter:
                 self._connected = True
                 return True
         except Exception as e:
-            print(f"Failed to connect to Redis for rate limiting: {e}")
+            logger.error("Failed to connect to Redis for rate limiting: %s", e)
             self._connected = False
             return False
 
@@ -60,7 +75,10 @@ class RateLimiter:
         """Check if a request is within the rate limit.
 
         Returns True if allowed, False if rate limit exceeded.
-        When Redis is unavailable, returns False (fail-closed).
+
+        Redis is the shared source of truth; when it cannot be reached the
+        decision falls through to the in-process window (see ``_check_local``)
+        rather than to "allow everything" or "block everything".
         """
         requests = requests or settings.rate_limit_requests
         window = window or settings.rate_limit_window
@@ -69,7 +87,9 @@ class RateLimiter:
             return True  # bypass in test mode
 
         if not self._connected:
-            return False  # fail-closed
+            await self._try_reconnect()
+            if not self._connected:
+                return self._check_local(key, requests, window)
 
         try:
             bucket_key = f"rate_limit:{key}"
@@ -87,8 +107,58 @@ class RateLimiter:
             count = results[2] if isinstance(results[2], int) else 0
             return count <= requests
 
-        except Exception:
-            return False  # fail-closed
+        except Exception as exc:  # noqa: BLE001 — a Redis blip must not decide the outcome
+            logger.warning("Rate limiter Redis call failed, using in-process window: %s", exc)
+            self._connected = False
+            return self._check_local(key, requests, window)
+
+    async def _try_reconnect(self) -> None:
+        """Probe Redis again at most once per interval, without blocking the request.
+
+        Without this a single Redis blip leaves ``_connected`` False forever, so
+        the limiter stays on its per-process window long after Redis came back —
+        silently, with no shared counts and no warning.
+        """
+        import asyncio
+
+        now = time.monotonic()
+        if now < self._next_reconnect_at:
+            return
+        self._next_reconnect_at = now + self.RECONNECT_INTERVAL_SECONDS
+        try:
+            await asyncio.wait_for(self.connect(), timeout=self.RECONNECT_PROBE_TIMEOUT)
+        except TimeoutError:
+            logger.warning("Rate limiter reconnect probe timed out after %ss", self.RECONNECT_PROBE_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001 — connect() already logged it
+            logger.debug("Rate limiter still unable to reach Redis: %s", exc)
+        else:
+            if self._connected:
+                # Back to shared counts; the per-process windows are stale now.
+                self._local_windows.clear()
+                logger.info("Rate limiter reconnected to Redis; shared counts restored")
+
+    def _check_local(self, key: str, requests: int, window: int) -> bool:
+        """Per-process sliding window used while Redis is unreachable."""
+        now = time.time()
+        bucket = self._local_windows.get(key)
+        if bucket is None:
+            if len(self._local_windows) >= self.MAX_LOCAL_KEYS:
+                # Drop the least recently used buckets so a key-spoofing client
+                # cannot make this dict grow without bound.
+                for stale in list(self._local_windows.keys())[: self.MAX_LOCAL_KEYS // 2]:
+                    self._local_windows.pop(stale, None)
+            bucket = deque()
+            self._local_windows[key] = bucket
+
+        cutoff = now - window
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+
+        if len(bucket) >= requests:
+            return False
+
+        bucket.append(now)
+        return True
 
     async def get_rate_limit_headers(self, key: str) -> dict[str, str]:
         """Get rate limiting headers for the response."""
@@ -146,8 +216,14 @@ def rate_limit(
             if key_func:
                 key = key_func(request)
             else:
-                # Use IP address as the default key
-                client_ip = request.client.host if request.client else "unknown"
+                # Use IP address as the default key, respecting X-Forwarded-For
+                if request.client:
+                    client_ip = request.client.host
+                else:
+                    client_ip = "unknown"
+                forwarded_for = request.headers.get("x-forwarded-for")
+                if forwarded_for:
+                    client_ip = forwarded_for.split(",")[0].strip()
                 key = f"ip:{client_ip}"
 
             # Check rate limit

@@ -8,9 +8,11 @@ class TestGenerateCsrfToken:
         from src.core.csrf import generate_csrf_token
 
         token = generate_csrf_token()
-        assert ":" in token
-        seed, sig = token.split(":", 1)
+        parts = token.split(":")
+        assert len(parts) == 3
+        seed, ts, sig = parts
         assert len(seed) == 32
+        assert len(ts) == 10
         assert len(sig) == 64
 
     def test_produces_different_tokens(self):
@@ -152,13 +154,14 @@ class TestCsrfMiddleware:
             method="POST",
             path="/admin/orders",
             cookies={"csrf_token": token},
+            headers={"content-type": "application/x-www-form-urlencoded"},
             form_data={"csrf_token": token},
         )
         call_next = AsyncMock(return_value=MagicMock())
 
         _ = await mw.dispatch(req, call_next)
 
-        call_next.assert_awaited_once_with(req)
+        call_next.assert_awaited_once()
 
     async def test_post_admin_with_invalid_form(self):
         from src.core.csrf import generate_csrf_token

@@ -12,6 +12,7 @@ from typing import Optional
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -23,7 +24,7 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Uuid as UUID  # noqa: N814 — column type, not a constant; dialect-neutral
 from sqlalchemy.orm import relationship
 
 from src.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDMixin
@@ -238,7 +239,7 @@ class CarrierConfig(Base, UUIDMixin, TimestampMixin):
     account_number: str | None = Column(String(100))      # warehouse's account with carrier
     on_time_rate: Decimal = Column(Numeric(5, 2), default=Decimal("95.00"))  # SLA %
     avg_delivery_days: Decimal = Column(Numeric(4, 1), default=Decimal("3.0"))
-    is_active: bool = True
+    is_active: bool = Column(Boolean, default=True)
 
 
 # ───────────── Hub-and-Spoke Routing Models ──────────────────────────────────
@@ -296,7 +297,7 @@ class CarrierRoute(Base, UUIDMixin, TimestampMixin):
     base_price_per_kg: Decimal = Column(Numeric(18, 4))            # ¥/kg
     express_surcharge: Decimal = Column(Numeric(18, 4), default=Decimal("0"))
     min_charge_weight: Decimal = Column(Numeric(20, 4), default=Decimal("1.0"))
-    is_active: bool = True
+    is_active: bool = Column(Boolean, default=True)
 
 
 # ───────────── Transport Segment Model ────────────────────────────────────────
@@ -361,7 +362,7 @@ class HubConnection(Base, UUIDMixin, TimestampMixin):
     to_hub_code: str = Column(String(50), nullable=False, index=True)
     distance_km: Decimal = Column(Numeric(20, 4))              # edge weight
     transit_hours: Decimal = Column(Numeric(10, 1))             # travel time
-    is_active: bool = True
+    is_active: bool = Column(Boolean, default=True)
 
     __table_args__ = (
         Index("uq_hub_connections", "from_hub_code", "to_hub_code", unique=True),
@@ -530,7 +531,7 @@ class FreightTier(Base, UUIDMixin, TimestampMixin):
 
     __tablename__ = "freight_tiers"
 
-    carrier_code: CarrierCode = Column(SAEnum(CarrierCode), primary_key=True)
+    carrier_code: CarrierCode = Column(SAEnum(CarrierCode), nullable=False, index=True)
     rule_type: FreightRule = Column(SAEnum(FreightRule))
     min_value: Decimal = Column(Numeric(20, 4))   # min weight/volume/km
     max_value: Decimal | None = Column(Numeric(20, 4))

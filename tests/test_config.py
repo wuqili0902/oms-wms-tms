@@ -74,7 +74,7 @@ class TestSettings:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            Settings(secret_key="a-strong-secret-value", cors_origins='["http://localhost:3000"]')
+            Settings(secret_key="a-strong-secret-value-that-is-long-enough", cors_origins='["http://localhost:3000"]')
 
     def test_all_fields(self):
         from src.config import Settings

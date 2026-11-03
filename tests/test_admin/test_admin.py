@@ -7,11 +7,14 @@ from fastapi import status
 
 @pytest.fixture
 async def auth_headers(async_client):
-    uname = f"admin_{uuid_mod.uuid4().hex[:6]}"
+    # Register a dummy user to trigger _ensure_admin seeding, then login as admin.
     await async_client.post("/api/v1/auth/register", json={
-        "username": uname, "email": f"{uname}@test.com", "password": "test123456",
+        "username": f"dummy_{uuid_mod.uuid4().hex[:6]}",
+        "email": "d@t.com", "password": "test123456",
     })
-    r = await async_client.post("/api/v1/auth/login", json={"username": uname, "password": "test123456"})
+    r = await async_client.post("/api/v1/auth/login", json={
+        "username": "admin", "password": "admin123456",
+    })
     token = r.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 

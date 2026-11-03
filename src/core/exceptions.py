@@ -8,6 +8,18 @@ from typing import Any
 
 from fastapi import status
 
+# Starlette renamed this constant across releases — ``HTTP_422_UNPROCESSABLE_ENTITY``
+# (0.46, installed here) vs ``..._CONTENT`` (other 0.4x builds) — and FastAPI
+# re-exports whichever module object it holds, so only one of the two names is
+# guaranteed to exist.  Reading the absent one raised AttributeError, which turned
+# every validation failure into a 500 whose message was the AttributeError itself
+# ("Registration failed: module 'starlette.status' has no attribute …").
+HTTP_422_UNPROCESSABLE = (
+    getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", None)
+    or getattr(status, "HTTP_422_UNPROCESSABLE_ENTITY", None)
+    or 422
+)
+
 
 class AppException(Exception):
     """Base exception class for all application-specific errors.
@@ -73,7 +85,7 @@ class ValidationException(AppException):
     ) -> None:
         super().__init__(
             code="VALIDATION_ERROR",
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=HTTP_422_UNPROCESSABLE,
             message=message,
             detail=detail,
         )
@@ -114,6 +126,55 @@ class PermissionDeniedException(AppException):
         super().__init__(
             code="PERMISSION_DENIED",
             status_code=status.HTTP_403_FORBIDDEN,
+            message=message,
+            detail=detail,
+        )
+
+
+class ConflictException(AppException):
+    """Raised when the resource changed underneath the request.
+
+    Used by the optimistic-locking paths: the write was rejected because another
+    transaction had already modified the row, so the caller has to re-read and
+    retry rather than assume the update happened.
+
+    HTTP Status Code: 409 Conflict
+    Error Code: CONFLICT
+    """
+
+    def __init__(
+        self,
+        message: str = "Resource was modified concurrently",
+        detail: Any | None = None,
+    ) -> None:
+        super().__init__(
+            code="CONFLICT",
+            status_code=status.HTTP_409_CONFLICT,
+            message=message,
+            detail=detail,
+        )
+
+
+class NotImplementedActionException(AppException):
+    """Raised when the API is asked for an action this build does not perform.
+
+    HTTP Status Code: 501 Not Implemented
+    Error Code: NOT_IMPLEMENTED
+
+    The connector endpoints answer 200 for the actions they do, and this for the
+    ones they don't.  A "同步" button that answers 200 for a sync that never
+    happened is worse than a 501: the operator reads success, and the system they
+    are reconciling against has never been told.
+    """
+
+    def __init__(
+        self,
+        message: str = "This action is not implemented",
+        detail: Any | None = None,
+    ) -> None:
+        super().__init__(
+            code="NOT_IMPLEMENTED",
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
             message=message,
             detail=detail,
         )

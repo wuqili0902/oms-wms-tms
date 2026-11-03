@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import Uuid as UUID  # noqa: N814 — column type, not a constant; dialect-neutral
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, SoftDeleteMixin, TimestampMixin

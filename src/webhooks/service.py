@@ -117,7 +117,7 @@ async def _deliver(db, client, target: WebhookTarget, event: WebhookEvent, paylo
     try:
         resp = await client.post(target.url, content=payload, headers=headers)
         elapsed = int((time.monotonic() - start) * 1000)
-        logger.info("Webhook %s -> %s delivered in %dms (status=%d)", event.value, target.url, elapsed, resp.status_code)
+        logger.info("Webhook %s -> %s delivered in %dms (status=%d)", event.value, target.url, elapsed, resp.status_code)  # noqa: E501
         return {
             "success": resp.is_success,
             "status_code": resp.status_code,

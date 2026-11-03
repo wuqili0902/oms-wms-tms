@@ -32,6 +32,49 @@ from src.main import (
 # handles them, causing ServerErrorMiddleware to produce generic 500s.
 
 
+@pytest.fixture(autouse=True)
+def _undo_module_reload_side_effects():
+    """``importlib.reload(src.main)`` is a global mutation, not a local one.
+
+    * it rebinds ``src.main.app`` to a brand-new FastAPI instance.  conftest
+      captured the app created at collection time and every ``async_client``
+      request goes through *that* one, so a later test that installs a
+      dependency override on ``src.main.app`` overrides an app nobody is
+      calling — the endpoint answers 401 and the override is invisible;
+    * it re-runs ``logging.basicConfig``, silently switching the root logger to
+      whatever format the test was exercising;
+    * it re-imports ``sentry_sdk``.
+
+    All three are put back here so the rest of the suite sees the module it
+    collected.
+    """
+    import logging
+    import sys
+
+    import src as src_pkg
+
+    saved_module = sys.modules["src.main"]
+    saved_pkg_attr = getattr(src_pkg, "main", None)
+    saved_app = saved_module.app
+    saved_sentry = getattr(saved_module, "sentry_sdk", None)
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+
+    yield
+
+    # Re-importing "src.main" rebinds the attribute on the parent package too,
+    # and `from src.main import app` resolves through that attribute — so
+    # restoring sys.modules alone is not enough to hand the collected module back.
+    sys.modules["src.main"] = saved_module
+    if saved_pkg_attr is not None:
+        src_pkg.main = saved_pkg_attr
+    saved_module.app = saved_app
+    saved_module.sentry_sdk = saved_sentry
+    root.handlers[:] = saved_handlers
+    root.setLevel(saved_level)
+
+
 class TestExceptionHandlers:
     @pytest.fixture
     def _request(self):
@@ -88,6 +131,33 @@ class TestExceptionHandlers:
         assert resp.status_code == 402
         assert '"code":"HTTP_ERROR"' in resp.body.decode()
 
+    async def test_http_status_names_the_code_when_the_detail_has_none(self, _request):
+        """A route that raises a plain ``HTTPException(404, "...")`` used to answer
+        ``HTTP_ERROR``, and a client that branches on ``error.code`` — which is what
+        the envelope is documented to carry — could not tell a missing device from a
+        rejected body."""
+        from fastapi import HTTPException
+
+        for status_code, code in [(404, "NOT_FOUND"), (409, "CONFLICT"), (422, "VALIDATION_ERROR")]:
+            resp = await handle_http_exception(_request, HTTPException(status_code=status_code, detail="gone"))
+            assert resp.status_code == status_code
+            assert f'"code":"{code}"' in resp.body.decode(), (status_code, resp.body.decode())
+
+    async def test_a_re_raised_app_exception_keeps_its_code_and_its_sentence(self, _request):
+        """``raise HTTPException(404, detail=str(e))`` is how most routers re-raise.
+        The detail is then ``AppException.__str__``, so the handler read the code out
+        of it and dropped the framing — the toast used to read
+        "Error NOT_FOUND: Device 3f9... not found"."""
+        from fastapi import HTTPException
+
+        exc = NotFoundException(message="Device 3f9 not found")
+        resp = await handle_http_exception(_request, HTTPException(status_code=404, detail=str(exc)))
+        body = resp.body.decode()
+        assert resp.status_code == 404
+        assert '"code":"NOT_FOUND"' in body, body
+        assert "Error NOT_FOUND" not in body, body
+        assert "Device 3f9 not found" in body, body
+
     async def test_generic_exception(self, _request):
         exc = RuntimeError("unexpected")
         resp = await handle_generic_exception(_request, exc)
@@ -126,12 +196,20 @@ async def test_default_logging_format():
 
 @pytest.mark.asyncio
 async def test_sentry_init():
-    """Cover main.py lines 75-81 — sentry_sdk.init with DSN in production."""
-    with patch("src.main.settings.sentry_dsn", "https://key@sentry.io/proj"), \
-         patch("src.main.settings.environment", "production"), \
-         patch("src.main.sentry_sdk.init") as mock_init:
-        _ = importlib.reload(importlib.import_module("src.main"))
-    mock_init.assert_called_once()
+    """Cover main.py's module-level Sentry init (DSN set + production).
+
+    A fake sentry_sdk is injected into sys.modules first: the package is
+    optional at runtime, so patching ``src.main.sentry_sdk.init`` directly would
+    error out on any environment that doesn't have it installed.
+    """
+    fake_sentry = MagicMock()
+    with patch.dict(sys.modules, {"sentry_sdk": fake_sentry}), \
+         patch("src.main.settings.sentry_dsn", "https://key@sentry.io/proj"), \
+         patch("src.main.settings.environment", "production"):
+        importlib.reload(importlib.import_module("src.main"))
+
+    fake_sentry.init.assert_called_once()
+    assert fake_sentry.init.call_args.kwargs["dsn"] == "https://key@sentry.io/proj"
 
 
 # ── Root health endpoint ─────────────────────────────────────────────────

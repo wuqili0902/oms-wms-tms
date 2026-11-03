@@ -15,7 +15,7 @@ from jose import JWTError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from src.core.security import TokenInvalid, decode_token
+from src.core.security import TokenExpired, TokenInvalid, decode_token
 
 # Configure structured logging for middleware
 logger = logging.getLogger("middleware")
@@ -110,53 +110,83 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         await self.app(scope, receive, wrapped_send)
 
 
+# Audit logging only ever shows a bounded summary, so the middleware peeks at
+# this many bytes of the request body and then lets the rest stream through.
+AUDIT_PREVIEW_BYTES = 8192
+
+# Hard cap on how many transport messages one peek will walk.  A client that
+# dribbles 1-byte chunks must not turn the audit log into an unbounded loop.
+_MAX_PEEK_MESSAGES = 4096
+
+
 class _BodyBuffer:
-    """Wrap a *receive* callable so that body data can be read multiple times.
+    """Peek at the head of the request body for audit logging, then hand the
+    body to the application *verbatim*.
 
-    The first call to ``read_all()`` consumes all chunks from the underlying
-    receive into an internal buffer.  Subsequent ``__call__`` invocations
-    replay the buffered data in 8KB chunks so that downstream handlers
-    (FastAPI's body parser) can parse the same request body.
+    The earlier version of this class buffered the whole body for the log line
+    and replayed it in 8 KB pieces:
 
-    Call ``read_all()`` first (for audit logging), then pass the same
-    ``_BodyBuffer`` instance as the ``receive`` to FastAPI.
+    * a large upload was held in memory twice (chunk list + join) for a summary
+      that prints at most 20 keys;
+    * the replayed messages carried no ``more_body``, so Starlette stopped after
+      the first piece — POST/PUT bodies above 8 KB reached the endpoint
+      truncated, and an empty body came back as ``http.disconnect``.
+
+    Now the peek is bounded, every message the peek consumed is replayed with
+    its original flags, and anything past the preview is streamed straight from
+    the transport.  A malformed or disconnect message ends the peek instead of
+    spinning forever.
     """
 
-    def __init__(self, receive: Receive) -> None:
+    def __init__(self, receive: Receive, preview_limit: int = AUDIT_PREVIEW_BYTES) -> None:
         self._receive = receive
-        self._chunks: list[bytes] = []
-        self._byte_offset = 0
-        self._done = False
+        self._preview_limit = preview_limit
+        self._preview = b""
+        self._queued: list[dict] = []
+        self._queued_pos = 0
+        self._peeked = False
+        self.preview_truncated = False  # body continued past the preview
+
+    async def read_preview(self) -> bytes:
+        """Consume transport messages up to the preview limit or body end."""
+        if self._peeked:
+            return self._preview
+        self._peeked = True
+
+        for _ in range(_MAX_PEEK_MESSAGES):
+            message = await self._receive()
+            # Queue it first: whatever the transport sent must still reach the
+            # application untouched, even if the peek stops here.
+            self._queued.append(message)
+
+            if not isinstance(message, dict) or message.get("type") == "http.disconnect":
+                break  # malformed/disconnect: the endpoint decides, not us
+            body = message.get("body") or b""
+            if isinstance(body, (bytes, bytearray)):
+                self._preview += bytes(body)
+            if not message.get("more_body", False):
+                break  # body complete — nothing left to stream
+            if len(self._preview) >= self._preview_limit:
+                self.preview_truncated = True
+                break  # stop buffering here; the rest streams to the endpoint
+        else:
+            # Message cap hit while the transport still promised more_body.
+            last = self._queued[-1] if self._queued else None
+            if isinstance(last, dict) and last.get("more_body"):
+                self.preview_truncated = True
+        return self._preview
 
     async def read_all(self) -> bytes:
-        """Consume all body chunks and return them as a single blob."""
-        if not self._chunks and not self._done:
-            while True:
-                message = await self._receive()
-                body = message.get("body", b"")
-                if not body:
-                    break
-                self._chunks.append(body)
-            self._done = True
-        return b"".join(self._chunks)
+        """Compatibility alias — returns the audit preview, not the whole body."""
+        return await self.read_preview()
 
     async def __call__(self) -> dict:
-        """Replay buffered data in 8KB chunks, or signal disconnect."""
-        if not self._done:
-            await self.read_all()
-
-        total_len = sum(len(c) for c in self._chunks)
-        if not self._chunks:
-            return {"type": "http.disconnect"}
-
-        if self._byte_offset < total_len:
-            flat = b"".join(self._chunks)
-            chunk_size = min(8192, total_len - self._byte_offset)
-            data = flat[self._byte_offset : self._byte_offset + chunk_size]
-            self._byte_offset += chunk_size
-            return {"type": "http.request", "body": data}
-
-        return {"type": "http.disconnect"}
+        """ASGI receive: replay the peeked messages, then pass the transport through."""
+        if self._queued_pos < len(self._queued):
+            message = self._queued[self._queued_pos]
+            self._queued_pos += 1
+            return message
+        return await self._receive()
 
 
 class AuditLogMiddleware(BaseHTTPMiddleware):
@@ -199,7 +229,11 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 payload = decode_token(token)
                 if "sub" in payload:
                     return payload["sub"]
-            except (JWTError, TokenInvalid, json.JSONDecodeError, KeyError):
+            except (JWTError, TokenInvalid, TokenExpired, json.JSONDecodeError, KeyError):
+                # TokenExpired is not a JWTError subclass.  Leaving it out made an
+                # expired token raise out of the audit middleware, so every write
+                # request with a lapsed token answered 500 instead of reaching the
+                # endpoint that would have said 401.
                 pass
         return "anonymous"
 
@@ -227,7 +261,10 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         return str(value)[:100]
 
     async def _read_raw_body(self, buffer: _BodyBuffer) -> bytes:
-        """Return raw request body bytes from a _BodyBuffer or a Starlette Request."""
+        """Return request body bytes from a _BodyBuffer (preview) or a Starlette Request."""
+        read_preview = getattr(buffer, "read_preview", None)
+        if callable(read_preview):
+            return await read_preview()
         read_all = getattr(buffer, "read_all", None)
         if callable(read_all):
             return await read_all()
@@ -239,14 +276,20 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
     async def _extract_request_body(self, buffer: _BodyBuffer, logger=None) -> Any | None:
         """Extract and serialize the request body for audit logging.
 
-        Reads the raw body (via ``read_all()`` on a _BodyBuffer or ``body()`` on
-        a Request), then returns a truncated summary (first 20 keys/items) with
-        sensitive fields redacted. Redaction recurses into nested structures so
-        secrets buried deeper than the top level are not serialized verbatim.
-        The buffer can still replay to FastAPI afterward.
+        Reads the body preview (via ``read_preview()`` on a _BodyBuffer or
+        ``body()`` on a Request), then returns a truncated summary (first 20
+        keys/items) with sensitive fields redacted. Redaction recurses into
+        nested structures so secrets buried deeper than the top level are not
+        serialized verbatim.
+        The buffer still replays every message to FastAPI afterwards.
         """
         try:
             raw_body = await self._read_raw_body(buffer)
+
+            if getattr(buffer, "preview_truncated", False):
+                # The peek hit its byte cap mid-stream: summarising half a JSON
+                # document would put misleading fragments in the audit log.
+                return f"<request body over {AUDIT_PREVIEW_BYTES} bytes — not summarised>"
 
             body_str = raw_body.decode("utf-8", errors="replace")
             try:

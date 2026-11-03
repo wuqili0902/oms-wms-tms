@@ -59,7 +59,7 @@ async def import_inventory_from_csv(content: str, db: AsyncSession) -> dict:
                 select(Inventory).where(
                     Inventory.sku_id == uuid.UUID(sku_id),
                     Inventory.warehouse_id == uuid.UUID(warehouse_id),
-                )
+                ).with_for_update()
             )
             inv = result.scalar_one_or_none()
             if inv:

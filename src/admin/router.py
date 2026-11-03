@@ -4,12 +4,14 @@ Jinja2-based admin panel for team operations.
 All routes require authentication.
 """
 import csv
+import json
 import logging
+import uuid
 from datetime import UTC, datetime
 from io import StringIO
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -19,7 +21,7 @@ from src.analytics import service as analytics_service
 from src.auth import service as auth_service
 from src.barcode import service as barcode_service
 from src.core.database import get_db
-from src.core.dependencies import get_current_user
+from src.core.dependencies import get_current_user, require_permission
 from src.core.exceptions import ValidationException
 from src.core.export import export_inventory, export_orders, stream_csv
 from src.core.import_utils import import_inventory_from_csv, import_orders_from_csv
@@ -33,6 +35,20 @@ router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(get_cu
 templates = Jinja2Templates(directory="src/admin/templates")
 
 logger = logging.getLogger(__name__)
+
+
+def _user_id(raw: str) -> uuid.UUID:
+    """Read the user id out of an admin URL.
+
+    ``uuid.UUID(user_id)`` inside the toggle and delete routes raised on a
+    half-copied id — the panel links users by their id, so a stale bookmark is the
+    ordinary input — and the operator got the server-error page.  An id that is
+    not an id has the same answer as a user who is not in the list.
+    """
+    try:
+        return uuid.UUID(str(raw))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=404, detail="User not found") from None
 
 
 def _render(request: Request, template: str, context: dict) -> HTMLResponse:
@@ -51,6 +67,18 @@ def _get_flashes(request: Request) -> list[tuple[str, str]]:
 
 # ── Dashboard ─────────────────────────────────────────────────────────────
 
+
+def _safe_json(obj) -> str:
+    """JSON serialisation safe for embedding inside a ``<script>`` block.
+
+    The templates render these values with ``|safe``; plain ``json.dumps``
+    leaves ``</`` intact, so a value containing ``</script>`` would close the
+    script tag and let attacker-controlled data execute.  Escaping the solidus
+    (``<\\/``) is JSON-legal and removes that exit.
+    """
+    return json.dumps(obj).replace("</", "<\\/")
+
+
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
@@ -62,7 +90,6 @@ async def dashboard(
     status_task = analytics_service.get_status_distribution(db)
     low_stock_task = analytics_service.get_low_stock_items(db)
     recent_task = analytics_service.get_recent_orders(db, 10)
-    import json
     stats, trends, status_dist, low_stock, recent_orders = await gather(
         stats_task, trends_task, status_task, low_stock_task, recent_task,
     )
@@ -74,10 +101,10 @@ async def dashboard(
             "flashes": _get_flashes(request),
             "now": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
             "stats": stats,
-            "order_trends_json": json.dumps([t["date"] for t in trends]),
-            "order_counts_json": json.dumps([t["count"] for t in trends]),
-            "status_labels_json": json.dumps([s["status"] for s in status_dist]),
-            "status_counts_json": json.dumps([s["count"] for s in status_dist]),
+            "order_trends_json": _safe_json([t["date"] for t in trends]),
+            "order_counts_json": _safe_json([t["count"] for t in trends]),
+            "status_labels_json": _safe_json([s["status"] for s in status_dist]),
+            "status_counts_json": _safe_json([s["count"] for s in status_dist]),
             "low_stock": low_stock,
             "recent_orders": recent_orders,
         },
@@ -163,7 +190,8 @@ async def update_order_status(
 
 # ── User CRUD (POST) ──────────────────────────────────────────────────────
 
-@router.post("/users", response_class=HTMLResponse)
+@router.post("/users", response_class=HTMLResponse,
+             dependencies=[Depends(require_permission("admin.user.manage"))])
 async def create_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -184,16 +212,15 @@ async def create_user(
     return RedirectResponse(url="/admin/users", status_code=303)
 
 
-@router.post("/users/{user_id}/toggle", response_class=HTMLResponse)
+@router.post("/users/{user_id}/toggle", response_class=HTMLResponse,
+             dependencies=[Depends(require_permission("admin.user.manage"))])
 async def toggle_user_active(
     request: Request,
     user_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    import uuid as _uuid
-
     from src.auth.models import User
-    result = await db.execute(select(User).where(User.id == _uuid.UUID(user_id)))
+    result = await db.execute(select(User).where(User.id == _user_id(user_id)))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -202,18 +229,17 @@ async def toggle_user_active(
     return RedirectResponse(url="/admin/users", status_code=303)
 
 
-@router.post("/users/{user_id}/delete", response_class=HTMLResponse)
+@router.post("/users/{user_id}/delete", response_class=HTMLResponse,
+             dependencies=[Depends(require_permission("admin.user.manage"))])
 async def delete_user(
     request: Request,
     user_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    import uuid as _uuid
-
     from sqlalchemy import delete as sa_delete
 
     from src.auth.models import User
-    await db.execute(sa_delete(User).where(User.id == _uuid.UUID(user_id)))
+    await db.execute(sa_delete(User).where(User.id == _user_id(user_id)))
     await db.commit()
     return RedirectResponse(url="/admin/users", status_code=303)
 
@@ -378,27 +404,27 @@ async def list_users(
 
 # ── Export ────────────────────────────────────────────────────────────────────
 
-@router.get("/export/orders")
+@router.get("/export/orders",
+            dependencies=[Depends(require_permission("admin.export.manage"))])
 async def export_orders_csv(
     db: AsyncSession = Depends(get_db),
 ):
-    rows = await export_orders(db)
     columns = ["order_no", "status", "customer_id", "total_amount", "created_at", "updated_at"]
     return StreamingResponse(
-        stream_csv(rows, columns),
+        stream_csv(export_orders(db), columns),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=orders.csv"},
     )
 
 
-@router.get("/export/inventory")
+@router.get("/export/inventory",
+            dependencies=[Depends(require_permission("admin.export.manage"))])
 async def export_inventory_csv(
     db: AsyncSession = Depends(get_db),
 ):
-    rows = await export_inventory(db)
     columns = ["sku_id", "warehouse_id", "quantity", "locked_qty", "min_qty", "updated_at"]
     return StreamingResponse(
-        stream_csv(rows, columns),
+        stream_csv(export_inventory(db), columns),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=inventory.csv"},
     )
@@ -449,7 +475,8 @@ async def import_inventory(
 
 # ── Webhooks ──────────────────────────────────────────────────────────────
 
-@router.get("/webhooks", response_class=HTMLResponse)
+@router.get("/webhooks", response_class=HTMLResponse,
+            dependencies=[Depends(require_permission("admin.webhook.manage"))])
 async def list_webhooks(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -474,7 +501,8 @@ async def list_webhooks(
     })
 
 
-@router.post("/webhooks")
+@router.post("/webhooks",
+             dependencies=[Depends(require_permission("admin.webhook.manage"))])
 async def create_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -496,7 +524,8 @@ async def create_webhook(
     return RedirectResponse(url="/admin/webhooks?flash_success=Webhook created", status_code=303)
 
 
-@router.post("/webhooks/{target_id}/delete")
+@router.post("/webhooks/{target_id}/delete",
+             dependencies=[Depends(require_permission("admin.webhook.manage"))])
 async def delete_webhook(
     target_id: int,
     db: AsyncSession = Depends(get_db),
@@ -577,7 +606,8 @@ async def ml_forecast_page(
     })
 
 
-@router.get("/export/transport-orders")
+@router.get("/export/transport-orders",
+            dependencies=[Depends(require_permission("admin.export.manage"))])
 async def export_transport_orders_csv(db: AsyncSession = Depends(get_db)):
     orders, _ = await tms_service.list_transport_orders(db, page=1, page_size=10000)
     output = StringIO()
@@ -589,11 +619,12 @@ async def export_transport_orders_csv(db: AsyncSession = Depends(get_db)):
                          o.get("delivery_address",{}).get("city",""),
                          o.get("total_weight_kg",""), o.get("created_at","")])
     output.seek(0)
-    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+    return Response(output.getvalue(), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=transport_orders.csv"})
 
 
-@router.get("/export/returns")
+@router.get("/export/returns",
+            dependencies=[Depends(require_permission("admin.export.manage"))])
 async def export_returns_csv(db: AsyncSession = Depends(get_db)):
     orders, _ = await tms_service.list_return_orders(db)
     output = StringIO()
@@ -602,11 +633,12 @@ async def export_returns_csv(db: AsyncSession = Depends(get_db)):
     for o in orders:
         writer.writerow([o.get("return_no",""), o.get("status",""), o.get("reason",""), o.get("refund_amount","0")])
     output.seek(0)
-    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+    return Response(output.getvalue(), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=returns.csv"})
 
 
-@router.get("/export/exceptions")
+@router.get("/export/exceptions",
+            dependencies=[Depends(require_permission("admin.export.manage"))])
 async def export_exceptions_csv(db: AsyncSession = Depends(get_db)):
     excs = await tms_service.list_exceptions(db)
     output = StringIO()
@@ -615,11 +647,12 @@ async def export_exceptions_csv(db: AsyncSession = Depends(get_db)):
     for e in excs:
         writer.writerow([e.get("id",""), e.get("status",""), e.get("type",""), e.get("severity","")])
     output.seek(0)
-    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+    return Response(output.getvalue(), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=exceptions.csv"})
 
 
-@router.get("/export/route-plans")
+@router.get("/export/route-plans",
+            dependencies=[Depends(require_permission("admin.export.manage"))])
 async def export_route_plans_csv(db: AsyncSession = Depends(get_db)):
     from src.tms.models import RoutePlan
     plans_result = await db.execute(select(RoutePlan).order_by(RoutePlan.created_at.desc()))
@@ -631,7 +664,7 @@ async def export_route_plans_csv(db: AsyncSession = Depends(get_db)):
         writer.writerow([p.get("plan_no",""), p.get("origin_city",""), p.get("destination_city",""),
                          p.get("total_distance_km",""), p.get("total_cost_amount","")])
     output.seek(0)
-    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+    return Response(output.getvalue(), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=route_plans.csv"})
 
 
@@ -671,5 +704,5 @@ async def export_forecast_csv(db: AsyncSession = Depends(get_db)):
     for p in fc.forecast(""):
         writer.writerow([p.date, p.predicted_orders or "", p.confidence_lower or "", p.confidence_upper or ""])
     output.seek(0)
-    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+    return Response(output.getvalue(), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=forecast.csv"})

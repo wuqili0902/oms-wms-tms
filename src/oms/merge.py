@@ -21,7 +21,7 @@ from src.oms.models import (
     OrderStatus,
     SplitChildOrder,
 )
-from src.oms.service import _order_to_dict, _to_uuid
+from src.oms.service import _order_to_dict_async, _to_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +70,9 @@ async def split_order(
             sku_str = item_req.get("sku", "")
             qty = int(item_req.get("quantity", 0))
             orig = None
+            # Match by UUID or by GTIN
             for oi in order.items_list:
-                if str(oi.sku_id) == sku_str:
+                if sku_str and (str(oi.sku_id) == sku_str or oi.gtin == sku_str):
                     orig = oi
                     break
             unit_price = orig.unit_price if orig else Decimal("0")
@@ -96,7 +97,7 @@ async def split_order(
         db.add(link)
 
         child.total_amount = total
-        child_orders.append(await _order_to_dict(db, child))
+        child_orders.append(await _order_to_dict_async(db, child))
 
     await db.commit()
     return child_orders
@@ -189,6 +190,7 @@ async def merge_orders(
         "total_amount": str(group.total_amount),
         "notes": group.notes or "",
         "order_ids": [str(o.id) for o in orders],
+        "child_order_ids": [str(o.id) for o in orders],
         "created_at": group.created_at.isoformat() if group.created_at else "",
     }
 

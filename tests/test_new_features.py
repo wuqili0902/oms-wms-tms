@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 setattr(SQLiteTypeCompiler, "visit_JSONB", lambda self, type_, **kw: "JSON")
 
 from src.core.database import get_db  # noqa: E402
+from src.core.dependencies import get_current_user  # noqa: E402
 from src.main import app  # noqa: E402
 from src.models import Base  # noqa: E402
 
@@ -82,6 +83,7 @@ async def async_client(sqlite_engine):
         yield shared.session
 
     app.dependency_overrides[get_db] = _override
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "nf-test-user"}
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
@@ -422,9 +424,17 @@ class TestAmazonConnector:
         assert upd["status"] == "Shipped"
 
     def test_parse_amazon_order_no_items(self):
+        """An order with nothing on it used to parse into an empty order.
+
+        It was asserted as behaviour.  Downstream, that order sits on every
+        screen as work that does not exist: nothing to pick, nothing to ship,
+        nothing to invoice.
+        """
         from src.connectors.amazon_sp_api import parse_amazon_order
-        msg = parse_amazon_order({"AmazonOrderId": "AMZ-000"})
-        assert msg.payload["items"] == []
+        from src.core.exceptions import ValidationException
+
+        with pytest.raises(ValidationException, match="no lines"):
+            parse_amazon_order({"AmazonOrderId": "AMZ-000"})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

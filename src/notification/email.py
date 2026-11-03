@@ -42,13 +42,18 @@ class EmailService:
             if message.body_html:
                 msg.attach(MIMEText(message.body_html, "html"))
             smtp = aiosmtplib.SMTP(hostname=self.host, port=self.port)
-            await smtp.connect()
-            if self.use_tls:
-                await smtp.starttls()
-            if self.username:
-                await smtp.login(self.username, self.password)
-            await smtp.sendmail(self.from_addr, message.to, msg.as_string())
-            await smtp.quit()
+            try:
+                await smtp.connect()
+                if self.use_tls:
+                    await smtp.starttls()
+                if self.username:
+                    await smtp.login(self.username, self.password)
+                await smtp.sendmail(self.from_addr, message.to, msg.as_string())
+            finally:
+                try:
+                    await smtp.quit()
+                except Exception:
+                    pass
             logger.info("Email sent: subject=%s to=%s", message.subject, message.to)
             return True
         except Exception as e:

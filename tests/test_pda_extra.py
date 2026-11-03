@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
+from src.core.dependencies import get_current_user
 from src.main import app
 from src.pda.models import PendingMutation, SyncOperation
 from src.pda.service import enqueue_mutation, process_pending_mutations
@@ -121,6 +122,7 @@ class TestRouter:
         async def _get_db():
             return mock_db
         app.dependency_overrides[get_db] = _get_db
+        app.dependency_overrides[get_current_user] = lambda: {"sub": "pda-extra-user"}
         transport = ASGITransport(app=app)
         c = AsyncClient(transport=transport, base_url="http://test")
         yield c
@@ -128,7 +130,9 @@ class TestRouter:
 
     async def test_create_mutation_endpoint(self, client, mock_db):
         mock_db.commit = AsyncMock()
-        mock_db.refresh = AsyncMock()
+        # Simulate the DB-generated autoincrement id on refresh so the
+        # response model (id: int) validates.
+        mock_db.refresh = AsyncMock(side_effect=lambda obj: setattr(obj, "id", 1))
 
         resp = await client.post("/pda/mutations", json={
             "device_id": "api-test", "entity_type": "inventory",

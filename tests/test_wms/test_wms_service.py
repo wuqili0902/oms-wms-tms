@@ -3,11 +3,43 @@
 Tests all untested paths in src/wms/service.py using the db_session fixture.
 """
 import uuid
+from decimal import Decimal
 
 import pytest
 
 from src.core.exceptions import NotFoundException, ValidationException
 from src.wms import service as wms_service
+
+
+async def _create_order(db_session) -> str:
+    """A real order, for the tests that ship one.
+
+    ``shipments.order_id`` is a NOT NULL foreign key into ``orders``.  These
+    tests used to hand ``create_shipment`` a uuid pulled out of the air: SQLite
+    does not enforce foreign keys, so the suite was filing shipments for orders
+    that never existed — a handover sheet with nothing behind it.  On PostgreSQL
+    the same insert is an FK violation, which reaches the operator as a 500.
+    """
+    from src.models.shared_models import Customer
+    from src.oms.models import Order, OrderStatus
+
+    customer = Customer(
+        id=uuid.uuid4(),
+        code=f"C-{uuid.uuid4().hex[:8]}",
+        name="Shipping Test Customer",
+    )
+    order = Order(
+        id=uuid.uuid4(),
+        order_no=f"ORD-{uuid.uuid4().hex[:10].upper()}",
+        status=OrderStatus.PENDING,
+        customer_id=customer.id,
+        items={},
+        total_amount=Decimal("0.00"),
+        notes="",
+    )
+    db_session.add_all([customer, order])
+    await db_session.commit()
+    return str(order.id)
 
 
 class TestWarehouseCRUD:
@@ -258,31 +290,74 @@ class TestPacking:
 
 
 class TestShipping:
-    """Shipment creation and tracking."""
+    """Shipment creation and tracking.
+
+    Every shipment here is built on an order that exists — see
+    :func:`_create_order`.  ``create_shipment`` answered ``{"count",
+    "shipments"}`` (one per order) after the 新建发货单 screen's order list
+    started reaching it; ``shipment["shipment_no"]`` is the number the shipping
+    screen shows, which used to be blank on every row.
+    """
 
     @pytest.mark.asyncio
     async def test_create_shipment(self, db_session):
         wh = await wms_service.create_warehouse(db_session, {"code": "WH-SH", "name": "Ship"})
-        shipment = await wms_service.create_shipment(db_session, {
-            "order_id": str(uuid.uuid4()), "warehouse_id": wh["id"],
+        result = await wms_service.create_shipment(db_session, {
+            "order_id": await _create_order(db_session), "warehouse_id": wh["id"],
         })
+        assert result["count"] == 1
+        shipment = result["shipments"][0]
         assert "tracking_number" in shipment
+        assert shipment["shipment_no"].startswith("SHIP-")
+
+    @pytest.mark.asyncio
+    async def test_create_shipment_for_every_order_listed(self, db_session):
+        """The 新建发货单 dialog lists orders a row at a time and posts them all."""
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-SH-LIST", "name": "ShipList"})
+        order_ids = [await _create_order(db_session) for _ in range(3)]
+        result = await wms_service.create_shipment(db_session, {
+            "warehouse_id": wh["id"], "order_ids": order_ids,
+        })
+        assert result["count"] == 3
+        assert {s["order_id"] for s in result["shipments"]} == set(order_ids)
+        assert len({s["shipment_no"] for s in result["shipments"]}) == 3
+
+    @pytest.mark.asyncio
+    async def test_create_shipment_order_does_not_exist(self, db_session):
+        """A uuid that is not an order is refused, not inserted and crashed on."""
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-SH-GHOST", "name": "ShipGhost"})
+        missing = str(uuid.uuid4())
+        with pytest.raises(NotFoundException, match="not found"):
+            await wms_service.create_shipment(db_session, {"order_id": missing, "warehouse_id": wh["id"]})
 
     @pytest.mark.asyncio
     async def test_mark_shipped(self, db_session):
         wh = await wms_service.create_warehouse(db_session, {"code": "WH-SH2", "name": "Ship2"})
-        shipment = await wms_service.create_shipment(db_session, {
-            "order_id": str(uuid.uuid4()), "warehouse_id": wh["id"],
-        })
+        shipment = (await wms_service.create_shipment(db_session, {
+            "order_id": await _create_order(db_session), "warehouse_id": wh["id"],
+        }))["shipments"][0]
         result = await wms_service.mark_shipped(db_session, shipment["id"], "TRK-123", "FedEx")
         assert result["status"] == "shipped"
         assert result["tracking_number"] == "TRK-123"
 
     @pytest.mark.asyncio
+    async def test_mark_shipped_twice_is_refused(self, db_session):
+        """A second 发货 click must not stamp a second handover onto the record."""
+        wh = await wms_service.create_warehouse(db_session, {"code": "WH-SH-DOUBLE", "name": "ShipDouble"})
+        shipment = (await wms_service.create_shipment(db_session, {
+            "order_id": await _create_order(db_session), "warehouse_id": wh["id"],
+        }))["shipments"][0]
+        await wms_service.mark_shipped(db_session, shipment["id"], "TRK-9", "SF")
+        with pytest.raises(ValidationException, match="already shipped"):
+            await wms_service.mark_shipped(db_session, shipment["id"], "TRK-10", "SF")
+
+    @pytest.mark.asyncio
     async def test_list_shipments(self, db_session):
         wh = await wms_service.create_warehouse(db_session, {"code": "WH-SH3", "name": "Ship3"})
-        await wms_service.create_shipment(db_session, {"order_id": str(uuid.uuid4()), "warehouse_id": wh["id"]})
-        await wms_service.create_shipment(db_session, {"order_id": str(uuid.uuid4()), "warehouse_id": wh["id"]})
+        for _ in range(2):
+            await wms_service.create_shipment(db_session, {
+                "order_id": await _create_order(db_session), "warehouse_id": wh["id"],
+            })
         shipments = await wms_service.list_shipments(db_session)
         assert len(shipments) >= 2
 
@@ -290,7 +365,7 @@ class TestShipping:
     async def test_full_lifecycle(self, db_session):
         """End-to-end: create wave → start → complete → pack → ship."""
         wh = await wms_service.create_warehouse(db_session, {"code": "WH-E2E", "name": "E2E"})
-        order_id = str(uuid.uuid4())
+        order_id = await _create_order(db_session)
 
         # Create wave
         wave = await wms_service.create_picking_wave(db_session, {
@@ -311,12 +386,14 @@ class TestShipping:
         assert pack["box_count"] == 2
 
         # Ship
-        shipment = await wms_service.create_shipment(db_session, {
+        shipment = (await wms_service.create_shipment(db_session, {
             "order_id": order_id, "warehouse_id": wh["id"],
             "packing_record_id": pack["id"], "tracking_number": "ZTO-999",
-        })
+        }))["shipments"][0]
+        assert shipment["status"] == "packed"  # a packing record went with it
         shipped = await wms_service.mark_shipped(db_session, shipment["id"], carrier="ZTO")
         assert shipped["status"] == "shipped"
+        assert shipped["tracking_number"] == "ZTO-999"  # the 发货 button sends no body
 
 
 class TestVendorCRUD:

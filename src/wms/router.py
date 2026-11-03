@@ -18,21 +18,29 @@ from src.wms.schemas import (
     CreditMemoResponse,
     InventoryAdjust,
     InventoryResponse,
+    InventorySnapshotResponse,
     InvoiceCreate,
     InvoiceResponse,
     LocationCreate,
     LocationListResponse,
     LocationResponse,
     LocationUpdate,
+    PackingCreate,
+    PackingRecordResponse,
     PickingWaveCreate,
     PickingWaveResponse,
     PurchaseOrderCreate,
     PurchaseOrderListResponse,
+    PurchaseOrderReceive,
     PurchaseOrderResponse,
+    ShipmentCreate,
+    ShipmentCreateResult,
     ShipmentResponse,
+    ShipmentShip,
+    StockCountSubmit,
     StockInItemCreate,
-    StockInResponseWithItems,
     StockMovementResponse,
+    TransferOrderCreate,
     VendorCreate,
     VendorListResponse,
     VendorResponse,
@@ -76,11 +84,16 @@ async def adjust_inventory(
 
 @router.post("/transfers", status_code=status.HTTP_201_CREATED)
 async def create_transfer_order(
-    data: dict,
+    data: TransferOrderCreate,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Create a transfer order."""
+    """Create a transfer order — stock from one warehouse to another.
+
+    The body is typed (``src/wms.schemas.TransferOrderCreate``): both ends of the
+    transfer are required and resolved by id or code, the lines are validated, and
+    a warehouse cannot transfer to itself.
+    """
     try:
         return await wms_service.create_transfer_order(db, data)
     except (NotFoundException, ValidationException) as e:
@@ -102,7 +115,7 @@ async def list_transfers(
 
 @router.post("/inventory/count/submit")
 async def submit_stock_count(
-    data: dict,
+    data: StockCountSubmit,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -110,9 +123,16 @@ async def submit_stock_count(
 
     Mobile flow: operator scans SKUs and enters actual quantities.
     System compares with inventory → adjusts accordingly.
+
+    The body is typed (``src/wms/schemas.py:StockCountSubmit``): the key
+    spellings the PDA and the manual use are aliases of the same fields, an
+    unparsable count quantity is a 422 naming the line, and a body with no
+    counted lines is refused before any stock is touched.  The service keeps
+    reading a dict — about twenty tests call it directly, and the aliases are
+    resolved by ``model_dump()`` on the way in.
     """
     try:
-        return await wms_service.adjust_stock_count(db, data)
+        return await wms_service.adjust_stock_count(db, data.model_dump())
     except (NotFoundException, ValidationException) as e:
         code = 404 if isinstance(e, NotFoundException) else 422
         raise HTTPException(status_code=code, detail=str(e))
@@ -120,19 +140,24 @@ async def submit_stock_count(
 
 @router.post("/inventory/adjust-stock-count")
 async def adjust_stock_count_mobile(
-    data: dict,
+    data: StockCountSubmit,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Raw-dict version of stock count for mobile (aliases fields)."""
+    """The stock-count endpoint the mobile client calls.
+
+    Same body, same rules as ``POST /inventory/count/submit`` — the two routes
+    exist because the handheld and the manual named the same operation
+    differently, and only one of them used to alias its fields in the service.
+    """
     try:
-        return await wms_service.adjust_stock_count(db, data)
+        return await wms_service.adjust_stock_count(db, data.model_dump())
     except (NotFoundException, ValidationException) as e:
         code = 404 if isinstance(e, NotFoundException) else 422
         raise HTTPException(status_code=code, detail=str(e))
 
 
-@router.post("/inventory/items", response_model=StockInResponseWithItems, status_code=status.HTTP_201_CREATED)
+@router.post("/inventory/items", response_model=InventorySnapshotResponse, status_code=status.HTTP_201_CREATED)
 async def stock_in(
     warehouse_id: str,
     data: StockInItemCreate,
@@ -225,14 +250,21 @@ async def complete_picking_wave(
 
 # ═══ Packing ═══════════════════════════════════════════════════════════════════
 
-@router.post("/packing", status_code=status.HTTP_201_CREATED)
+@router.post("/packing", response_model=PackingRecordResponse, status_code=status.HTTP_201_CREATED)
 async def create_packing(
-    data: dict,
+    data: PackingCreate,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    """Record the boxes a completed picking wave was packed into.
+
+    The body is typed, and it accepts the key the 打包记录 screen posts
+    (``wave_id``) as well as the one this endpoint read (``picking_wave_id``).
+    The screen's shape used to be ``data["picking_wave_id"]`` — a KeyError, a
+    500, and a 打包记录成功 alert the operator never saw.
+    """
     try:
-        return await wms_service.create_packing(db, data)
+        return await wms_service.create_packing(db, data.model_dump())
     except (NotFoundException, ValidationException) as e:
         code = 404 if isinstance(e, NotFoundException) else 422
         raise HTTPException(status_code=code, detail=str(e))
@@ -240,34 +272,52 @@ async def create_packing(
 
 # ═══ Shipping ══════════════════════════════════════════════════════════════════
 
-@router.post("/shipments", status_code=status.HTTP_201_CREATED)
+@router.post("/shipments", response_model=ShipmentCreateResult, status_code=status.HTTP_201_CREATED)
 async def create_shipment(
-    data: dict,
+    data: ShipmentCreate,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    """Create one shipment per order the body names.
+
+    ``order_ids`` is the shape 新建发货单 sends (a textarea of order ids, one
+    shipment per line); ``order_id`` stays for single-order callers.  The
+    response is ``{count, shipments}`` in both cases — the screen that listed
+    five orders gets five shipments, not the first and a 201.
+    """
     try:
-        return await wms_service.create_shipment(db, data)
+        return await wms_service.create_shipment(db, data.model_dump())
     except (NotFoundException, ValidationException) as e:
         code = 404 if isinstance(e, NotFoundException) else 422
         raise HTTPException(status_code=code, detail=str(e))
 
 
-@router.post("/shipments/{shipment_id}/ship")
+@router.post("/shipments/{shipment_id}/ship", response_model=ShipmentResponse)
 async def ship_package(
     shipment_id: str,
-    data: dict,
+    data: ShipmentShip | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    """Hand a shipment over to its carrier.
+
+    The body is optional: the 发货 button on the shipment list posts none, and
+    a shipment marked shipped keeps the tracking number and carrier it already
+    carried.  A body that *is* sent is typed — ``tracking`` is refused, not
+    ignored, because an unrecorded tracking number is how a parcel leaves
+    without a way to follow it.
+    """
+    body = data or ShipmentShip()
     try:
         return await wms_service.mark_shipped(
-            db, shipment_id,
-            tracking_number=data.get("tracking_number", ""),
-            carrier=data.get("carrier", ""),
+            db,
+            shipment_id,
+            tracking_number=body.tracking_number,
+            carrier=body.carrier,
         )
-    except NotFoundException as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except (NotFoundException, ValidationException) as e:
+        code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=code, detail=str(e))
 
 
 @router.get("/shipments", response_model=list[ShipmentResponse])
@@ -361,22 +411,34 @@ async def create_purchase_order(
 async def list_purchase_orders(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
+    # The clients asked for what was waiting to be received and the filter was
+    # dropped on the floor: every status returned the same unfiltered list.
+    # `alias="status"` keeps the query name clients already send; naming the
+    # parameter status_filter avoids shadowing the imported fastapi `status`.
+    status_filter: str | None = Query(
+        None, alias="status",
+        description="draft | approved | partial | received, or 'pending' for approved+partial",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    return await wms_service.list_purchase_orders(db, page=page, page_size=page_size)
+    return await wms_service.list_purchase_orders(
+        db, page=page, page_size=page_size, status=status_filter
+    )
 
 
+# The purchase-order lifecycle endpoints let the service's AppExceptions reach
+# the handlers in src/main.py, which already map them to the right status *and*
+# the right error code.  Re-raising them here as HTTPException relabelled every
+# rejection "HTTP_ERROR", so a client could not tell a missing order from a
+# refused state change without reading the prose.
 @router.get("/purchase-orders/{po_id}", response_model=PurchaseOrderResponse)
 async def get_purchase_order(
     po_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    try:
-        return await wms_service.get_purchase_order(db, po_id)
-    except NotFoundException as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    return await wms_service.get_purchase_order(db, po_id)
 
 
 @router.post("/purchase-orders/{po_id}/approve", response_model=PurchaseOrderResponse)
@@ -385,24 +447,21 @@ async def approve_purchase_order(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    try:
-        return await wms_service.approve_purchase_order(db, po_id)
-    except (NotFoundException, ValidationException) as e:
-        status_code = 404 if isinstance(e, NotFoundException) else 422
-        raise HTTPException(status_code=status_code, detail=str(e))
+    return await wms_service.approve_purchase_order(db, po_id)
 
 
 @router.post("/purchase-orders/{po_id}/receive", response_model=PurchaseOrderResponse)
 async def receive_goods(
     po_id: str,
+    # Optional at the HTTP layer on purpose: a body-less call — the only shape
+    # this endpoint used to accept — now gets the service's own explanation of
+    # what a receipt must say (where the goods landed) instead of FastAPI's
+    # "Field required".
+    data: PurchaseOrderReceive | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    try:
-        return await wms_service.receive_goods(db, po_id)
-    except (NotFoundException, ValidationException) as e:
-        status_code = 404 if isinstance(e, NotFoundException) else 422
-        raise HTTPException(status_code=status_code, detail=str(e))
+    return await wms_service.receive_goods(db, po_id, data.model_dump() if data else None)
 
 
 # ═══ Invoice CRUD ═══════════════════════════════════════════════════════
@@ -430,10 +489,10 @@ async def get_invoice(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    try:
-        return await wms_service.get_invoice(db, invoice_id)
-    except NotFoundException as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    # Re-raising the service's NotFoundException as HTTPException relabelled it
+    # "HTTP_ERROR" on the wire — a client could not tell a missing invoice from
+    # any other failure.  src/main.py maps it to 404 with its own code.
+    return await wms_service.get_invoice(db, invoice_id)
 
 
 # ═══ CreditMemo CRUD ════════════════════════════════════════════════════
@@ -461,10 +520,7 @@ async def get_credit_memo(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    try:
-        return await wms_service.get_credit_memo(db, cm_id)
-    except NotFoundException as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    return await wms_service.get_credit_memo(db, cm_id)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

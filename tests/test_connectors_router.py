@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.connectors.router import router
 from src.core.database import get_db
+from src.core.dependencies import get_current_user
 
 API = "/api/v1"
 
@@ -28,6 +29,7 @@ def client(app, mock_db):
     async def _get_db():
         return mock_db
     app.dependency_overrides[get_db] = _get_db
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "admin"}
     transport = ASGITransport(app=app)
     c = AsyncClient(transport=transport, base_url="http://test")
     yield c

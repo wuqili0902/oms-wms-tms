@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.database import async_session_factory
 from src.core.database import get_session as get_db_session
+from src.core.ws_fanout import publish_notify
 from src.notification.email import EmailMessage, email_service
 from src.notification.models import (
     Notification,
@@ -43,7 +43,13 @@ async def send_notification(
 ) -> bool:
     if db is None:
         async with get_db_session() as session:
-            return await _do_send(session, user_id, ntype, channel, title, body, data, user_email)
+            sent = await _do_send(session, user_id, ntype, channel, title, body, data, user_email)
+            # Standalone session — nobody else is going to commit it.
+            if sent:
+                await session.commit()
+            else:
+                await session.rollback()
+            return sent
     return await _do_send(db, user_id, ntype, channel, title, body, data, user_email)
 
 
@@ -57,72 +63,82 @@ async def _do_send(
     data: dict | None,
     user_email: str | None,
 ) -> bool:
-    """Send notification using an isolated session so the commit doesn't affect caller's transaction."""
+    """Persist the notification on the caller's session, then deliver it.
+
+    The record used to be written through a session taken from the global
+    engine — so a notification describing a change made on an injected session
+    (every test session, any Celery/bridge session, anything that swaps
+    engines) landed in a database nobody could read back, and the pool behind
+    that engine belonged to whatever event loop first touched it.
+
+    Writing on the caller's session through a SAVEPOINT keeps the isolation the
+    old comment promised — a failed notification write rolls back by itself and
+    never takes the caller's transaction down — while putting the row in the
+    same database as the change it reports.
+    """
     try:
         prefs = await _get_preferences(db, user_id)
-        if not _check_enabled(prefs, ntype, channel):
-            logger.debug("Notification skipped (preference): user=%s type=%s channel=%s", user_id, ntype, channel)
-            return False
-
-        # Use a dedicated session so commit() only affects notification records.
-        async with async_session_factory() as ns:
-            try:
-                notification = Notification(
-                    user_id=user_id,
-                    type=ntype,
-                    channel=channel,
-                    title=title,
-                    body=body,
-                    data=json.dumps(data, ensure_ascii=False) if data else None,
-                )
-                ns.add(notification)
-
-                if channel == NotificationChannel.WEBSOCKET:
-                    try:
-                        await ws_manager.send_to_user(user_id, {
-                            "type": "notification",
-                            "notification_type": ntype.value,
-                            "title": title,
-                            "body": body,
-                            "data": data or {},
-                            "created_at": datetime.now(UTC).isoformat(),
-                        })
-                    except Exception as e:
-                        logger.error(
-                            "WebSocket notification failed (DB saved): user=%s type=%s error=%s",
-                            user_id, ntype, e,
-                        )
-
-                if channel == NotificationChannel.EMAIL and user_email:
-                    try:
-                        email_text = f"[{ntype.value}] {title}\n\n{body}"
-                        await email_service.send(EmailMessage(to=[user_email], subject=title, body_text=email_text))
-                    except Exception as e:
-                        logger.error(
-                            "Email notification failed (DB saved): user=%s type=%s error=%s",
-                            user_id, ntype, e,
-                        )
-                        raise NotificationDeliveryError(f"Email send failed: {e}") from e
-
-                if channel == NotificationChannel.EMAIL and not user_email:
-                    logger.debug("Email skipped (no email provided): user=%s type=%s", user_id, ntype)
-
-                await ns.commit()
-                logger.info("Notification sent: user=%s type=%s channel=%s", user_id, ntype, channel)
-                return True
-            except NotificationDeliveryError:
-                raise
-            except Exception as e:
-                logger.error("Notification failed: user=%s type=%s channel=%s error=%s", user_id, ntype, channel, e)
-                await ns.rollback()
-                raise NotificationDeliveryError(f"Notification delivery failed: {e}") from e
-    except (ImportError, AttributeError):
-        # async_session_factory not available — fall back to caller's session
+    except Exception as e:  # noqa: BLE001 — a broken preferences read must not 500 the caller
+        logger.error("Notification preferences read failed: user=%s error=%s", user_id, e)
         return False
-    except NotificationDeliveryError:
-        raise
-    except Exception as e:
-        raise NotificationDeliveryError(f"Notification delivery failed: {e}") from e
+
+    if not _check_enabled(prefs, ntype, channel):
+        logger.debug("Notification skipped (preference): user=%s type=%s channel=%s", user_id, ntype, channel)
+        return False
+
+    notification = Notification(
+        user_id=user_id,
+        type=ntype,
+        channel=channel,
+        title=title,
+        body=body,
+        data=json.dumps(data, ensure_ascii=False) if data else None,
+    )
+
+    try:
+        async with db.begin_nested():  # SAVEPOINT: notification-only rollback
+            db.add(notification)
+            await db.flush()
+    except Exception as e:  # noqa: BLE001 — reported to the caller as "not sent"
+        logger.error("Notification failed: user=%s type=%s channel=%s error=%s", user_id, ntype, channel, e)
+        return False
+
+    if channel == NotificationChannel.WEBSOCKET:
+        try:
+            ws_payload = {
+                "type": "notification",
+                "notification_type": ntype.value,
+                "title": title,
+                "body": body,
+                "data": data or {},
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+            # Fan out across API workers via Redis; if Redis is down fall back
+            # to this process's sockets only.
+            if not await publish_notify(user_id, ws_payload):
+                await ws_manager.send_to_user(user_id, ws_payload)
+        except Exception as e:  # noqa: BLE001 — the record is already saved
+            logger.error(
+                "WebSocket notification failed (DB saved): user=%s type=%s error=%s",
+                user_id, ntype, e,
+            )
+
+    if channel == NotificationChannel.EMAIL:
+        if user_email:
+            try:
+                email_text = f"[{ntype.value}] {title}\n\n{body}"
+                await email_service.send(EmailMessage(to=[user_email], subject=title, body_text=email_text))
+            except Exception as e:  # noqa: BLE001 — surfaced to callers that count failures
+                logger.error(
+                    "Email notification failed (DB saved): user=%s type=%s error=%s",
+                    user_id, ntype, e,
+                )
+                raise NotificationDeliveryError(f"Email send failed: {e}") from e
+        else:
+            logger.debug("Email skipped (no email provided): user=%s type=%s", user_id, ntype)
+
+    logger.info("Notification sent: user=%s type=%s channel=%s", user_id, ntype, channel)
+    return True
 
 
 async def notify_order_status_change(order_id: int, user_id: str, status: str, order_no: str, db: AsyncSession):

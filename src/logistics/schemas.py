@@ -28,8 +28,31 @@ class WaybillResponse(BaseModel):
     label_url: str | None = None
     created_at: str
     updated_at: str | None = None
+    # Where the tracking number came from: "kdniao" = the carrier issued it,
+    # "local_placeholder" = we printed a number the carrier has never seen.  The
+    # label is printed either way, so the operator has to be able to tell.
+    tracking_source: str | None = None
+    tracking_source_note: str | None = None
 
 
 class WaybillListResponse(BaseModel):
     items: list[WaybillResponse]
     total: int
+
+
+class TrackingInfoResponse(BaseModel):
+    carrier: str
+    tracking_number: str
+    status: str
+    status_detail: str
+    estimated_delivery: str
+    events: list[dict[str, Any]]
+    # "kdniao" / "carrier_api" = the carrier answered; "mock" = demo data.  Every
+    # caller that shows a delivery state shows this too, because the demo
+    # generator's status is picked from a hash of the waybill number.
+    source: str | None = None
+    source_note: str | None = None
+
+
+class PrintWaybillResponse(BaseModel):
+    print_callback_url: str

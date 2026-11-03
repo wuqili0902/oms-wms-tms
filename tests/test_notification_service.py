@@ -95,18 +95,18 @@ class TestSendNotification:
 
 
 class TestDoSend:
-    @pytest.fixture
-    def mock_db(self):
-        return AsyncMock(spec=AsyncSession)
+    """_do_send writes on the *caller's* session inside a SAVEPOINT."""
 
     @pytest.fixture
-    def mock_isolated_session(self):
-        """Provide a mock isolated session via async_session_factory."""
-        ns = AsyncMock(spec=AsyncSession)
-        cm = MagicMock()
-        cm.__aenter__.return_value = ns
-        cm.__aexit__.return_value = False
-        return ns, cm
+    def mock_db(self):
+        """Caller session whose begin_nested() yields an async-CM savepoint."""
+        db = AsyncMock(spec=AsyncSession)
+        savepoint = AsyncMock()  # AsyncMock implements __aenter__ / __aexit__
+        # A truthy __aexit__ return would swallow the block's exception, which
+        # is not what a real SessionTransaction does on failure.
+        savepoint.__aexit__.return_value = False
+        db.begin_nested = MagicMock(return_value=savepoint)
+        return db
 
     async def test_disabled_preference_returns_false(self, mock_db):
         pref = MagicMock()
@@ -123,8 +123,7 @@ class TestDoSend:
         assert result is False
         mock_db.add.assert_not_called()
 
-    async def test_websocket_channel(self, mock_db, mock_isolated_session):
-        ns, cm = mock_isolated_session
+    async def test_websocket_channel(self, mock_db):
         pref = MagicMock()
         pref.notification_type = NotificationType.ORDER_STATUS_CHANGE
         pref.channel = NotificationChannel.WEBSOCKET
@@ -132,19 +131,20 @@ class TestDoSend:
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [pref]
         mock_db.execute.return_value = mock_result
-        with patch("src.notification.service.async_session_factory", return_value=cm), \
-             patch("src.notification.service.ws_manager.send_to_user", new_callable=AsyncMock) as mock_ws:
+        savepoint = mock_db.begin_nested.return_value
+
+        with patch("src.notification.service.ws_manager.send_to_user", new_callable=AsyncMock) as mock_ws:
             result = await notification_service._do_send(
                 mock_db, "u1", NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET,
                 "Title", "Body", {"k": "v"}, None,
             )
+
         assert result is True
-        ns.add.assert_called_once()
-        ns.commit.assert_awaited_once()
+        mock_db.add.assert_called_once()  # written on the CALLER's session, not a private one
+        savepoint.__aexit__.assert_awaited_once()  # savepoint closed cleanly
         mock_ws.assert_awaited_once()
 
-    async def test_email_channel_with_no_email_skips(self, mock_db, mock_isolated_session):
-        ns, cm = mock_isolated_session
+    async def test_email_channel_with_no_email_skips(self, mock_db):
         pref = MagicMock()
         pref.notification_type = NotificationType.LOW_STOCK_ALERT
         pref.channel = NotificationChannel.EMAIL
@@ -152,17 +152,17 @@ class TestDoSend:
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [pref]
         mock_db.execute.return_value = mock_result
-        with patch("src.notification.service.async_session_factory", return_value=cm), \
-             patch("src.notification.service.email_service.send", new_callable=AsyncMock) as mock_email:
+
+        with patch("src.notification.service.email_service.send", new_callable=AsyncMock) as mock_email:
             result = await notification_service._do_send(
                 mock_db, "u1", NotificationType.LOW_STOCK_ALERT, NotificationChannel.EMAIL,
                 "Stock Alert", "Low", None, None,
             )
         assert result is True
+        mock_db.add.assert_called_once()
         mock_email.assert_not_called()
 
-    async def test_email_channel_with_email_sends(self, mock_db, mock_isolated_session):
-        ns, cm = mock_isolated_session
+    async def test_email_channel_with_email_sends(self, mock_db):
         pref = MagicMock()
         pref.notification_type = NotificationType.LOW_STOCK_ALERT
         pref.channel = NotificationChannel.EMAIL
@@ -170,8 +170,8 @@ class TestDoSend:
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [pref]
         mock_db.execute.return_value = mock_result
-        with patch("src.notification.service.async_session_factory", return_value=cm), \
-             patch("src.notification.service.email_service.send", new_callable=AsyncMock) as mock_email:
+
+        with patch("src.notification.service.email_service.send", new_callable=AsyncMock) as mock_email:
             result = await notification_service._do_send(
                 mock_db, "u1", NotificationType.LOW_STOCK_ALERT, NotificationChannel.EMAIL,
                 "Stock Alert", "Low", None, "user@example.com",
@@ -179,16 +179,52 @@ class TestDoSend:
         assert result is True
         mock_email.assert_awaited_once()
 
-    async def test_handles_exception_gracefully(self, mock_db):
+    async def test_preferences_read_failure_returns_false(self, mock_db):
+        # A notification problem must not turn the caller's request into a 500.
         mock_db.execute.side_effect = Exception("DB error")
-        with pytest.raises(notification_service.NotificationDeliveryError):
-            await notification_service._do_send(
-                mock_db, "u1", NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET,
-                "Title", "Body", None, None,
-            )
+        result = await notification_service._do_send(
+            mock_db, "u1", NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.WEBSOCKET,
+            "Title", "Body", None, None,
+        )
+        assert result is False
 
-    async def test_database_channel_no_extra(self, mock_db, mock_isolated_session):
-        ns, cm = mock_isolated_session
+    async def test_write_failure_rolls_back_only_the_notification(self, mock_db):
+        pref_result = MagicMock()
+        pref_result.scalars.return_value.all.return_value = []
+        mock_db.execute.return_value = pref_result
+        mock_db.add.side_effect = Exception("constraint violation")
+        result = await notification_service._do_send(
+            mock_db, "u1", NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.PUSH,
+            "Title", "Body", None, None,
+        )
+        assert result is False
+        # The savepoint was rolled back and never committed, so the caller's
+        # own transaction is untouched.
+        savepoint = mock_db.begin_nested.return_value
+        savepoint.__aexit__.assert_awaited_once()
+
+    async def test_email_delivery_failure_raises_delivery_error(self, mock_db):
+        # Callers that count delivery failures (notify_low_stock) rely on this.
+        pref = MagicMock()
+        pref.notification_type = NotificationType.LOW_STOCK_ALERT
+        pref.channel = NotificationChannel.EMAIL
+        pref.enabled = True
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [pref]
+        mock_db.execute.return_value = mock_result
+
+        with patch(
+            "src.notification.service.email_service.send",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("smtp down"),
+        ):
+            with pytest.raises(notification_service.NotificationDeliveryError):
+                await notification_service._do_send(
+                    mock_db, "u1", NotificationType.LOW_STOCK_ALERT, NotificationChannel.EMAIL,
+                    "Stock Alert", "Low", None, "user@example.com",
+                )
+
+    async def test_push_channel_no_extra_side_effects(self, mock_db):
         pref = MagicMock()
         pref.notification_type = NotificationType.ORDER_STATUS_CHANGE
         pref.channel = NotificationChannel.PUSH
@@ -196,13 +232,13 @@ class TestDoSend:
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [pref]
         mock_db.execute.return_value = mock_result
-        with patch("src.notification.service.async_session_factory", return_value=cm):
-            result = await notification_service._do_send(
-                mock_db, "u1", NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.PUSH,
-                "Title", "Body", None, None,
-            )
+
+        result = await notification_service._do_send(
+            mock_db, "u1", NotificationType.ORDER_STATUS_CHANGE, NotificationChannel.PUSH,
+            "Title", "Body", None, None,
+        )
         assert result is True
-        ns.add.assert_called_once()
+        mock_db.add.assert_called_once()
 
 
 class TestNotifyOrderStatusChange:

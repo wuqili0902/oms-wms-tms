@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 
 class TestGenerateCacheKey:
@@ -77,7 +78,7 @@ class TestCachedDecorator:
         from src.cache.decorators import cached
 
         mock_redis = AsyncMock()
-        mock_redis.get.side_effect = ConnectionError("down")
+        mock_redis.get.side_effect = RedisConnectionError("down")
 
         call_count = 0
 
@@ -93,6 +94,31 @@ class TestCachedDecorator:
             result = await my_func(5)
             assert result == 10
             assert call_count == 1
+
+    async def test_function_error_propagates_without_reexecution(self):
+        # A genuine error from the wrapped function must surface, and the
+        # function must NOT be re-run (the old blanket `except Exception`
+        # re-executed the body on every failure, double-running queries).
+        from src.cache.decorators import cached
+
+        mock_redis = AsyncMock()
+        mock_redis.get.return_value = None
+
+        calls = 0
+
+        @cached(ttl=60, prefix="test")
+        async def broken(x: int) -> int:
+            nonlocal calls
+            calls += 1
+            raise ValueError("app-level failure")
+
+        with patch("src.cache.decorators.get_redis") as mock_get_redis:
+            mock_get_redis.return_value.__aenter__.return_value = mock_redis
+            with pytest.raises(ValueError, match="app-level failure"):
+                await broken(5)
+
+        assert calls == 1
+        mock_redis.set.assert_not_called()
 
     async def test_skip_args_parameter(self):
         from src.cache.decorators import cached
@@ -154,7 +180,7 @@ class TestRateLimitDecorator:
         from src.cache.decorators import rate_limit
 
         mock_redis = AsyncMock()
-        mock_redis.zadd.side_effect = ConnectionError("down")
+        mock_redis.zadd.side_effect = RedisConnectionError("down")
 
         call_count = 0
 
@@ -228,7 +254,7 @@ class TestDistributedLock:
         from src.cache.decorators import distributed_lock
 
         mock_redis = AsyncMock()
-        mock_redis.set.side_effect = ConnectionError("down")
+        mock_redis.set.side_effect = RedisConnectionError("down")
 
         call_count = 0
 

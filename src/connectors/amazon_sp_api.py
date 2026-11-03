@@ -10,7 +10,9 @@ Features:
 """
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 
+from src.core.exceptions import ValidationException
 from src.models.erp_connector import ERPMessage, MessageType
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,59 @@ MARKETPLACE_IDS = {
 }
 
 
+def _as_quantity(value: object, *, line: int) -> int:
+    """How many of a line Amazon says was ordered, read out of Amazon's own spelling.
+
+    ``int(line.get("QuantityOrdered", 1))`` accepted a negative number, and died
+    on the string SP-API uses for bundled listings ("2 items") — a 500 on the
+    import endpoint for a payload that was merely unusual.
+    """
+    try:
+        quantity = int(str(value).strip())
+    except (ValueError, TypeError):
+        raise ValidationException(
+            message=f"OrderItems[{line}].QuantityOrdered must be a whole number, got {value!r}",
+            detail={"QuantityOrdered": str(value)},
+        ) from None
+    if quantity < 1:
+        raise ValidationException(
+            message=(f"OrderItems[{line}].QuantityOrdered {quantity} is not an order quantity — "
+                     "Amazon orders at least one unit"),
+            detail={"QuantityOrdered": str(value)},
+        )
+    return quantity
+
+
+def _as_amount(value: object, *, field: str) -> str:
+    """A money amount in Amazon's spelling, as the Decimal the OMS order needs.
+
+    ``OrderTotal``/``ItemPrice`` arrive as an object, as a bare string, or as
+    null (SP-API omits them for unshipped and cancelled orders).  ``.get`` on
+    the null answered AttributeError and a 500; the string reached
+    ``Decimal(str(...))`` in ``create_order`` and died there.
+    """
+    if value is None:
+        return "0"
+    if isinstance(value, dict):
+        raw = value.get("Amount", "0")
+    else:
+        raw = value
+    text = str(raw).strip() or "0"
+    try:
+        Decimal(text)
+    except InvalidOperation:
+        raise ValidationException(
+            message=f"{field} must be a money amount, got {raw!r}",
+            detail={field: text},
+        ) from None
+    return text
+
+
+def _as_object(value: object) -> dict:
+    """Amazon omits an address, a price, a total — as null, not as a missing key."""
+    return value if isinstance(value, dict) else {}
+
+
 def parse_amazon_order(order_data: dict) -> ERPMessage:
     """Convert an Amazon Orders API response into an internal order message.
 
@@ -42,20 +97,59 @@ def parse_amazon_order(order_data: dict) -> ERPMessage:
         - ``BuyerEmail`` → ``customer_email``
         - ``ShippingAddress`` → ``shipping``
         - ``OrderItems`` → ``items``
+
+    The guards here are the difference between an import that answers and one
+    that crashes.  ``AmazonOrderId`` was never checked, so a payload naming no
+    order produced an OMS order with an empty ``amazon_order_id`` — the number
+    the tracking upload, the reconciliation and the Amazon Seller Central
+    support ticket are all answered with.  ``OrderItems`` was never checked
+    either: an order with no lines imported as a 201, and an order with no
+    lines cannot be picked, shipped, invoiced, or cancelled.
     """
-    shipping = order_data.get("ShippingAddress", {})
-    items_raw = order_data.get("OrderItems", [])
+    amazon_order_id = str(order_data.get("AmazonOrderId") or "").strip()
+    if not amazon_order_id:
+        raise ValidationException(
+            message="AmazonOrderId is required — an imported order has to say which Amazon order it is",
+            detail={"AmazonOrderId": None},
+        )
+    shipping = _as_object(order_data.get("ShippingAddress"))
+    items_raw = order_data.get("OrderItems") or []
+    if not isinstance(items_raw, list):
+        raise ValidationException(
+            message=f"OrderItems must be a list of order lines, got {type(items_raw).__name__}",
+            detail={"OrderItems": str(items_raw)},
+        )
+    if not items_raw:
+        raise ValidationException(
+            message="OrderItems is required — an order with no lines cannot be picked, shipped, or invoiced",
+            detail={"OrderItems": []},
+        )
     items = []
-    for line in items_raw:
+    for index, line in enumerate(items_raw):
+        line = _as_object(line)
+        # ``SellerSKU`` names the seller's own listing; an FBA line has no seller
+        # SKU at all and names the ASIN instead.  Reading only SellerSKU left
+        # every FBA line with an empty sku, which the warehouse cannot pick.
+        sku = str(line.get("SellerSKU") or line.get("SKU") or line.get("ASIN") or "").strip()
+        # ASIN is not a GTIN — it is Amazon's own alphanumeric id.  It was being
+        # written into ``gtin``, where the scan-gun flows (/barcode/validate, the
+        # PDA 扫码) read it as an EAN and reject it.
+        gtin = str(line.get("gtin") or line.get("EAN") or line.get("barcode") or "").strip()
+        if not sku and not gtin:
+            raise ValidationException(
+                message=(f"OrderItems[{index}] names no product — no SellerSKU, SKU, ASIN, or barcode. "
+                         "An order line the warehouse cannot identify cannot be picked"),
+                detail={"OrderItems": index},
+            )
         items.append({
-            "sku": line.get("SellerSKU", ""),
-            "product_name": line.get("Title", ""),
-            "quantity": int(line.get("QuantityOrdered", 1)),
-            "unit_price": str(line.get("ItemPrice", {}).get("Amount", "0")),
-            "gtin": line.get("ASIN", ""),
+            "sku": sku,
+            "product_name": str(line.get("Title") or ""),
+            "quantity": _as_quantity(line.get("QuantityOrdered", 1), line=index),
+            "unit_price": _as_amount(line.get("ItemPrice"), field=f"OrderItems[{index}].ItemPrice"),
+            "gtin": gtin,
         })
 
-    total = order_data.get("OrderTotal", {})
+    total = _as_object(order_data.get("OrderTotal"))
     return ERPMessage(
         msg_type=MessageType.ORDINR,
         sender_id="amazon",
@@ -63,7 +157,7 @@ def parse_amazon_order(order_data: dict) -> ERPMessage:
         created_at=datetime.now(UTC),
         payload={
             "source": "amazon",
-            "amazon_order_id": order_data.get("AmazonOrderId", ""),
+            "amazon_order_id": amazon_order_id,
             "status": order_data.get("OrderStatus", ""),
             "customer_email": order_data.get("BuyerEmail", ""),
             "customer_name": order_data.get("BuyerName", ""),
@@ -77,8 +171,8 @@ def parse_amazon_order(order_data: dict) -> ERPMessage:
                 "phone": shipping.get("Phone", ""),
             },
             "items": items,
-            "total_amount": str(total.get("Amount", "0")),
-            "currency": total.get("CurrencyCode", "USD"),
+            "total_amount": _as_amount(total.get("Amount"), field="OrderTotal.Amount"),
+            "currency": str(total.get("CurrencyCode") or "USD"),
             "marketplace_id": order_data.get("MarketplaceId", ""),
             "purchase_date": order_data.get("PurchaseDate", ""),
         },
@@ -103,26 +197,42 @@ def build_tracking_update(
 
 # ── Order Status Polling & Sync ─────────────────────────────────────────────
 
+def _not_implemented(action: str, *, needs: str, **identifiers: object) -> dict:
+    """The answer an unimplemented SP-API action gives: it did not happen.
+
+    Each of these used to return a canned success — ``"status": "Unshipped"`` for
+    a poll that polled nothing, ``"uploaded"`` for an upload that never left the
+    process, ``"synced"`` for inventory Amazon never heard about.  A caller
+    cannot tell "the tracking number is on Amazon" from "the tracking number is
+    not on Amazon" out of that, and the operator acting on it schedules a
+    reconciliation against a shipment Amazon has never seen.  An unimplemented
+    action now says so, in a key the caller can branch on.
+    """
+    return {
+        "implemented": False,
+        "status": "not_implemented",
+        "action": action,
+        "reason": f"{action} needs a real SP-API call ({needs}) and SP-API credentials",
+        **identifiers,
+    }
+
+
+# ── Order Status Polling & Sync ─────────────────────────────────────────────
+
 def poll_order_status(
     marketplace_id: str,
     amazon_order_id: str,
 ) -> dict:
-    """Poll Amazon Orders API for the latest order status.
+    """Poll Amazon Orders API for the latest order status. **Not implemented.**
 
-    Returns a dict with keys:
-      - "status": current OrderStatus value (e.g., "Unshipped", "PartiallyShipped")
-      - "fulfillment_type": "FBA" or "MFN"
-      - "tracking_number": if available
-      - "estimated_delivery_date": ISO date string or None
+    Needs ``GET /orders/v0/orders/{orderId}`` with an SP-API access token;
+    ``settings.amazon_sp_api_*`` carries the credentials.  Until then the answer
+    is ``status: "not_implemented"`` — not a status invented for the order.
     """
-    # TODO: Replace with real SP-API call when credentials are configured
-    # For now, return a stub response — callers should handle this gracefully.
-    return {
-        "status": "Unshipped",
-        "fulfillment_type": "FBA",
-        "tracking_number": None,
-        "estimated_delivery_date": None,
-    }
+    return _not_implemented(
+        "poll_order_status", needs="GET /orders/v0/orders/{orderId}",
+        marketplace_id=marketplace_id, amazon_order_id=amazon_order_id,
+    )
 
 
 def sync_order_status(
@@ -130,17 +240,15 @@ def sync_order_status(
     amazon_order_id: str,
     internal_order: dict | None = None,
 ) -> dict:
-    """Sync Amazon order status back to our internal system.
+    """Sync Amazon order status back to the internal order. **Not implemented.**
 
-    If ``internal_order`` is provided, updates its fields (status, tracking_number,
-    estimated_delivery_date). Otherwise returns a stub indicating success.
+    Needs ``poll_order_status`` above plus the OMS status write it feeds.
     """
-    # TODO: Implement real sync logic here
-    return {
-        "amazon_order_id": amazon_order_id,
-        "synced_at": datetime.now(UTC).isoformat(),
-        "internal_updated": internal_order is not None,
-    }
+    return _not_implemented(
+        "sync_order_status", needs="poll_order_status + oms.service.update_order_status",
+        marketplace_id=marketplace_id, amazon_order_id=amazon_order_id,
+        internal_updated=False,
+    )
 
 
 # ── Tracking Upload & FBA Shipping ───────────────────────────────────────────
@@ -151,34 +259,32 @@ def upload_tracking_to_amazon(
     carrier_code: str,
     tracking_number: str,
 ) -> dict:
-    """Upload a tracking number to Amazon via SP-API Fulfillment API.
+    """Upload a tracking number to Amazon. **Not implemented.**
 
-    Returns the response payload (or stub).
+    Needs ``PUT /orders/v0/orders/{orderId}/tracking``.  The 发货交接 the
+    console records (``POST /connectors/amazon/tracking``) is stored locally and
+    reports ``sync_status: "not_configured"`` for exactly this reason — the
+    handover is not on Amazon.
     """
-    # TODO: Replace with real SP-API call
-    return {
-        "amazon_order_id": amazon_order_id,
-        "carrier_code": carrier_code,
-        "tracking_number": tracking_number,
-        "status": "uploaded",
-        "timestamp": datetime.now(UTC).isoformat(),
-    }
+    return _not_implemented(
+        "upload_tracking_to_amazon", needs="PUT /orders/v0/orders/{orderId}/tracking",
+        marketplace_id=marketplace_id, amazon_order_id=amazon_order_id,
+        carrier_code=carrier_code, tracking_number=tracking_number,
+    )
 
 
 def mark_fba_shipped(
     marketplace_id: str,
     amazon_order_id: str,
 ) -> dict:
-    """Mark an order as shipped via FBA (creates ShipmentPost request in SP-API).
+    """Mark an order as shipped via FBA. **Not implemented.**
 
-    Returns a stub response.
+    Needs ``POST /fbaInbound`` (ShipmentPost) with the FBA shipment id.
     """
-    # TODO: Implement real FBA shipping logic
-    return {
-        "amazon_order_id": amazon_order_id,
-        "status": "fba_shipped",
-        "timestamp": datetime.now(UTC).isoformat(),
-    }
+    return _not_implemented(
+        "mark_fba_shipped", needs="POST /fbaInbound ShipmentPost",
+        marketplace_id=marketplace_id, amazon_order_id=amazon_order_id,
+    )
 
 
 # ── Inventory Sync ───────────────────────────────────────────────────────────
@@ -188,15 +294,12 @@ def sync_inventory_to_amazon(
     sku: str,
     quantity: int,
 ) -> dict:
-    """Synchronize inventory levels to Amazon via SP-API Inventory API.
+    """Push inventory levels to Amazon. **Not implemented.**
 
-    Returns a stub response indicating success/failure.
+    Needs ``POST /fp/inventory/v1/inventory``; nothing in the warehouse calls
+    it, so Amazon has never been told about a stock change here.
     """
-    # TODO: Replace with real SP-API call
-    return {
-        "marketplace_id": marketplace_id,
-        "sku": sku,
-        "quantity": quantity,
-        "status": "synced",
-        "timestamp": datetime.now(UTC).isoformat(),
-    }
+    return _not_implemented(
+        "sync_inventory_to_amazon", needs="POST /fp/inventory/v1/inventory",
+        marketplace_id=marketplace_id, sku=sku, quantity=quantity,
+    )

@@ -6,7 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import NotFoundException, ValidationException
 from src.logistics.carriers import CARRIER_NAMES, generate_tracking_number
-from src.logistics.kdniao import get_tracking_url, validate_carrier
+from src.logistics.kdniao import (
+    create_waybill as kdniao_create_waybill,
+)
+from src.logistics.kdniao import (
+    credentials_configured,
+    get_tracking_url,
+    validate_carrier,
+)
 from src.logistics.models import Waybill
 from src.logistics.schemas import CreateWaybillRequest
 from src.models.base import model_to_dict
@@ -16,8 +23,26 @@ async def create_waybill(db: AsyncSession, req: CreateWaybillRequest) -> dict:
     code = validate_carrier(req.carrier_code)
     if not code:
         raise ValidationException(message=f"无效的物流商编码: {req.carrier_code}")
-    tracking = generate_tracking_number(code, req.order_id)
-    carrier_name = CARRIER_NAMES.get(code, "")
+
+    if credentials_configured():
+        # Real 快递鸟 下单 — the waybill number comes from the carrier, not a
+        # local placeholder generator.  API failures propagate to the router's
+        # 502 handler.
+        order_result = await kdniao_create_waybill(
+            order_id=req.order_id,
+            recipient_name=req.recipient_name,
+            recipient_phone=req.recipient_phone,
+            recipient_address=req.recipient_address,
+            items=req.items,
+            carrier_code=code,
+        )
+        tracking = order_result["tracking_number"]
+        carrier_name = order_result.get("carrier_name") or CARRIER_NAMES.get(code, "")
+        label_url = order_result.get("print_callback_url") or get_tracking_url(code, tracking)
+    else:
+        tracking = generate_tracking_number(code, req.order_id)
+        carrier_name = CARRIER_NAMES.get(code, "")
+        label_url = get_tracking_url(code, tracking)
 
     now = datetime.now(UTC)
     waybill = Waybill(
@@ -32,14 +57,26 @@ async def create_waybill(db: AsyncSession, req: CreateWaybillRequest) -> dict:
         items=req.items,
         status="created",
         print_count=0,
-        label_url=get_tracking_url(code, tracking),
+        label_url=label_url,
         created_at=now,
         updated_at=now,
     )
     db.add(waybill)
     await db.commit()
     await db.refresh(waybill)
-    return model_to_dict(waybill)
+    result = model_to_dict(waybill)
+    # The label prints either way, so say which number is on it: the carrier's, or
+    # one this server assembled from a prefix, today's date, and a hash.
+    if credentials_configured():
+        result["tracking_source"] = "kdniao"
+        result["tracking_source_note"] = "面单号由快递鸟返回"
+    else:
+        result["tracking_source"] = "local_placeholder"
+        result["tracking_source_note"] = (
+            "未配置快递鸟凭据（KDNIAO_EBUSINESS_ID / KDNIAO_API_KEY）："
+            "面单号由本地生成，快递侧没有这张面单，轨迹查询与运单追踪均不可用"
+        )
+    return result
 
 
 async def get_waybill(db: AsyncSession, tracking: str) -> dict:
@@ -110,7 +147,7 @@ async def void_waybill(db: AsyncSession, tracking: str) -> dict:
         raise ValidationException(message=f"运单 {tracking} 已作废")
 
     wb.status = "voided"
-    wb.updated_at = datetime.now(UTC)
+    wb.updated_at = datetime.now(UTC).replace(tzinfo=None)
     await db.commit()
     await db.refresh(wb)
     return model_to_dict(wb)
@@ -128,8 +165,8 @@ async def mark_printed(db: AsyncSession, tracking: str) -> dict:
         raise NotFoundException(message=f"运单 {tracking} 不存在")
 
     wb.print_count = (wb.print_count or 0) + 1
-    wb.last_printed_at = datetime.now(UTC)
-    wb.updated_at = datetime.now(UTC)
+    wb.last_printed_at = datetime.now(UTC).replace(tzinfo=None)
+    wb.updated_at = datetime.now(UTC).replace(tzinfo=None)
     await db.commit()
     await db.refresh(wb)
     return model_to_dict(wb)

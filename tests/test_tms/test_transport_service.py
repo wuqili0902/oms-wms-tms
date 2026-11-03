@@ -125,7 +125,7 @@ class TestTrackingEvents:
             "delivery_name": "Event Tester",
             "delivery_address": {"province": "Sichuan"},
         })
-        evt = await tms_service.record_tracking_event(db_session, {
+        evt = await tms_service.create_tracking_event(db_session, {
             "transport_order_id": order["id"],
             "event_type": "in_transit",
             "location_code": "WH-SZ-01",
@@ -141,7 +141,7 @@ class TestTrackingEvents:
             "delivery_name": "Tracker",
             "delivery_address": {"province": "Yunnan"},
         })
-        events = await tms_service.get_tracking_events(db_session, order["id"])
+        events = await tms_service.list_tracking_events(db_session, order["id"])
         assert len(events) >= 1  # at least CREATED event
 
     @pytest.mark.asyncio
@@ -154,7 +154,7 @@ class TestTrackingEvents:
         })
 
         # Record delivered event
-        await tms_service.record_tracking_event(db_session, {
+        await tms_service.create_tracking_event(db_session, {
             "transport_order_id": order["id"],
             "event_type": "delivered",
             "location_name": "Customer Address",
@@ -239,8 +239,9 @@ class TestFreightEstimate:
     """Freight cost estimation."""
 
     @pytest.mark.asyncio
-    async def test_estimate_freight(self):
+    async def test_estimate_freight(self, db_session):
         result = await tms_service.estimate_freight(
+            db_session,
             carrier_code="sf_express",
             service_type="express",
             distance_km=150.0,
@@ -250,12 +251,12 @@ class TestFreightEstimate:
         assert float(result["estimated_cost"]) > 0
 
     @pytest.mark.asyncio
-    async def test_estimate_freight_different_carriers(self):
+    async def test_estimate_freight_different_carriers(self, db_session):
         sf = await tms_service.estimate_freight(
-            carrier_code="sf_express", service_type="standard", distance_km=100, weight_kg=10,
+            db_session, carrier_code="sf_express", service_type="standard", distance_km=100, weight_kg=10,
         )
         yunda = await tms_service.estimate_freight(
-            carrier_code="yunda", service_type="standard", distance_km=100, weight_kg=10,
+            db_session, carrier_code="yunda", service_type="standard", distance_km=100, weight_kg=10,
         )
         # SF is typically more expensive than Yunda
         assert float(sf["estimated_cost"]) > float(yunda["estimated_cost"])
@@ -306,7 +307,7 @@ class TestReturnOrderEdgeCases:
         await tms_service.update_return_status(db_session, ret["id"], "in_transit_return")
         await tms_service.update_return_status(db_session, ret["id"], "returned_to_warehouse")
         updated = await tms_service.mark_return_inspected(db_session, ret["id"], accepted=False)
-        assert updated["status"] == "closed"
+        assert updated["status"] == "cancelled"
 
     @pytest.mark.asyncio
     async def test_mark_return_inspected_invalid_state(self, db_session):

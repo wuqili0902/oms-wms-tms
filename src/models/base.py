@@ -4,8 +4,14 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
+# Generic SQLAlchemy 2 Uuid instead of dialects.postgresql.UUID: on PostgreSQL
+# it still renders the native UUID type, but on SQLite it renders CHAR(32)
+# (TEXT affinity).  The PG-specific UUID type emitted a bare "UUID" column on
+# SQLite, which SQLite's affinity rules treat as NUMERIC — silently coercing
+# all-digit hex ids (e.g. 00000000-0000-...-001) to integers and then blowing
+# up on every read with "'int' object has no attribute 'replace'".
 from sqlalchemy import Boolean, DateTime, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Uuid as UUID  # noqa: N814 — column type, not a constant
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -51,13 +57,13 @@ class TimestampMixin:
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
         server_default=func.now(),
     )
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        onupdate=lambda: datetime.now(UTC).replace(tzinfo=None),
         server_default=func.now(),
     )
 

@@ -12,11 +12,12 @@ from src.analytics.service import (
     get_status_distribution,
 )
 from src.core.database import get_db
+from src.core.dependencies import get_current_user
 from src.core.response import success_response
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
+router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/dashboard")

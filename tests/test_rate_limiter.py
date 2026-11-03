@@ -1,5 +1,6 @@
 """Tests for src.core.rate_limiter — RateLimiter and rate_limit decorator."""
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -99,14 +100,19 @@ class TestRateLimiterDisconnect:
 
 
 class TestCheckRateLimit:
-    async def test_not_connected_returns_true(self):
-        from src.core.rate_limiter import RateLimiter
+    """Redis-window behaviour.
 
-        rl = RateLimiter(redis_url="redis://test:6379")
-        rl._connected = False
+    ``settings.testing`` short-circuits the limiter for the API tests; these
+    tests are about the limiter itself, so it is switched off here.
+    """
 
-        result = await rl.check_rate_limit("test-key", requests=100, window=60)
-        assert result is True
+    @staticmethod
+    @contextmanager
+    def _limiter_active():
+        from src.config import settings
+
+        with patch.object(settings, "testing", False):
+            yield
 
     @staticmethod
     def _make_mock_redis(time_val, pipeline_exec_result):
@@ -117,54 +123,93 @@ class TestCheckRateLimit:
         mock_redis.pipeline = MagicMock(return_value=mock_pipeline)
         return mock_redis
 
+    async def test_not_connected_falls_back_to_local_window(self):
+        from src.core.rate_limiter import RateLimiter
+
+        rl = RateLimiter(redis_url="redis://unreachable:6379")
+        rl._connected = False
+
+        with self._limiter_active(), patch(
+            "src.core.rate_limiter.aioredis.from_url", side_effect=ConnectionError("no redis")
+        ):
+            result = await rl.check_rate_limit("test-key", requests=100, window=60)
+        assert result is True
+
+    async def test_not_connected_local_window_still_limits(self):
+        """A dead Redis must not mean "no limit at all"."""
+        from src.core.rate_limiter import RateLimiter
+
+        rl = RateLimiter(redis_url="redis://unreachable:6379")
+        rl._connected = False
+
+        with self._limiter_active(), patch(
+            "src.core.rate_limiter.aioredis.from_url", side_effect=ConnectionError("no redis")
+        ):
+            allowed = [await rl.check_rate_limit("user-1", requests=2, window=60) for _ in range(4)]
+
+        assert allowed == [True, True, False, False]
+
     async def test_allowed(self):
         from src.core.rate_limiter import RateLimiter
 
-        mock_redis = self._make_mock_redis([1735000000, 0], [1, 1])
+        # pipeline(): zadd, zremrangebyscore, zcard, expire
+        mock_redis = self._make_mock_redis([1735000000, 0], [1, 0, 1, True])
 
         rl = RateLimiter(redis_url="redis://test:6379")
         rl.client = mock_redis
         rl._connected = True
 
-        result = await rl.check_rate_limit("user-1", requests=100, window=60)
+        with self._limiter_active():
+            result = await rl.check_rate_limit("user-1", requests=100, window=60)
         assert result is True
 
     async def test_exceeded(self):
         from src.core.rate_limiter import RateLimiter
 
-        mock_redis = self._make_mock_redis([1735000000, 0], [1, 200])
+        mock_redis = self._make_mock_redis([1735000000, 0], [1, 0, 200, True])
 
         rl = RateLimiter(redis_url="redis://test:6379")
         rl.client = mock_redis
         rl._connected = True
 
-        result = await rl.check_rate_limit("user-1", requests=100, window=60)
+        with self._limiter_active():
+            result = await rl.check_rate_limit("user-1", requests=100, window=60)
         assert result is False
 
     async def test_unexpected_response_allows(self):
         from src.core.rate_limiter import RateLimiter
 
-        mock_redis = self._make_mock_redis([1735000000, 0], ["error", None])
+        mock_redis = self._make_mock_redis([1735000000, 0], [1, 0, "error", True])
 
         rl = RateLimiter(redis_url="redis://test:6379")
         rl.client = mock_redis
         rl._connected = True
 
-        result = await rl.check_rate_limit("user-1")
+        with self._limiter_active():
+            result = await rl.check_rate_limit("user-1")
         assert result is True
 
-    async def test_redis_error_returns_true(self):
+    async def test_redis_error_falls_back_to_local_window(self):
         from src.core.rate_limiter import RateLimiter
 
-        mock_redis = AsyncMock()
-        mock_redis.time = AsyncMock(side_effect=Exception("redis down"))
+        # pipeline() is synchronous in redis-py; only execute() is awaited.
+        mock_redis = MagicMock()
+        mock_pipeline = MagicMock()
+        mock_pipeline.execute = AsyncMock(side_effect=Exception("redis down"))
+        mock_redis.pipeline = MagicMock(return_value=mock_pipeline)
 
         rl = RateLimiter(redis_url="redis://test:6379")
         rl.client = mock_redis
         rl._connected = True
 
-        result = await rl.check_rate_limit("user-1")
-        assert result is True
+        with self._limiter_active():
+            allowed = [await rl.check_rate_limit("user-1", requests=1, window=60) for _ in range(3)]
+
+        # First call survives on the local window, then the limiter is marked
+        # disconnected and the local window takes over — and it does limit.
+        assert allowed == [True, False, False]
+        assert rl._connected is False
+        mock_pipeline.execute.assert_awaited_once()  # the Redis attempt really was made
 
 
 class TestGetRateLimitHeaders:
@@ -223,11 +268,16 @@ class TestGetRateLimitHeaders:
 
 class TestRateLimitDecorator:
     @staticmethod
-    def make_request(client_host=None):
+    def make_request(client_host=None, headers=None):
         req = MagicMock()
         req.client = MagicMock() if client_host else None
         if client_host:
             req.client.host = client_host
+        # A real Headers object answers None for an absent header; a bare
+        # MagicMock answers a truthy mock for *every* header, which made an
+        # absent X-Forwarded-For look present.
+        values = {k.lower(): v for k, v in (headers or {}).items()}
+        req.headers.get.side_effect = lambda name, default=None: values.get(name.lower(), default)
         return req
 
     async def test_custom_key_func(self):
@@ -282,6 +332,33 @@ class TestRateLimitDecorator:
         mock_check.assert_awaited_once()
         key_arg = mock_check.await_args[0][0]
         assert key_arg == "ip:unknown"
+
+    async def test_x_forwarded_for_wins_over_socket_peer(self):
+        """Behind a proxy request.client.host is the proxy — limit the real client."""
+        from src.core.rate_limiter import rate_limit
+
+        @rate_limit(requests=10, window=5)
+        async def my_endpoint(request):
+            return {"ok": True}
+
+        req = self.make_request("10.0.0.1", {"x-forwarded-for": "203.0.113.7, 10.0.0.1"})
+        with patch("src.core.rate_limiter.rate_limiter.check_rate_limit", AsyncMock(return_value=True)) as mock_check:
+            await my_endpoint(req)
+
+        assert mock_check.await_args[0][0] == "ip:203.0.113.7"
+
+    async def test_x_forwarded_for_is_trimmed(self):
+        from src.core.rate_limiter import rate_limit
+
+        @rate_limit(requests=10, window=5)
+        async def my_endpoint(request):
+            return {"ok": True}
+
+        req = self.make_request("10.0.0.1", {"x-forwarded-for": " 203.0.113.7 , 10.0.0.1 "})
+        with patch("src.core.rate_limiter.rate_limiter.check_rate_limit", AsyncMock(return_value=True)) as mock_check:
+            await my_endpoint(req)
+
+        assert mock_check.await_args[0][0] == "ip:203.0.113.7"
 
     async def test_rate_limit_exceeded_raises_429(self):
         from fastapi import HTTPException

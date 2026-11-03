@@ -52,7 +52,7 @@ class TestExportOrders:
         db = AsyncMock()
         _mock_db_execute(db, [])
 
-        result = await export_orders(db)
+        result = [r async for r in export_orders(db)]
         assert result == []
 
     async def test_export_orders_with_data(self, mock_order):
@@ -61,7 +61,7 @@ class TestExportOrders:
         db = AsyncMock()
         _mock_db_execute(db, [mock_order])
 
-        result = await export_orders(db)
+        result = [r async for r in export_orders(db)]
         assert len(result) == 1
         assert result[0]["order_no"] == "ORD-001"
         assert result[0]["total_amount"] == "100.5"
@@ -82,7 +82,7 @@ class TestExportOrders:
         db = AsyncMock()
         _mock_db_execute(db, [confirmed])
 
-        result = await export_orders(db)
+        result = [r async for r in export_orders(db)]
         assert result[0]["status"] == "confirmed"
         assert result[0]["status"] == STATUS_REVERSE[OrderStatus.CONFIRMED]
 
@@ -100,7 +100,7 @@ class TestExportOrders:
         db = AsyncMock()
         _mock_db_execute(db, [order])
 
-        result = await export_orders(db)
+        result = [r async for r in export_orders(db)]
         assert result[0]["total_amount"] == "0"
 
     async def test_export_orders_multiple(self):
@@ -125,7 +125,7 @@ class TestExportOrders:
         db = AsyncMock()
         _mock_db_execute(db, [o1, o2])
 
-        result = await export_orders(db)
+        result = [r async for r in export_orders(db)]
         assert len(result) == 2
 
 class TestExportInventory:
@@ -135,7 +135,7 @@ class TestExportInventory:
         db = AsyncMock()
         _mock_db_execute(db, [])
 
-        result = await export_inventory(db)
+        result = [r async for r in export_inventory(db)]
         assert result == []
 
     async def test_export_inventory_with_data(self, mock_inventory):
@@ -144,7 +144,7 @@ class TestExportInventory:
         db = AsyncMock()
         _mock_db_execute(db, [mock_inventory])
 
-        result = await export_inventory(db)
+        result = [r async for r in export_inventory(db)]
         assert len(result) == 1
         assert result[0]["sku_id"] == "00000000-0000-0000-0000-000000000101"
         assert result[0]["quantity"] == 50
@@ -158,5 +158,5 @@ class TestExportInventory:
         db = AsyncMock()
         _mock_db_execute(db, [i1, i2])
 
-        result = await export_inventory(db)
+        result = [r async for r in export_inventory(db)]
         assert len(result) == 2

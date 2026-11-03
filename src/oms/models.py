@@ -21,7 +21,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SAEnum,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Uuid as UUID  # noqa: N814 — column type, not a constant; dialect-neutral
 from sqlalchemy.orm import relationship
 
 # Shared models imported from the common module to avoid circular imports.

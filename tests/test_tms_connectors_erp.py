@@ -88,22 +88,32 @@ class TestSyncTransportOrder:
         args = sap_mock.send_edi.call_args[0][0]
         assert "TO-001" in args["raw"]
 
-    async def test_with_edi(self, edi_mock):
+    async def test_with_edi_says_the_message_was_built_not_sent(self, edi_mock):
+        """The md5 of our own serialization is a checksum, not an ERP receipt."""
+        from src.core.exceptions import NotImplementedActionException
         from src.tms.connectors.erp import TMSSyncService
 
         svc = TMSSyncService(edi_connector=edi_mock)
-        result = await svc.sync_transport_order("TO-002")
-        assert isinstance(result, str)
-        assert len(result) == 32
+        with pytest.raises(NotImplementedActionException, match="报文已构造、未发送") as exc:
+            await svc.sync_transport_order("TO-002")
         edi_mock.serialize.assert_called_once()
+        assert exc.value.detail["sent"] is False
+        assert len(exc.value.detail["checksum"]) == 32
 
-    async def test_without_connector(self):
+    async def test_without_connector_says_nothing_was_sent(self):
+        """A uuid4 here reads as "ERP acknowledged with id …"; nothing was sent.
+
+        The ERP transport needs a SAP PI host or an EDI gateway, and this
+        deployment configures neither (no endpoint, no caller).
+        """
+        from src.core.exceptions import NotImplementedActionException
         from src.tms.connectors.erp import TMSSyncService
 
         svc = TMSSyncService()
-        result = await svc.sync_transport_order("TO-003")
-        assert isinstance(result, str)
-        assert len(result) == 36
+        with pytest.raises(NotImplementedActionException, match="未执行") as exc:
+            await svc.sync_transport_order("TO-003")
+        assert exc.value.detail["configured"] is False
+        assert exc.value.detail["identifier"] == "TO-003"
 
 
 class TestSyncTrackingEvent:
@@ -115,14 +125,15 @@ class TestSyncTrackingEvent:
         assert result == "sap-msg-id-001"
         sap_mock.send_edi.assert_called_once()
 
-    async def test_with_edi(self, edi_mock):
+    async def test_with_edi_says_the_message_was_built_not_sent(self, edi_mock):
+        from src.core.exceptions import NotImplementedActionException
         from src.tms.connectors.erp import TMSSyncService
 
         svc = TMSSyncService(edi_connector=edi_mock)
-        result = await svc.sync_tracking_event("TO-002", "EXCEPTION", {"code": "DAMAGED"})
-        assert isinstance(result, str)
-        assert len(result) == 32
+        with pytest.raises(NotImplementedActionException, match="报文已构造、未发送") as exc:
+            await svc.sync_tracking_event("TO-002", "EXCEPTION", {"code": "DAMAGED"})
         edi_mock.serialize.assert_called_once()
+        assert exc.value.detail["sent"] is False
 
     async def test_without_details(self, sap_mock):
         from src.tms.connectors.erp import TMSSyncService
@@ -131,13 +142,14 @@ class TestSyncTrackingEvent:
         result = await svc.sync_tracking_event("TO-004", "POD")
         assert result == "sap-msg-id-001"
 
-    async def test_without_connector(self):
+    async def test_without_connector_says_nothing_was_sent(self):
+        """A POD event "pushed to ERP" with no ERP attached is a record of nothing."""
+        from src.core.exceptions import NotImplementedActionException
         from src.tms.connectors.erp import TMSSyncService
 
         svc = TMSSyncService()
-        result = await svc.sync_tracking_event("TO-005", "EXCEPTION")
-        assert isinstance(result, str)
-        assert len(result) == 36
+        with pytest.raises(NotImplementedActionException, match="未执行"):
+            await svc.sync_tracking_event("TO-005", "EXCEPTION")
 
 
 class TestHandleInboundRateUpdate:

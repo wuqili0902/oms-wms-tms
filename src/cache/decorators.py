@@ -5,6 +5,9 @@ import time
 from collections.abc import Callable
 from functools import wraps
 
+from redis.exceptions import ConnectionError as RedisConnError
+from redis.exceptions import TimeoutError as RedisTimeoutError
+
 from src.cache.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
@@ -25,18 +28,30 @@ def cached(ttl: int = 300, prefix: str = "cache", skip_args: int = 0):
         async def wrapper(*args, **kwargs):
             key = _generate_cache_key(prefix, func.__name__, args[skip_args:], kwargs)
 
+            # Only fall back to uncached execution when Redis itself is unavailable.
+            # Genuine exceptions raised by `func` must propagate — never swallow or
+            # re-execute them (which previously double-ran queries on every failure).
             try:
                 async with get_redis() as redis:
                     cached_value = await redis.get(key)
                     if cached_value is not None:
                         return json.loads(cached_value.decode("utf-8"))
-
-                    result = await func(*args, **kwargs)
-                    await redis.set(key, json.dumps(result, default=str).encode("utf-8"), ex=ttl)
-                    return result
-            except Exception:
+            except (RedisConnError, RedisTimeoutError, RuntimeError):
+                # RuntimeError also covers the loop-bound pool surfacing
+                # "Event loop is closed" — degrade to uncached execution
+                # instead of failing the request with a 500.
                 logger.warning("Redis unavailable in @cached — executing without cache")
                 return await func(*args, **kwargs)
+
+            result = await func(*args, **kwargs)
+
+            try:
+                async with get_redis() as redis:
+                    await redis.set(key, json.dumps(result, default=str).encode("utf-8"), ex=ttl)
+            except (RedisConnError, RedisTimeoutError, RuntimeError):
+                logger.warning("Redis unavailable in @cached — result not cached")
+
+            return result
 
         return wrapper
 

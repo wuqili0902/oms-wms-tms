@@ -57,11 +57,17 @@ def _mock_manager():
     m.send_to_device = AsyncMock(side_effect=send_to_device_impl)
     m.broadcast = AsyncMock(side_effect=broadcast_impl)
 
+    # /pda/mutations requires authentication; stub the current user for these
+    # integration tests (get_db still comes from the async_client fixture).
+    from src.core.dependencies import get_current_user
+    from src.main import app
+
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "ws-test-user"}
     with patch("src.pda.router._manager", m), \
          patch("src.pda.ws._manager", m):
         _reset_state()
         yield
-        # nothing to tear down — context managers clean up
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 class TestWsIntegration:

@@ -48,7 +48,7 @@ class StockIn(Base):
     total_qty = Column(Numeric(precision=18, scale=4), default=Decimal(0))
     status = Column(String(32), default="DRAFT")  # DRAFT CONFIRMED RECEIVED CANCELLED
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC).replace(tzinfo=None))
 
     lines = relationship(
         "StockInLine", back_populates="stock_in", cascade="all, delete-orphan"
@@ -120,7 +120,7 @@ class StockOut(Base):
     total_qty = Column(Numeric(precision=18, scale=4), default=Decimal(0))
     status = Column(String(32), default="DRAFT")  # DRAFT CONFIRMED SHIPPED CANCELLED
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC).replace(tzinfo=None))
 
     lines = relationship(
         "StockOutLine", back_populates="stock_out", cascade="all, delete-orphan"
@@ -204,4 +204,4 @@ class StockInventoryLog(Base):
     reason = Column(String(32), nullable=True)  # AdjustReason enum value
     remark = Column(String(500), nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC).replace(tzinfo=None))

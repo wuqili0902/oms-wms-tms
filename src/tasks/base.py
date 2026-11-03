@@ -1,12 +1,49 @@
+"""Celery task base class with an asyncio bridge.
+
+Celery does not natively support ``async def`` tasks: calling one returns an
+un-awaited coroutine object and the task "succeeds" without doing any work.
+``BaseTask.__call__`` below bridges this gap (the pattern from the Celery
+docs' "Calling a Coroutine from a Celery Task").
+
+Event-loop design:
+    A *persistent per-thread* event loop is used instead of ``asyncio.run()``
+    because the shared async SQLAlchemy engine binds its pooled connections
+    to the loop on which they were first opened.  Creating a fresh loop per
+    task would leak/break those connections.  With the default prefork pool
+    each worker process has one main thread, hence one loop, hence a
+    consistent engine pool.
+
+Test compatibility:
+    When called from inside an already-running event loop (pytest-asyncio
+    tests that ``await task_object(...)``), the coroutine is returned
+    untouched so the caller can await it, preserving the previous behavior.
+"""
+import asyncio
+import inspect
 import logging
+import threading
 
 from celery import Task as CeleryTask
 from celery.exceptions import Retry as CeleryRetry
 from sqlalchemy.exc import SQLAlchemyError
 
+_task_loop_local = threading.local()
+
+
+def _worker_event_loop() -> asyncio.AbstractEventLoop:
+    """Return the persistent event loop for the current worker thread."""
+    loop = getattr(_task_loop_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _task_loop_local.loop = loop
+    return loop
+
 
 class BaseTask(CeleryTask):
-    """Base task class with retry, logging, and error handling."""
+    """Base task class with coroutine bridge, retry, logging, and error handling."""
+
+    abstract = True
 
     # Default retry settings
     max_retries = 3
@@ -15,6 +52,23 @@ class BaseTask(CeleryTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logger = logging.getLogger(__name__)
+
+    def __call__(self, *args, **kwargs):
+        """Execute the task, awaiting coroutines on a persistent event loop.
+
+        * Celery worker path (no running loop): the coroutine is executed to
+          completion here, so the periodic task's body actually runs.
+        * Async test path (loop already running): the coroutine is returned
+          unchanged so ``await task(...)`` keeps working.
+        """
+        result = self.run(*args, **kwargs)
+        if inspect.iscoroutine(result):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return _worker_event_loop().run_until_complete(result)
+            return result
+        return result
 
     def before_start(self, task_id=None, *args, **kwargs):
         """Called when the task is about to start."""

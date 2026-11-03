@@ -240,20 +240,22 @@ class TestOutboxTasks:
 
         from src.tasks.outbox import dispatch_outbox_events
 
-        ev1 = MagicMock(
-            id=uuid4(),
-            aggregate_type="Order",
-            aggregate_id=uuid4(),
-            event_type="order.created",
-            payload='{"amount": 50}',
-        )
-        ev2 = MagicMock(
-            id=uuid4(),
-            aggregate_type="Payment",
-            aggregate_id=uuid4(),
-            event_type="payment.processed",
-            payload="{}",
-        )
+        # dispatch_pending_events returns serialised dicts — the mocks must
+        # match that contract, not ORM objects.
+        ev1 = {
+            "id": uuid4(),
+            "aggregate_type": "Order",
+            "aggregate_id": uuid4(),
+            "event_type": "order.created",
+            "payload": {"amount": 50},
+        }
+        ev2 = {
+            "id": uuid4(),
+            "aggregate_type": "Payment",
+            "aggregate_id": uuid4(),
+            "event_type": "payment.processed",
+            "payload": {},
+        }
 
         async def _get_pending(*a, **kw):
             return [ev1, ev2]
@@ -275,13 +277,13 @@ class TestOutboxTasks:
 
         from src.tasks.outbox import dispatch_outbox_events
 
-        ev1 = MagicMock(
-            id=uuid4(),
-            aggregate_type="Order",
-            aggregate_id=uuid4(),
-            event_type="order.created",
-            payload='{"amount": 50}',
-        )
+        ev1 = {
+            "id": uuid4(),
+            "aggregate_type": "Order",
+            "aggregate_id": uuid4(),
+            "event_type": "order.created",
+            "payload": {"amount": 50},
+        }
 
         async def _get_pending(*a, **kw):
             return [ev1]
@@ -302,13 +304,17 @@ class TestOrdersTasks:
     @pytest.mark.asyncio
     async def test_process_stale_orders_empty(self, db_session):
         from src.tasks.orders import process_stale_orders
-        with patch("src.tasks.orders._get_async_session", return_value=db_session):
+        # The task opens ``async with async_session_context() as session`` —
+        # patch that alias so the context manager hands out the test session.
+        with patch("src.tasks.orders.async_session_context") as mock_gs:
+            mock_gs.return_value.__aenter__.return_value = db_session
             r = await process_stale_orders.run()
         assert r["stale_orders_flagged"] == 0
 
     @pytest.mark.asyncio
     async def test_cancel_abandoned_drafts_empty(self, db_session):
         from src.tasks.orders import cancel_abandoned_drafts
-        with patch("src.tasks.orders._get_async_session", return_value=db_session):
+        with patch("src.tasks.orders.async_session_context") as mock_gs:
+            mock_gs.return_value.__aenter__.return_value = db_session
             r = await cancel_abandoned_drafts.run()
         assert r["orders_cancelled"] == 0

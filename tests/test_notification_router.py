@@ -67,8 +67,8 @@ class TestListNotifications:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["data"]["total"] == 1
-        assert data["data"]["items"][0]["title"] == "T1"
+        assert data["total"] == 1
+        assert data["items"][0]["title"] == "T1"
 
     async def test_filters_unread_only(self, client, mock_db):
         mock_result = MagicMock()
@@ -88,7 +88,7 @@ class TestListNotifications:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["data"]["total"] == 0
+        assert data["total"] == 0
 
     async def test_list_uses_query_params(self, client, mock_db):
         mock_result = MagicMock()
@@ -108,8 +108,8 @@ class TestListNotifications:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["data"]["page"] == 2
-        assert data["data"]["page_size"] == 10
+        assert data["page"] == 2
+        assert data["page_size"] == 10
 
     async def test_list_notifications_with_no_data(self, client, mock_db):
         mock_result = MagicMock()
@@ -129,7 +129,7 @@ class TestListNotifications:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["data"]["items"] == []
+        assert data["items"] == []
 
 
 class TestMarkRead:
@@ -193,9 +193,9 @@ class TestGetPreferences:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data["data"]) == 1
-        assert data["data"][0]["notification_type"] == "system_alert"
-        assert data["data"][0]["enabled"] is False
+        assert len(data["preferences"]) == 1
+        assert data["preferences"][0]["notification_type"] == "system_alert"
+        assert data["preferences"][0]["enabled"] is False
 
     async def test_get_preferences_empty(self, client, mock_db):
         mock_result = MagicMock()
@@ -206,7 +206,7 @@ class TestGetPreferences:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["data"] == []
+        assert data["preferences"] == []
 
 
 class TestUpdatePreferences:

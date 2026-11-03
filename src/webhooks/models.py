@@ -36,8 +36,10 @@ class WebhookTarget(Base):
     secret = Column(String(255), nullable=True)
     events = Column(Text, nullable=False)
     status = Column(Enum(WebhookStatus), default=WebhookStatus.ACTIVE, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
+    def _now():
+        return datetime.now(UTC).replace(tzinfo=None)
+    created_at = Column(DateTime, default=_now, nullable=False)
+    updated_at = Column(DateTime, default=_now, onupdate=_now, nullable=False)
 
 
 class WebhookDeliveryLog(Base):
@@ -51,4 +53,4 @@ class WebhookDeliveryLog(Base):
     status_code = Column(Integer, nullable=True)
     response_body = Column(Text, nullable=True)
     duration_ms = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None), nullable=False)

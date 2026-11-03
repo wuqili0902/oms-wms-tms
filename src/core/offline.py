@@ -29,12 +29,18 @@ class SyncQueueService:
                 failed_at TIMESTAMP,
                 error_message TEXT
             )""")
-        conn.execute(
-            "INSERT OR IGNORE INTO sync_queue (entity_type, entity_id, operation, payload) "
-            "VALUES ('Order', 'ORD-INIT', 'create', '{}')"
-        )
         conn.commit()
         self.conn = conn
+
+    def enqueue(self, entity_type, entity_id, operation, payload=""):
+        """Add a new sync record and return its id."""
+        cur = self.conn.execute(
+            "INSERT INTO sync_queue (entity_type, entity_id, operation, payload) "
+            "VALUES (?, ?, ?, ?)",
+            [entity_type, entity_id, operation, payload],
+        )
+        self.conn.commit()
+        return cur.lastrowid
 
     def get_pending(self, limit=100):
         """Return pending records up to *limit* as ``_Record`` instances."""

@@ -37,7 +37,8 @@ def _order_to_response(order: dict) -> dict:
 
 @router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_order(data: OrderCreate, db=Depends(get_db), current_user: dict = Depends(get_current_user)):
-    order = await oms_service.create_order(db, data.model_dump())
+    operator = current_user.get("sub", "unknown")
+    order = await oms_service.create_order(db, data.model_dump(), operator_id=operator)
     return _order_to_response(order)
 
 

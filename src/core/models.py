@@ -2,7 +2,7 @@
 import uuid
 
 from sqlalchemy import Column, String, select
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Uuid as UUID  # noqa: N814 — column type, not a constant; dialect-neutral
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.base import Base, TimestampMixin, UUIDMixin

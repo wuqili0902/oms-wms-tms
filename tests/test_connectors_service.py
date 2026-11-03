@@ -1,11 +1,9 @@
 """Tests for connectors/service.py."""
-import uuid
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.erp_connector import ERPMessage, MessageType
-from src.oms.models import Order
 
 
 @pytest.mark.asyncio
@@ -75,8 +73,15 @@ async def test_import_erp_order_missing_customer_uses_source(db_session: AsyncSe
 
 
 @pytest.mark.asyncio
-async def test_import_erp_order_empty_items(db_session: AsyncSession):
+async def test_import_erp_order_empty_items_is_refused(db_session: AsyncSession):
+    """An order with nothing on it used to import green.
+
+    It was asserted as behaviour: ``len(order["items"]) == 0`` and a total of
+    "0".  An order with no lines cannot be picked, shipped, invoiced, or
+    cancelled — every screen downstream shows it as work that does not exist.
+    """
     from src.connectors.service import import_erp_order
+    from src.core.exceptions import ValidationException
 
     msg = ERPMessage(
         msg_type=MessageType.ORDERS,
@@ -88,6 +93,5 @@ async def test_import_erp_order_empty_items(db_session: AsyncSession):
         },
     )
 
-    order = await import_erp_order(db_session, msg)
-    assert len(order["items"]) == 0
-    assert order["total_amount"] == "0"
+    with pytest.raises(ValidationException, match="no lines"):
+        await import_erp_order(db_session, msg)

@@ -1,4 +1,16 @@
-"""Logistics (electronic waybill) API endpoints."""
+"""Logistics (electronic waybill) API endpoints.
+
+Two of these endpoints report *where their data came from*, because the same
+answer means two different things: ``POST /waybill/create`` returns
+``tracking_source`` (``kdniao`` = the carrier issued the number,
+``local_placeholder`` = we assembled one the carrier has never seen), and
+``GET /waybill/{tracking}/track`` returns ``source`` (``kdniao`` = 快递鸟 answered;
+``mock`` = the demo generator picked a delivery state out of a hash of the waybill
+number, which is only reachable with ``LOGISTICS_MOCK_ENABLED=true``).  With no
+credentials the tracking query answers ``501`` — dispatch reads this endpoint as
+"实时拉取快递轨迹" and relays it to customers, so inventing "已签收" here sends a
+customer a delivery that never happened.
+"""
 
 import logging
 
@@ -8,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
 from src.core.dependencies import get_current_user
-from src.core.exceptions import NotFoundException
+from src.core.exceptions import AppException, NotFoundException
 from src.logistics.kdniao import print_callback_url
 from src.logistics.kdniao import query_tracking as kdniao_query_tracking
 from src.logistics.schemas import (
@@ -99,6 +111,10 @@ async def track_waybill_endpoint(
 ):
     try:
         result = await kdniao_query_tracking(tracking)
+    except AppException:
+        # 501 (no 快递鸟 credentials) and 422 are answers about *this deployment*,
+        # not a gateway failure — the app's own handler renders them.
+        raise
     except Exception as e:
         logger.error("[logistics] track failed for %s: %s", tracking, e)
         raise HTTPException(

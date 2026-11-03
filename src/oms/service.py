@@ -72,7 +72,10 @@ def _now() -> datetime:
 def _to_uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
     if val is None or isinstance(val, uuid.UUID):
         return val
-    return uuid.UUID(val)
+    try:
+        return uuid.UUID(val)
+    except (ValueError, TypeError):
+        return None
 
 
 async def _get_or_create_customer(db: AsyncSession, customer_code: str) -> Customer:
@@ -104,22 +107,21 @@ async def _get_or_create_sku(db: AsyncSession, sku_str: str) -> SKU:
     return sku
 
 
-async def _order_to_dict(db: AsyncSession, order: Order, customer: Customer | None = None) -> dict:
-    """Convert Order ORM row to schema dict."""
-    if customer is None:
-        customer = await db.get(Customer, order.customer_id)
+def _order_to_dict(
+    order: Order, customer: Customer | None = None,
+    items_map: dict[uuid.UUID, list[OrderItem]] | None = None,
+    sku_map: dict[uuid.UUID, SKU] | None = None,
+) -> dict:
+    """Convert Order ORM row to schema dict (sync when pre-fetched data is provided)."""
     customer_code = customer.code if customer else str(order.customer_id)
 
-    items_result = await db.execute(
-        select(OrderItem).where(OrderItem.order_id == order.id).order_by(OrderItem.created_at)
-    )
-    order_items = items_result.scalars().all()
+    if items_map is not None:
+        order_items = items_map.get(order.id, [])
+    else:
+        order_items = list(order.items_list) if hasattr(order, 'items_list') and order.items_list else []
 
-    sku_ids = {oi.sku_id for oi in order_items if oi.sku_id}
-    sku_map: dict[uuid.UUID, SKU] = {}
-    if sku_ids:
-        skus_result = await db.execute(select(SKU).where(SKU.id.in_(list(sku_ids))))
-        sku_map = {s.id: s for s in skus_result.scalars().all()}
+    if sku_map is None:
+        sku_map = {}
 
     items = []
     for oi in order_items:
@@ -148,12 +150,39 @@ async def _order_to_dict(db: AsyncSession, order: Order, customer: Customer | No
     }
 
 
+async def _order_to_dict_async(db: AsyncSession, order: Order) -> dict:
+    """Fetch related data then convert to dict (for single-order lookups)."""
+    customer = await db.get(Customer, order.customer_id) if order.customer_id else None
+    items_result = await db.execute(
+        select(OrderItem).where(OrderItem.order_id == order.id).order_by(OrderItem.created_at)
+    )
+    order_items = items_result.scalars().all()
+    items_map = {order.id: order_items}
+
+    sku_ids = {oi.sku_id for oi in order_items if oi.sku_id}
+    sku_map: dict[uuid.UUID, SKU] = {}
+    if sku_ids:
+        skus_result = await db.execute(select(SKU).where(SKU.id.in_(list(sku_ids))))
+        sku_map = {s.id: s for s in skus_result.scalars().all()}
+
+    return _order_to_dict(order, customer=customer, items_map=items_map, sku_map=sku_map)
+
+
 # ── Service functions ──────────────────────────────────────────────────────
 
-async def create_order(db: AsyncSession, data: dict) -> dict:
+async def create_order(db: AsyncSession, data: dict, operator_id: str | None = None) -> dict:
     """Create a new order in draft status."""
     # Ensure customer exists
     customer = await _get_or_create_customer(db, data["customer_id"])
+
+    # Resolve operator username → UUID
+    resolved_operator: uuid.UUID | None = None
+    if operator_id:
+        from src.auth.models import User as AuthUser
+        op_result = await db.execute(select(AuthUser).where(AuthUser.username == operator_id))
+        op_user = op_result.scalar_one_or_none()
+        if op_user:
+            resolved_operator = op_user.id
 
     # Generate order_no — UUID suffix avoids duplicate under concurrency
     date_part = _now().strftime("%Y%m%d")
@@ -202,7 +231,7 @@ async def create_order(db: AsyncSession, data: dict) -> dict:
         order_id=order.id,
         from_status="",
         to_status="pending",
-        operator_id=None,
+        operator_id=resolved_operator,
         remark="Order created",
     )
     db.add(log)
@@ -222,18 +251,21 @@ async def create_order(db: AsyncSession, data: dict) -> dict:
 
     await db.commit()
     await db.refresh(order)
-    return await _order_to_dict(db, order)
+    return await _order_to_dict_async(db, order)
 
 
 async def get_order(db: AsyncSession, order_id: str) -> dict:
     """Get an order by ID (excludes soft-deleted)."""
+    uuid_val = _to_uuid(order_id)
+    if uuid_val is None:
+        raise ValidationException(message=f"Invalid order ID: {order_id}", detail="Must be a valid UUID")
     result = await db.execute(
-        select(Order).where(Order.id == _to_uuid(order_id), ~Order.is_deleted)
+        select(Order).where(Order.id == uuid_val, ~Order.is_deleted)
     )
     order = result.scalar_one_or_none()
     if not order:
         raise NotFoundException(message=f"Order {order_id} not found")
-    return await _order_to_dict(db, order)
+    return await _order_to_dict_async(db, order)
 
 
 async def list_orders(
@@ -244,7 +276,7 @@ async def list_orders(
     customer_id: str | None = None,
 ) -> tuple[list[dict], int]:
     """List orders with pagination and optional filters."""
-    stmt = select(Order)
+    stmt = select(Order).where(Order.is_deleted.is_(False))
     if status:
         enum_val = STATUS_MAP.get(status)
         if enum_val:
@@ -270,13 +302,33 @@ async def list_orders(
         cust_result = await db.execute(select(Customer).where(Customer.id.in_(list(customer_ids))))
         customer_map = {c.id: c for c in cust_result.scalars().all()}
 
-    items = [await _order_to_dict(db, o, customer=customer_map.get(o.customer_id)) for o in orders]
+    # Batch-fetch ALL OrderItems for this page (avoids N+1)
+    order_ids = [o.id for o in orders]
+    items_map: dict[uuid.UUID, list[OrderItem]] = {}
+    all_sku_ids: set[uuid.UUID] = set()
+    if order_ids:
+        oi_result = await db.execute(
+            select(OrderItem).where(OrderItem.order_id.in_(order_ids)).order_by(OrderItem.created_at)
+        )
+        for oi in oi_result.scalars().all():
+            items_map.setdefault(oi.order_id, []).append(oi)
+            if oi.sku_id:
+                all_sku_ids.add(oi.sku_id)
+
+    # Batch-fetch ALL SKUs referenced by these items (avoids N+1)
+    sku_map: dict[uuid.UUID, SKU] = {}
+    if all_sku_ids:
+        sku_result = await db.execute(select(SKU).where(SKU.id.in_(list(all_sku_ids))))
+        sku_map = {s.id: s for s in sku_result.scalars().all()}
+
+    items = [_order_to_dict(o, customer=customer_map.get(o.customer_id),
+                            items_map=items_map, sku_map=sku_map) for o in orders]
     return items, total
 
 
 async def update_order_status(db: AsyncSession, order_id: str, target: str, operator: str = "system") -> dict:
     """Update order status with state machine validation."""
-    result = await db.execute(select(Order).where(Order.id == _to_uuid(order_id)))
+    result = await db.execute(select(Order).where(Order.id == _to_uuid(order_id)).with_for_update())
     order = result.scalar_one_or_none()
     if not order:
         raise NotFoundException(message=f"Order {order_id} not found")
@@ -312,15 +364,10 @@ async def update_order_status(db: AsyncSession, order_id: str, target: str, oper
             {"order_id": str(order.id), "order_no": order.order_no, "from": current, "to": target},
             db=db,
         )
-        await dispatch_event(
-            WebhookEvent.ORDER_CANCELLED if target == "cancelled" else WebhookEvent.ORDER_CREATED,
-            {"order_id": str(order.id), "order_no": order.order_no, "status": target},
-            db=db,
-        )
     except Exception as exc:
         logger.warning("Webhook dispatch failed (non-fatal): %s", exc)
 
-    return await _order_to_dict(db, order)
+    return await _order_to_dict_async(db, order)
 
 
 async def delete_order(db: AsyncSession, order_id: str) -> None:

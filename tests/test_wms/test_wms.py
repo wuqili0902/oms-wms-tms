@@ -277,11 +277,28 @@ class TestMovements:
 
 class TestPurchaseOrderLifecycle:
     async def test_approve_and_receive(self, async_client, auth_headers):
+        """draft → approved → received, with the delivery landing on a shelf.
+
+        This test used to approve a PO that had no lines and then receive it.
+        It passed only because receive_goods() booked nothing: a status flip
+        works on an empty order, and it also means the goods never existed.
+        """
+        wh = await async_client.post("/api/v1/warehouses", json={
+            "code": "PO-WH", "name": "PO Warehouse",
+        }, headers=auth_headers)
+        wh_id = wh.json()["id"]
+        loc = await async_client.post(f"/api/v1/warehouses/{wh_id}/locations", json={
+            "zone": "R", "aisle": "1", "shelf": "1", "bin": "1",
+        }, headers=auth_headers)
+        loc_id = loc.json()["id"]
+
         po_resp = await async_client.post("/api/v1/warehouses/purchase-orders", json={
             "po_number": "PO-001",
+            "lines": [{"sku": "PO-SKU-1", "quantity": 6, "unit_price": 3}],
         }, headers=auth_headers)
         assert po_resp.status_code == 201
         po_id = po_resp.json()["id"]
+        assert len(po_resp.json()["lines"]) == 1, "an order without lines is not receivable"
 
         approve_resp = await async_client.post(
             f"/api/v1/warehouses/purchase-orders/{po_id}/approve",
@@ -292,10 +309,21 @@ class TestPurchaseOrderLifecycle:
 
         receive_resp = await async_client.post(
             f"/api/v1/warehouses/purchase-orders/{po_id}/receive",
+            json={
+                "warehouse_id": wh_id, "location_id": loc_id,
+                "lines": [{"sku": "PO-SKU-1", "received_qty": 6, "batch_no": "B-PO-1"}],
+            },
             headers=auth_headers,
         )
-        assert receive_resp.status_code == 200
+        assert receive_resp.status_code == 200, receive_resp.text
         assert receive_resp.json()["status"] == "received"
+
+        stock = await async_client.get(
+            f"/api/v1/warehouses/inventory?warehouse_id={wh_id}", headers=auth_headers
+        )
+        row = next(r for r in stock.json() if r["sku"] == "PO-SKU-1")
+        assert float(row["quantity"]) == 6.0
+        assert row["batch_no"] == "B-PO-1"
 
     async def test_approve_not_found(self, async_client, auth_headers):
         resp = await async_client.post(

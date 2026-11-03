@@ -5,12 +5,12 @@ from decimal import Decimal
 import pytest
 
 from src.wms.models import (
+    SKU,
     Inventory,
     Location,
     LocationStatus,
     LocationType,
     PickingWave,
-    SKU,
     Warehouse,
 )
 from src.wms.services.picking_service import (

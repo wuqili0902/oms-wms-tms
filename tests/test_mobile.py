@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
+from src.core.dependencies import get_current_user
 from src.main import app
 
 
@@ -19,6 +20,7 @@ def client(mock_db):
         return mock_db
 
     app.dependency_overrides[get_db] = _get_db
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "mobile-test-user"}
     transport = ASGITransport(app=app)
     c = AsyncClient(transport=transport, base_url="http://test")
     yield c

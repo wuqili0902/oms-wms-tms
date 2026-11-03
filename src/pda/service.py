@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.outbox import append_event
+from src.core.ws_fanout import publish_pda
 from src.pda.models import PendingMutation, SyncOperation
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,10 @@ async def enqueue_mutation(
     }
 
     try:
-        await _manager.broadcast(broadcast_payload)
+        # Publish so every API worker delivers to its own connected PDAs;
+        # Redis unavailable → broadcast locally as before.
+        if not await publish_pda(None, broadcast_payload):
+            await _manager.broadcast(broadcast_payload)
     except (WebSocketDisconnect, ConnectionError) as e:
         logger.warning("PDA WS broadcast failed for mutation %s: %s", mutation.id, e)
 
@@ -56,6 +60,10 @@ async def process_pending_mutations(db: AsyncSession, batch_size: int = 50) -> d
         .where(PendingMutation.synced_at.is_(None))
         .order_by(PendingMutation.created_at.asc())
         .limit(batch_size)
+        # Row locks with SKIP LOCKED so concurrent sync callers (PDA retries,
+        # multiple API instances) never process the same mutation twice.
+        # Ignored automatically on SQLite.
+        .with_for_update(skip_locked=True)
     )
     mutations = result.scalars().all()
     accepted = 0
@@ -73,7 +81,7 @@ async def process_pending_mutations(db: AsyncSession, batch_size: int = 50) -> d
                     "data": json.loads(m.payload),
                 },
             )
-            m.synced_at = datetime.now(UTC)
+            m.synced_at = datetime.now(UTC).replace(tzinfo=None)
             accepted += 1
         except Exception as e:
             logger.error(

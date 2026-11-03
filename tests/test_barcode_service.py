@@ -67,24 +67,26 @@ class TestValidateGtin:
         assert "Check digit" in result["reason"]
 
     def test_strips_nondigits(self):
-        result = barcode_service.validate_gtin("GTIN-12345678")
+        result = barcode_service.validate_gtin("GTIN-12345670")
         assert result["valid"] is True
-        assert result["format"] == "other"
+        assert result["format"] == "ean8"
 
     def test_short_valid_formats(self):
-        result = barcode_service.validate_gtin("12345678")
+        result = barcode_service.validate_gtin("12345670")
         assert result["valid"] is True
-        assert result["format"] == "other"
+        assert result["format"] == "ean8"
 
 
 class TestGenerateBarcode:
     async def test_creates_record(self):
         mock_db = AsyncMock(spec=AsyncSession)
+        mock_now = MagicMock()
+        mock_now.replace.return_value = mock_now
         with (
             patch("src.barcode.service.model_to_dict", return_value={"id": "r1"}),
             patch("src.barcode.service.datetime") as mock_dt,
         ):
-            mock_dt.now.return_value = "2026-01-01"
+            mock_dt.now.return_value = mock_now
             result = await barcode_service.generate_barcode(mock_db, {
                 "gtin_prefix": "12345678901",
                 "entity_type": "order",
@@ -100,7 +102,16 @@ class TestGenerateBarcode:
 class TestRecordScan:
     async def test_records_scan(self):
         mock_db = AsyncMock(spec=AsyncSession)
-        with patch("src.barcode.service.model_to_dict", return_value={"id": "s1"}):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+        mock_now = MagicMock()
+        mock_now.replace.return_value = mock_now
+        with (
+            patch("src.barcode.service.model_to_dict", return_value={"id": "s1"}),
+            patch("src.barcode.service.datetime") as mock_dt,
+        ):
+            mock_dt.now.return_value = mock_now
             result = await barcode_service.record_scan(mock_db, {"raw_data": "1234567890123"})
         assert result == {"id": "s1"}
         mock_db.add.assert_called_once()
@@ -133,11 +144,13 @@ class TestCreateTemplate:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
+        mock_now = MagicMock()
+        mock_now.replace.return_value = mock_now
         with (
             patch("src.barcode.service.model_to_dict", return_value={"id": "tpl-1", "code": "LBL"}),
             patch("src.barcode.service.datetime") as mock_dt,
         ):
-            mock_dt.now.return_value = "2026-01-01"
+            mock_dt.now.return_value = mock_now
             result = await barcode_service.create_template(mock_db, {
                 "name": "Label", "code": "LBL",
                 "format": "zpl", "width_mm": 100, "height_mm": 50,

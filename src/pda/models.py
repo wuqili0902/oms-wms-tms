@@ -22,6 +22,6 @@ class PendingMutation(Base):
     entity_id = Column(String(100), nullable=False)
     operation = Column(String(20), nullable=False)
     payload = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None), nullable=False)
     synced_at = Column(DateTime, nullable=True)
     retry_count = Column(Integer, default=0)

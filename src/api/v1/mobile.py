@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
+from src.core.dependencies import get_current_user
 
 router = APIRouter(tags=["mobile"])
 
@@ -63,7 +64,11 @@ class SyncPullResponse(BaseModel):
 
 
 @router.post("/sync/push", response_model=SyncPushResult)
-async def sync_push(body: SyncPushRequest, db: AsyncSession = Depends(get_db)):
+async def sync_push(
+    body: SyncPushRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     """Accept a batch of pending mutations from a PDA device.
 
     Each item is validated and applied atomically.  Failed items are
@@ -103,6 +108,7 @@ async def sync_pull(
     since: str | None = None,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Pull server-side changes since the last sync timestamp.
 
@@ -149,7 +155,7 @@ async def sync_pull(
 
 
 @router.post("/sync/ack")
-async def sync_ack(ids: list[str], db: AsyncSession = Depends(get_db)):
+async def sync_ack(ids: list[str], db: AsyncSession = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Acknowledge that pulled changes were applied locally.
 
     Called by the PDA device after successfully applying server-side

@@ -1,6 +1,4 @@
 """Tests for core/offline.py — SyncQueueService."""
-import os
-import tempfile
 
 import pytest
 
@@ -18,11 +16,11 @@ def sync_service(tmp_path):
 
 class TestSyncQueueService:
     def test_get_pending_empty(self, sync_service):
-        # The init inserts a seed record, so there's 1 pending
         pending = sync_service.get_pending()
-        assert len(pending) >= 1
+        assert len(pending) == 0
 
     def test_mark_synced(self, sync_service):
+        sync_service.enqueue("order", "123", "create", '{"id": 1}')
         pending = sync_service.get_pending()
         ids = [r.id for r in pending]
         count = sync_service.mark_synced(ids)
@@ -30,6 +28,7 @@ class TestSyncQueueService:
         assert len(sync_service.get_pending()) == 0
 
     def test_mark_failed(self, sync_service):
+        sync_service.enqueue("order", "456", "update", '{"id": 2}')
         pending = sync_service.get_pending()
         record_id = pending[0].id
         sync_service.mark_failed(record_id, "test error")
@@ -49,6 +48,7 @@ class TestSyncQueueService:
         assert len(limited) == 3
 
     def test_record_attributes(self, sync_service):
+        sync_service.enqueue("Order", "ORD-INIT", "create", '{"key": "value"}')
         pending = sync_service.get_pending()
         record = pending[0]
         assert record.entity_type == "Order"
@@ -59,5 +59,5 @@ class TestSyncQueueService:
         db_path = str(tmp_path / "new_sync.db")
         svc = SyncQueueService(db_path=db_path)
         pending = svc.get_pending()
-        assert len(pending) >= 1
+        assert len(pending) == 0
         svc.conn.close()

@@ -10,7 +10,7 @@ from decimal import Decimal
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.exceptions import NotFoundException, ValidationException
+from src.core.exceptions import ConflictException, NotFoundException, ValidationException
 from src.core.pagination import paginate
 from src.models.base import model_to_dict
 from src.wms.models import (
@@ -37,11 +37,13 @@ from src.wms.models import (
     TransferItemType,
     TransferOrder,
     TransferOrderLine,
+    TransferStatus,
     Vendor,
     Warehouse,
     WarehouseStatus,
     WarehouseType,
 )
+from src.wms.schemas import TransferOrderCreate
 
 
 def _now() -> datetime:
@@ -51,7 +53,51 @@ def _now() -> datetime:
 def _to_uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
     if val is None or isinstance(val, uuid.UUID):
         return val
-    return uuid.UUID(val)
+    try:
+        return uuid.UUID(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _as_int(value: object, *, field: str) -> int:
+    """Read a count out of a request value without raising inside the handler.
+
+    A box count that arrives as ``"three"`` used to reach the Integer column
+    untouched, where the insert died and the global handler answered 500: the
+    screen said 系统异常, and the number the operator typed was the answer.
+    """
+    try:
+        return int(str(value))
+    except (ValueError, TypeError):
+        raise ValidationException(
+            message=f"{field} must be a whole number, got {value!r}",
+            detail={field: str(value)},
+        ) from None
+
+
+def _as_date(value: object, field: str) -> date | None:
+    """Read a date out of whatever the caller handed over.
+
+    The HTTP schemas validate dates now, so this is for the callers that never
+    go through them — tasks, scripts, and any service call that passes a dict.
+    Parsing with ``fromisoformat`` inline turned a mistyped date into a bare
+    ValueError, which the global error handler reports as a 500: the caller is
+    told the server broke, when what they actually wrote was "tomorrow".
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        # datetime subclasses date, and the column wants the day.
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as exc:
+        raise ValidationException(
+            message=f"{field} must be an ISO date (YYYY-MM-DD), got {value!r}",
+            detail={field: str(value)},
+        ) from exc
 
 
 # ── Warehouse CRUD ──────────────────────────────────────────────────────────
@@ -128,8 +174,10 @@ async def update_warehouse(db: AsyncSession, wh_id: str, data: dict) -> Warehous
     if not wh:
         raise NotFoundException(message=f"Warehouse {wh_id} not found")
 
+    _updatable = {"name", "address", "capacity", "contact_person", "contact_phone", "notes", "status"}
     for key, value in data.items():
-        setattr(wh, key, value)
+        if key in _updatable:
+            setattr(wh, key, value)
 
     await db.commit()
     await db.refresh(wh)
@@ -137,14 +185,17 @@ async def update_warehouse(db: AsyncSession, wh_id: str, data: dict) -> Warehous
 
 
 async def delete_warehouse(db: AsyncSession, wh_id: str) -> dict:
-    """Soft-delete a warehouse (sets deleted_at)."""
+    """Soft-delete a warehouse (sets is_deleted and deleted_at)."""
+    from datetime import UTC, datetime
     result = await db.execute(select(Warehouse).where(Warehouse.id == _to_uuid(wh_id)))
     wh = result.scalar_one_or_none()
     if not wh:
         raise NotFoundException(message=f"Warehouse {wh_id} not found")
 
-    await db.delete(wh)
+    wh.is_deleted = True
+    wh.deleted_at = datetime.now(UTC).replace(tzinfo=None)
     await db.commit()
+    await db.refresh(wh)
     d = model_to_dict(wh)
     d["type"] = d.pop("warehouse_type", "standard")
     d["is_active"] = False
@@ -330,7 +381,7 @@ async def _pick_batches(
         Inventory.warehouse_id == wh_id,
         Inventory.sku_id == sku_id,
         Inventory.quantity > 0,
-    )
+    ).with_for_update()
     if loc_id:
         stmt = stmt.where(Inventory.location_id == loc_id)
 
@@ -381,7 +432,7 @@ async def query_inventory(
     return items
 
 
-async def adjust_inventory(db: AsyncSession, data: dict) -> dict:
+async def adjust_inventory(db: AsyncSession, data: dict, *, commit: bool = True) -> dict:
     """Adjust inventory quantity (positive=in, negative=out).
 
     Supports batch-level tracking: when adding stock (qty > 0) the caller
@@ -391,6 +442,12 @@ async def adjust_inventory(db: AsyncSession, data: dict) -> dict:
 
     Uses optimistic locking via the ``version`` column to prevent lost updates
     under concurrent access. Retries up to 3 times before raising ConflictException.
+
+    ``commit=False`` leaves the write pending in the caller's transaction.  A
+    multi-line receipt needs it: booking each line as its own transaction would
+    let a failure on line 3 leave lines 1-2 landed while the receipt itself
+    reported failure — inventory that no order accounts for.  With one commit at
+    the end, either the whole receipt is in the books or none of it is.
     """
     wh_id = _to_uuid(data["warehouse_id"])
     loc_id = _to_uuid(data["location_id"])
@@ -408,9 +465,10 @@ async def adjust_inventory(db: AsyncSession, data: dict) -> dict:
 
     now = _now()
     batch_no = data.get("batch_no", "DEFAULT")
-    expiry_date = data.get("expiry_date")
-    manufacturing_date = data.get("manufacturing_date")
+    expiry_date = _as_date(data.get("expiry_date"), "expiry_date")
+    manufacturing_date = _as_date(data.get("manufacturing_date"), "manufacturing_date")
     max_retries = 3
+    committed = False
 
     for attempt in range(max_retries):
         now = _now()  # refresh timestamp per attempt
@@ -514,17 +572,35 @@ async def adjust_inventory(db: AsyncSession, data: dict) -> dict:
         )
         db.add(movement)
 
-        try:
-            await db.commit()
-        except Exception:
-            if attempt < max_retries - 1:
-                await db.rollback()
-                continue
-            raise
+        if commit:
+            try:
+                await db.commit()
+            except Exception:
+                if attempt < max_retries - 1:
+                    await db.rollback()
+                    continue
+                raise
+        else:
+            # flush(), not commit(): the write goes to the database but stays in
+            # the caller's transaction.  It also makes the row SELECT-able —
+            # the refresh() below reads a brand-new Inventory back, and a
+            # never-flushed one is not in the session's persistent set.
+            await db.flush()
+        committed = True
         break
 
-    if not inv:
-        raise ValidationException(message="Inventory record was lost during concurrent update")
+    # Every attempt can end in `continue`: the version check lost the race, or
+    # the commit collided.  Falling through would return the *pre-adjustment*
+    # quantity as if the adjustment had landed — a lost update the caller reads
+    # as a success.
+    if not committed:
+        raise ConflictException(
+            message=(
+                f"Inventory for {sku_str} changed on every attempt; "
+                "the adjustment was not applied"
+            ),
+            detail={"sku": sku_str, "attempts": max_retries},
+        )
 
     await db.refresh(inv)
     return _inv_to_dict(inv, sku_str)
@@ -543,12 +619,21 @@ async def adjust_stock_count(db: AsyncSession, data: dict) -> dict:
     wh_id: uuid.UUID | None = None
     if data.get("warehouse_id"):
         wh_id = _to_uuid(data["warehouse_id"])
-    elif data.get("source_warehouse_code"):
+        if wh_id is None:
+            # The field carried a warehouse *code* (_to_uuid returns None for
+            # those).  Treat it as a code instead of answering "Missing
+            # warehouse_id" to a request that did supply one.
+            data = {**data, "source_warehouse_code": str(data["warehouse_id"])}
+
+    if wh_id is None and data.get("source_warehouse_code"):
         wh_result = await db.execute(select(Warehouse).where(Warehouse.code == data["source_warehouse_code"]))
         wh_obj = wh_result.scalar_one_or_none()
         if not wh_obj:
             raise NotFoundException(message=f"Warehouse {data['source_warehouse_code']} not found")
         wh_id = wh_obj.id
+
+    if wh_id is None:
+        raise ValidationException(message="Missing warehouse_id or source_warehouse_code in count request")
 
     loc_id_str = data.get("location_id") or data.get("target_location_id", "")
     if not loc_id_str:
@@ -565,35 +650,51 @@ async def adjust_stock_count(db: AsyncSession, data: dict) -> dict:
         raise ValidationException(message="No count results to process")
 
     now = _now()
+
+    # Batch-fetch all SKUs upfront (avoids N+1)
+    sku_strs = {item.get("sku", item.get("sku_code")) for item in results if item.get("sku") or item.get("sku_code")}
+    sku_result = await db.execute(select(SKU).where(SKU.sku.in_(list(sku_strs))))
+    sku_map = {s.sku: s for s in sku_result.scalars().all()}
+
+    # Batch-fetch all existing inventory for this location (avoids N+1)
+    sku_ids = [s.id for s in sku_map.values()]
+    inv_result = await db.execute(
+        select(Inventory).where(
+            Inventory.warehouse_id == wh_id,
+            Inventory.location_id == loc_id,
+            Inventory.sku_id.in_(sku_ids),
+        ).with_for_update()
+    )
+    inv_by_sku: dict[uuid.UUID, Inventory] = {inv.sku_id: inv for inv in inv_result.scalars().all()}
+
     for item in results:
-        # Mobile sends `sku_code` and `actual_qty_count`; service expects `sku` and `actual_qty`
         sku_str = item.get("sku", item.get("sku_code"))
-        actual_qty_raw = item.get("actual_qty") or item.get("actual_qty_count")
+        # `or` here would turn a counted zero into a missing quantity: counting
+        # a SKU as 0 (盘亏 to nothing) is a valid result and has to reach the
+        # comparison below as 0.
+        actual_qty_raw = item.get("actual_qty")
         if actual_qty_raw is None:
-            sku_val = item.get("sku", "unknown")
+            actual_qty_raw = item.get("actual_qty_count")
+        if actual_qty_raw is None:
             raise ValidationException(
-                message=f"Missing quantity field in count result for SKU {sku_val}"
+                message=f"Missing quantity field in count result for SKU {sku_str}"
             )
         actual_qty = Decimal(str(actual_qty_raw))
 
-        # Lookup or create SKU
-        sku_obj = await _get_or_create_sku(db, sku_str)
+        sku_obj = sku_map.get(sku_str)
+        if not sku_obj:
+            sku_obj = SKU(id=uuid.uuid4(), sku=sku_str, name=sku_str)
+            db.add(sku_obj)
+            await db.flush()
+            sku_map[sku_str] = sku_obj
 
-        # Current inventory at this location/SKU
-        inv_result = await db.execute(
-            select(Inventory).where(
-                Inventory.warehouse_id == wh_id,
-                Inventory.location_id == loc_id,
-                Inventory.sku_id == sku_obj.id,
-            )
-        )
-        inv = inv_result.scalar_one_or_none()
+        inv = inv_by_sku.get(sku_obj.id)
 
         system_qty = Decimal(str(inv.quantity)) if inv else Decimal(0)
-        diff = actual_qty - system_qty  # positive = excess (IN), negative = shortage (OUT)
+        diff = actual_qty - system_qty
 
         if abs(diff) < Decimal("0.001"):
-            continue  # no change needed
+            continue
 
         if not inv:
             # Create new inventory record
@@ -632,7 +733,12 @@ async def adjust_stock_count(db: AsyncSession, data: dict) -> dict:
             sku=sku_str,
             type=adj_type,
             reference_type="stock_count",
-            quantity_change=abs(diff),
+            # Signed the way ``StockInventoryLog`` documents the column
+            # ("+ve = in, -ve = out").  ``abs(diff)`` wrote a positive number for
+            # a 盘亏, so the ledger the API serves read as though every counted
+            # loss had added stock; a ledger that mixes signs does not sum to the
+            # shelf it is the audit trail of.
+            quantity_change=diff,
             reason="stock_count",
         )
         db.add(log_entry)
@@ -730,28 +836,61 @@ async def list_picking_waves(db: AsyncSession, wh_id: str | None = None) -> list
 # ── Transfer Order (库存调拨) ───────────────────────────────────────────────
 
 
-async def create_transfer_order(db: AsyncSession, data: dict) -> dict:
-    """Create a transfer order with line items."""
-    # Accept both `source_location` and `source_warehouse_code` / `source_warehouse_id`
-    src_wh = _to_uuid(data["source_location"]) if data.get("source_location") else None
+async def _resolve_warehouse(db: AsyncSession, raw: object, *, field: str) -> Warehouse:
+    """Find a warehouse by id *or* by code, naming the field that named it.
 
-    target_wh_id_raw = (data.get("destination_warehouse_id")
-                        or data.get("target_warehouse_id")
-                        or data.get("source_warehouse_id"))
-    # Mobile sends destination by code; try resolving from Warehouse.code
-    if not target_wh_id_raw:
-        raise ValidationException(message="destination_warehouse_id or target_warehouse_id required")
+    Callers send both forms: the API's own ids, and the warehouse code the mobile
+    screen types into its 源仓库 field.  ``_to_uuid`` answers None for a code, and
+    every caller that used it as a lookup treated None as "the caller named no
+    warehouse" and filed the record with a NULL — so the code a handheld sent was
+    the code that silently disappeared.  Resolving here, a value that is neither
+    an id nor a known code is refused by the field it arrived in.
+    """
+    value = str(raw).strip()
+    as_id = _to_uuid(value)
+    wh: Warehouse | None = None
+    if as_id is not None:
+        wh = await db.scalar(select(Warehouse).where(Warehouse.id == as_id))
+    if wh is None:
+        wh = await db.scalar(select(Warehouse).where(Warehouse.code == value))
+    if wh is None:
+        raise NotFoundException(
+            message=f"{field} {value!r} is neither a warehouse id nor a known warehouse code",
+        )
+    return wh
 
-    if isinstance(target_wh_id_raw, str) and len(target_wh_id_raw) == 36:
-        target_wh_id = _to_uuid(target_wh_id_raw)
-    else:
-        wh_result = await db.execute(select(Warehouse).where(Warehouse.code == target_wh_id_raw))
-        wh_obj = wh_result.scalar_one_or_none()
-        if not wh_obj:
-            raise NotFoundException(message=f"Warehouse {target_wh_id_raw} not found")
-        target_wh_id = wh_obj.id
 
-    data.get("source_warehouse_code", "") or (src_wh.hex[:12].upper() if src_wh else "")
+async def create_transfer_order(db: AsyncSession, payload: TransferOrderCreate) -> dict:
+    """Create a transfer order with line items.
+
+    Both ends of a transfer are required, and both are warehouses.  This function
+    used to read the source from ``data["source_location"]`` only, which had three
+    consequences at once: the source that ``docs/functional-test-plan.md``
+    documents (``source_warehouse_id``) was dropped and the order was filed with
+    ``source_warehouse_id = NULL`` — a transfer with no origin, and no line
+    recording where the goods came from; that same key, read as the last fallback
+    for the *destination*, made an order whose destination is the warehouse its
+    caller named as the source (an order that ships a warehouse's stock to
+    itself); and a warehouse *code* — what the mobile screen sends — reached
+    ``_to_uuid``, answered None, and produced the same silent NULL.
+
+    Lines were read as ``item_data["sku"]`` and ``item_data["quantity"]``, so the
+    documented body (lines named by ``sku_id``) raised KeyError inside the
+    handler: 500 for a request that named a real product, and the same for a
+    quantity written as ``"5x"``.
+
+    ``location_from_id`` used to receive the source *warehouse* id.  It is a
+    location column; the warehouse a line leaves from is
+    ``TransferOrderLine.warehouse_id``, which is what is written now.
+    """
+    source = await _resolve_warehouse(db, payload.source_warehouse_id, field="source_warehouse_id")
+    target = await _resolve_warehouse(db, payload.target_warehouse_id, field="target_warehouse_id")
+    if source.id == target.id:
+        raise ValidationException(
+            message=f"source and target are the same warehouse ({source.code}) — a transfer "
+                    "from a warehouse to itself moves nothing, and every later step of a "
+                    "transfer (approve, ship, receive) would run on it",
+        )
 
     # Generate transfer order code
     code = f"TO-{datetime.now(UTC).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
@@ -759,26 +898,58 @@ async def create_transfer_order(db: AsyncSession, data: dict) -> dict:
     transfer = TransferOrder(
         id=uuid.uuid4(),
         code=code,
-        source_warehouse_id=target_wh_id if not src_wh else None,  # fallback to target if no source location
-        target_warehouse_id=target_wh_id,
-        type=TransferItemType.SKU,
-        status="DRAFT",
+        source_warehouse_id=source.id,
+        target_warehouse_id=target.id,
+        type=TransferItemType(payload.type),
+        status=TransferStatus.DRAFT,
+        ref_no=payload.ref_no,
+        remarks=payload.remarks,
     )
     db.add(transfer)
 
-    for item_data in data.get("items", []):
-        sku_str = item_data["sku"]
-        qty = Decimal(str(item_data["quantity"]))
-        sku_obj = await _get_or_create_sku(db, sku_str)
+    # Batch-fetch existing SKUs (avoids N+1)
+    sku_strs = {line.sku for line in payload.lines if line.sku}
+    sku_result = await db.execute(select(SKU).where(SKU.sku.in_(list(sku_strs))))
+    sku_map = {s.sku: s for s in sku_result.scalars().all()}
 
-        line = TransferOrderLine(
+    for index, line in enumerate(payload.lines):
+        if line.sku and line.sku_id is not None:
+            raise ValidationException(
+                message=f"line {index} names a product twice — sku {line.sku} and "
+                        f"sku_id {line.sku_id}. The two spellings of the documented body "
+                        "are both accepted, on one line each, not on the same line",
+            )
+        if not line.sku and line.sku_id is None:
+            raise ValidationException(
+                message=f"line {index} names no product — a transfer line needs sku (a "
+                        "product code) or sku_id (a SKU row id)",
+            )
+
+        if line.sku_id is not None:
+            sku_obj = await db.get(SKU, line.sku_id)
+            if sku_obj is None:
+                raise ValidationException(
+                    message=f"line {index}: sku_id {line.sku_id} is not a product in the "
+                            "SKU catalog — register the SKU before transferring it",
+                )
+        else:
+            # The mobile flow scans codes the catalog may not carry yet; the
+            # precedent of creating the catalog row stands.
+            sku_obj = sku_map.get(line.sku)
+            if sku_obj is None:
+                sku_obj = SKU(id=uuid.uuid4(), sku=line.sku, name=line.sku)
+                db.add(sku_obj)
+                await db.flush()
+                sku_map[line.sku] = sku_obj
+
+        db.add(TransferOrderLine(
             id=uuid.uuid4(),
             transfer_order_id=transfer.id,
+            item_type=TransferItemType(payload.type),
             sku_id=sku_obj.id,
-            location_from_id=src_wh,
-            quantity=qty,
-        )
-        db.add(line)
+            warehouse_id=source.id,
+            quantity=line.qty,
+        ))
 
     await db.commit()
     return model_to_dict(transfer)
@@ -864,23 +1035,50 @@ async def complete_picking(db: AsyncSession, wave_id: str) -> dict:
 # ── Packing ─────────────────────────────────────────────────────────────────
 
 async def create_packing(db: AsyncSession, data: dict) -> dict:
-    """Record packing for a completed picking wave."""
+    """Record packing for a completed picking wave.
+
+    Two keys name the wave: ``picking_wave_id`` is the key this service read,
+    and ``wave_id`` is the key the 打包记录 screen in ``ShipmentList.vue``
+    posts.  The screen had been posting the second one since it was written, so
+    every 记录打包 click was ``data["picking_wave_id"]``, a KeyError and a 500 —
+    a record the operator never saw created and never saw refused.  Both spellings
+    are read here, and a body that names no wave is refused by the field that
+    should have named it.
+    """
     from src.wms.models import PackingRecord
 
-    wave_id = data["picking_wave_id"]
-    result = await db.execute(select(PickingWave).where(PickingWave.id == _to_uuid(wave_id)))
+    wave_id = data.get("picking_wave_id") or data.get("wave_id")
+    if not wave_id:
+        raise ValidationException(
+            message="picking_wave_id is required — a packing record says which wave was packed",
+            detail={"picking_wave_id": None},
+        )
+    wave_uuid = _to_uuid(wave_id)
+    if wave_uuid is None:
+        raise ValidationException(
+            message=f"picking_wave_id {wave_id!r} is not a wave id — the wave is named by its uuid",
+            detail={"picking_wave_id": str(wave_id)},
+        )
+    result = await db.execute(select(PickingWave).where(PickingWave.id == wave_uuid))
     wave = result.scalar_one_or_none()
     if not wave:
         raise NotFoundException(message=f"Picking wave {wave_id} not found")
     if wave.status != "completed":
-        raise ValidationException(message="Only completed waves can be packed")
+        raise ValidationException(message=f"Only completed waves can be packed — wave {wave.code} is {wave.status}")
+
+    box_count = _as_int(data.get("box_count", 1), field="box_count")
+    if box_count < 1:
+        raise ValidationException(
+            message=f"box_count {box_count} is not a packing count — a wave packs at least one box",
+            detail={"box_count": box_count},
+        )
 
     record = PackingRecord(
         id=uuid.uuid4(),
-        picking_wave_id=_to_uuid(wave_id),
-        packed_by=data.get("packed_by", ""),
-        box_count=data.get("box_count", 1),
-        notes=data.get("notes", ""),
+        picking_wave_id=wave_uuid,
+        packed_by=str(data.get("packed_by") or ""),
+        box_count=box_count,
+        notes=str(data.get("notes") or ""),
     )
     db.add(record)
     await db.commit()
@@ -890,40 +1088,148 @@ async def create_packing(db: AsyncSession, data: dict) -> dict:
 
 # ── Shipping ────────────────────────────────────────────────────────────────
 
+def _shipment_no() -> str:
+    """A number for a shipment, generated the way ``create_order`` numbers orders."""
+    return f"SHIP-{_now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+
+
 async def create_shipment(db: AsyncSession, data: dict) -> dict:
-    """Create a shipment for an order."""
-    from src.wms.models import Shipment, ShipmentStatus
+    """Create one shipment per order the caller listed.
 
-    order_id = data["order_id"]
-    wh_id = data["warehouse_id"]
+    The 新建发货单 dialog in ``ShipmentList.vue`` collects a warehouse and a
+    textarea of order ids and posts ``{"warehouse_id": …, "order_ids": […]}``;
+    this function read ``data["order_id"]``, so 提交 on that screen was a
+    KeyError, a 500 and a 发货单创建失败 toast — the shipment was never created
+    and the operator was never told the form's own list was the problem.  Both
+    keys are read: ``order_ids`` for the screen, ``order_id`` for the callers
+    that name one order.
 
-    wh_result = await db.execute(select(Warehouse).where(Warehouse.id == _to_uuid(wh_id)))
-    if not wh_result.scalar_one_or_none():
-        raise NotFoundException(message=f"Warehouse {wh_id} not found")
+    The ids are then checked against the orders table.  ``Shipment.order_id``
+    is a NOT NULL FK into ``orders``, and inserting a uuid that is not an order
+    is an FK violation the server answered with a 500 — under SQLite the FK is
+    not enforced, so the suite had been filing shipments for orders that never
+    existed, which is a handover sheet with nothing behind it.
 
-    shipment = Shipment(
-        id=uuid.uuid4(),
-        order_id=_to_uuid(order_id),
-        warehouse_id=_to_uuid(wh_id),
-        packing_record_id=_to_uuid(data.get("packing_record_id")),
-        tracking_number=data.get("tracking_number", ""),
-        carrier=data.get("carrier", ""),
-        status=ShipmentStatus.PACKED if data.get("packing_record_id") else ShipmentStatus.PICKED,
+    The result is one shape for one order and for many: ``{"count",
+    "shipments"}``.  Returning the first shipment bare is what made a batch
+    of order ids look like a single shipment in the response.
+    """
+    from src.oms.models import Order
+    from src.wms.models import PackingRecord, Shipment, ShipmentStatus
+
+    if not data.get("warehouse_id"):
+        raise ValidationException(
+            message="warehouse_id is required — a shipment leaves from a warehouse",
+            detail={"warehouse_id": None},
+        )
+    wh = await _resolve_warehouse(db, data["warehouse_id"], field="warehouse_id")
+
+    raw_ids = data.get("order_ids")
+    if raw_ids in (None, [], {}):
+        raw_ids = [data["order_id"]] if data.get("order_id") else []
+    if isinstance(raw_ids, (str, uuid.UUID)):
+        raw_ids = [raw_ids]  # noqa: RUF057 — a single id is the one-element list of it
+    if not isinstance(raw_ids, (list, tuple)):
+        raise ValidationException(
+            message=f"order_ids must be a list of order ids, got {type(raw_ids).__name__}",
+            detail={"order_ids": str(raw_ids)},
+        )
+    if not raw_ids:
+        raise ValidationException(
+            message="order_ids is required — a shipment carries orders out of the warehouse",
+            detail={"order_ids": []},
+        )
+
+    order_ids: list[uuid.UUID] = []
+    for raw in raw_ids:
+        oid = _to_uuid(raw)
+        if oid is None:
+            raise ValidationException(
+                message=f"order_ids contains {raw!r}, which is not an order id",
+                detail={"order_ids": str(raw)},
+            )
+        if oid not in order_ids:
+            order_ids.append(oid)
+
+    found = set(
+        (await db.execute(select(Order.id).where(Order.id.in_(order_ids)))).scalars().all()
     )
-    db.add(shipment)
+    missing = [str(oid) for oid in order_ids if oid not in found]
+    if missing:
+        raise NotFoundException(
+            message=f"Order {', '.join(missing)} not found — a shipment cannot carry an order that does not exist",
+            detail={"order_ids": missing},
+        )
+
+    pack_id: uuid.UUID | None = None
+    if data.get("packing_record_id"):
+        pack_id = _to_uuid(data["packing_record_id"])
+        if pack_id is None:  # noqa: RUF019 — keep the raw value in the message
+            raise ValidationException(
+                message=f"packing_record_id {data['packing_record_id']!r} is not an id",
+                detail={"packing_record_id": str(data["packing_record_id"])},
+            )
+        if await db.scalar(select(PackingRecord).where(PackingRecord.id == pack_id)) is None:
+            raise NotFoundException(
+                message=f"Packing record {data['packing_record_id']} not found — pack the wave before shipping it",
+            )
+
+    created: list[Shipment] = []
+    for oid in order_ids:
+        shipment = Shipment(
+            id=uuid.uuid4(),
+            shipment_no=_shipment_no(),
+            order_id=oid,
+            warehouse_id=wh.id,
+            packing_record_id=pack_id,
+            tracking_number=str(data.get("tracking_number") or ""),
+            carrier=str(data.get("carrier") or ""),
+            status=ShipmentStatus.PACKED if pack_id else ShipmentStatus.PICKED,
+            notes=str(data.get("notes") or ""),
+        )
+        db.add(shipment)
+        created.append(shipment)
     await db.commit()
-    await db.refresh(shipment)
-    return model_to_dict(shipment)
+
+    shipments = []
+    for shipment in created:
+        await db.refresh(shipment)
+        shipments.append(model_to_dict(shipment))
+    return {"count": len(shipments), "shipments": shipments}
 
 
 async def mark_shipped(db: AsyncSession, shipment_id: str, tracking_number: str = "", carrier: str = "") -> dict:
-    """Mark a shipment as shipped with tracking info."""
+    """Mark a shipment as shipped with tracking info.
+
+    The 发货 button on the list posts no body at all, so the handover the
+    carrier signs for is recorded by the 标记发货 screen that has the tracking
+    number, and this keeps whatever the shipment already carried.  Statuses
+    that do not leave the warehouse again — shipped, delivered, cancelled —
+    are refused: a second click on 发货 used to stamp a fresh ``shipped_at``
+    on a shipment that had already gone out, and a cancelled shipment used to
+    ship as happily as any other.
+    """
     from src.wms.models import Shipment, ShipmentStatus
 
     result = await db.execute(select(Shipment).where(Shipment.id == _to_uuid(shipment_id)))
     shipment = result.scalar_one_or_none()
     if not shipment:
         raise NotFoundException(message=f"Shipment {shipment_id} not found")
+
+    if shipment.status in (ShipmentStatus.SHIPPED, ShipmentStatus.DELIVERED):
+        raise ValidationException(
+            message=(
+                f"Shipment {shipment.shipment_no or shipment_id} is already {shipment.status} — "
+                "shipping it again would record a second handover"
+            ),
+        )
+    if shipment.status == ShipmentStatus.CANCELLED:
+        raise ValidationException(
+            message=(
+                f"Shipment {shipment.shipment_no or shipment_id} is cancelled — "
+                "a cancelled shipment does not leave the warehouse"
+            ),
+        )
 
     shipment.status = ShipmentStatus.SHIPPED
     shipment.tracking_number = tracking_number or shipment.tracking_number
@@ -1017,12 +1323,72 @@ async def list_addresses(db: AsyncSession, entity_type: str | None = None, entit
 # ── PurchaseOrder CRUD ─────────────────────────────────────────────────
 
 
+#: A receipt is legal only for an order the vendor has actually been given
+#: ("approved") or that has partly landed ("partial").  "draft" has not been
+#: ordered yet; "received" is already closed out.
+PO_RECEIVABLE_STATUSES: tuple[str, ...] = ("approved", "partial")
+
+#: ``status="pending"`` is what clients have always sent for "waiting to be
+#: received".  It is not a status this table stores, so filtering on it used to
+#: match nothing and the receiving screen reported an empty day.
+_LEGACY_STATUS_ALIASES: dict[str, tuple[str, ...]] = {"pending": PO_RECEIVABLE_STATUSES}
+
+
+async def _load_po(db: AsyncSession, po_id: str) -> PurchaseOrder:
+    """Load a PO by id, or by ``po_number`` when the caller holds a document number.
+
+    ``_to_uuid`` returns None for a non-UUID string, which compared the id
+    column against NULL: a scanned PO number came back as "PurchaseOrder
+    PO-2026-001 not found", a lookup failure dressed up as a missing order.
+    """
+    po_uuid = _to_uuid(po_id)
+    if po_uuid is not None:
+        result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == po_uuid))
+    else:
+        result = await db.execute(
+            select(PurchaseOrder).where(PurchaseOrder.po_number == str(po_id))
+        )
+    po = result.scalar_one_or_none()
+    if not po:
+        raise NotFoundException(message=f"PurchaseOrder {po_id} not found")
+    return po
+
+
+async def _po_lines(db: AsyncSession, po: PurchaseOrder) -> list[dict]:
+    """This PO's lines with their SKU codes attached.
+
+    The response had no lines at all.  A receiving screen given a PO without
+    lines has nothing to enter quantities against, so it showed an empty order
+    and still let the operator confirm a receipt for goods they could not list.
+    """
+    rows = (
+        await db.execute(
+            select(PurchaseOrderLine, SKU.sku)
+            .outerjoin(SKU, SKU.id == PurchaseOrderLine.sku_id)
+            .where(PurchaseOrderLine.purchase_order_id == po.id)
+            # purchase_order_lines has no timestamps, so there is no ordering
+            # that means anything beyond "stable" — which is what the PDA needs
+            # to keep a scanned order matched to the same row between screens.
+            .order_by(PurchaseOrderLine.id)
+        )
+    ).all()
+    return [{**model_to_dict(line), "sku": sku_code} for line, sku_code in rows]
+
+
+async def _po_payload(db: AsyncSession, po: PurchaseOrder) -> dict:
+    payload = model_to_dict(po)
+    payload["lines"] = await _po_lines(db, po)
+    return payload
+
+
 async def create_purchase_order(db: AsyncSession, data: dict) -> dict:
+    expected_date = _as_date(data.get("expected_date"), "expected_date")
+
     po = PurchaseOrder(
         id=uuid.uuid4(),
         po_number=data["po_number"],
         vendor_id=_to_uuid(data.get("vendor_id")) if data.get("vendor_id") else None,
-        expected_date=datetime.fromisoformat(data["expected_date"]).date() if data.get("expected_date") else None,
+        expected_date=expected_date,
         notes=data.get("notes", ""),
     )
     db.add(po)
@@ -1030,10 +1396,23 @@ async def create_purchase_order(db: AsyncSession, data: dict) -> dict:
 
     total = Decimal("0")
     for line_data in data.get("lines", []):
+        sku_id = _to_uuid(line_data.get("sku_id")) if line_data.get("sku_id") else None
+        if sku_id is None and line_data.get("sku"):
+            # A PDA knows the code it scanned, not the SKU's primary key.
+            sku_obj = await _get_or_create_sku(db, str(line_data["sku"]))
+            sku_id = sku_obj.id
+        if sku_id is None and not line_data.get("description"):
+            raise ValidationException(
+                message=(
+                    "A purchase order line needs sku_id, sku, or a description; "
+                    "an unidentifiable line cannot be received or invoiced"
+                )
+            )
+
         line = PurchaseOrderLine(
             id=uuid.uuid4(),
             purchase_order_id=po.id,
-            sku_id=_to_uuid(line_data.get("sku_id")) if line_data.get("sku_id") else None,
+            sku_id=sku_id,
             description=line_data.get("description", ""),
             quantity=Decimal(str(line_data.get("quantity", 1))),
             unit_price=Decimal(str(line_data.get("unit_price", 0))),
@@ -1044,63 +1423,284 @@ async def create_purchase_order(db: AsyncSession, data: dict) -> dict:
     po.total_amount = total
     await db.commit()
     await db.refresh(po)
-    return model_to_dict(po)
+    return await _po_payload(db, po)
 
 
 async def get_purchase_order(db: AsyncSession, po_id: str) -> dict:
-    result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == _to_uuid(po_id)))
-    po = result.scalar_one_or_none()
-    if not po:
-        raise NotFoundException(message=f"PurchaseOrder {po_id} not found")
-    return model_to_dict(po)
+    po = await _load_po(db, po_id)
+    return await _po_payload(db, po)
 
 
 async def list_purchase_orders(
     db: AsyncSession,
     page: int | None = None,
     page_size: int | None = None,
+    status: str | None = None,
 ) -> list[dict] | dict:
     stmt = select(PurchaseOrder).order_by(PurchaseOrder.created_at.desc())
+    if status:
+        statuses = _LEGACY_STATUS_ALIASES.get(status, (status,))
+        stmt = stmt.where(PurchaseOrder.status.in_(statuses))
+
     if page is not None and page_size is not None:
         result = await paginate(stmt, db, page=page, page_size=page_size)
         return {
-            "items": [model_to_dict(po) for po in result.items],
+            "items": [await _po_payload(db, po) for po in result.items],
             "total": result.total,
             "page": result.page,
             "page_size": result.page_size,
             "total_pages": result.total_pages,
         }
     result = await db.execute(stmt)
-    return [model_to_dict(po) for po in result.scalars().all()]
+    return [await _po_payload(db, po) for po in result.scalars().all()]
 
 
 async def approve_purchase_order(db: AsyncSession, po_id: str) -> dict:
-    result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == _to_uuid(po_id)))
-    po = result.scalar_one_or_none()
-    if not po:
-        raise NotFoundException(message=f"PurchaseOrder {po_id} not found")
+    po = await _load_po(db, po_id)
     if po.status != "draft":
         raise ValidationException(message=f"Cannot approve PO in '{po.status}' state")
     po.status = "approved"
     await db.commit()
     await db.refresh(po)
-    return model_to_dict(po)
+    return await _po_payload(db, po)
 
 
-async def receive_goods(db: AsyncSession, po_id: str) -> dict:
-    result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.id == _to_uuid(po_id)))
-    po = result.scalar_one_or_none()
-    if not po:
-        raise NotFoundException(message=f"PurchaseOrder {po_id} not found")
-    if po.status not in ("approved", "partial"):
-        raise ValidationException(message=f"Cannot receive goods for PO in '{po.status}' state")
-    po.status = "received"
+async def receive_goods(db: AsyncSession, po_id: str, data: dict | None = None) -> dict:
+    """Book what physically arrived against a purchase order.
+
+    This used to be ``po.status = "received"; commit()``.  Nothing was added to
+    inventory and no quantity was recorded anywhere: a PO for 100 units against
+    a delivery of 3 looked identical to a complete delivery, and the 3 units
+    that were in the building were invisible to every later pick.
+
+    ``data`` carries the destination (``warehouse_id``/``location_id``) and the
+    per-line landed quantities.  With no ``lines`` given, the outstanding
+    balance of every line is received — the old "receive the whole order"
+    meaning, now with the quantities attached.
+    """
+    data = data or {}
+    po = await _load_po(db, po_id)
+    if po.status not in PO_RECEIVABLE_STATUSES:
+        raise ValidationException(
+            message=(
+                f"Cannot receive goods for PO in '{po.status}' state "
+                f"(expected {' or '.join(PO_RECEIVABLE_STATUSES)})"
+            )
+        )
+
+    lines = await _po_lines(db, po)
+    if not lines:
+        # An order with nothing on it cannot be received.  Saying so is the
+        # point: create_purchase_order() used to drop the request's lines, so
+        # every PO created through the API was empty and every receipt of it
+        # was a status flip over an empty order.
+        raise ValidationException(message=f"PO {po.po_number} has no lines to receive")
+
+    wh_id = _to_uuid(data.get("warehouse_id"))
+    loc_id = _to_uuid(data.get("location_id"))
+    if wh_id is None:
+        raise ValidationException(
+            message=(
+                "Receiving needs a warehouse_id: the goods have to land somewhere. "
+                f"Got {data.get('warehouse_id')!r}"
+            )
+        )
+    if loc_id is None:
+        raise ValidationException(
+            message=(
+                "Receiving needs a location_id: stock is keyed by location, so a "
+                f"receipt without one cannot be booked. Got {data.get('location_id')!r}"
+            )
+        )
+
+    # Checked before anything is written, so a mistyped destination cannot leave
+    # part of the order booked.
+    location = (
+        await db.execute(select(Location).where(Location.id == loc_id))
+    ).scalar_one_or_none()
+    if not location:
+        raise NotFoundException(message=f"Location {loc_id} not found")
+    if location.warehouse_id != wh_id:
+        # adjust_inventory() only checks that both ids exist, which would have
+        # booked the delivery into another warehouse's shelf.
+        raise ValidationException(
+            message=(
+                f"Location {location.code} belongs to warehouse {location.warehouse_id}, "
+                f"not {wh_id}"
+            ),
+            detail={"location_id": str(loc_id), "location_warehouse_id": str(location.warehouse_id)},
+        )
+    warehouse = (
+        await db.execute(select(Warehouse).where(Warehouse.id == wh_id))
+    ).scalar_one_or_none()
+    if not warehouse:
+        raise NotFoundException(message=f"Warehouse {wh_id} not found")
+
+    by_id = {str(line["id"]): line for line in lines}
+    by_sku: dict[str, list[dict]] = {}
+    for line in lines:
+        if line["sku"]:
+            by_sku.setdefault(str(line["sku"]).lower(), []).append(line)
+
+    requested = data.get("lines")
+    plan: list[tuple[dict, Decimal, dict]] = []
+
+    if requested is None:
+        for line in lines:
+            outstanding = Decimal(str(line["quantity"])) - Decimal(str(line["received_qty"] or 0))
+            if outstanding > 0:
+                plan.append((line, outstanding, {}))
+    else:
+        for item in requested:
+            qty = Decimal(str(item.get("received_qty", 0)))
+            if qty < 0:
+                raise ValidationException(
+                    message=(
+                        f"received_qty cannot be negative (got {qty}) "
+                        f"for line {item.get('line_id') or item.get('sku')}"
+                    )
+                )
+            if qty == 0:
+                continue
+
+            line: dict | None = None
+            if item.get("line_id"):
+                line = by_id.get(str(item["line_id"]))
+                if line is None:
+                    # Accepting a foreign line would book this delivery against
+                    # somebody else's order.
+                    raise ValidationException(
+                        message=f"Line {item['line_id']} is not part of PO {po.po_number}"
+                    )
+            elif item.get("sku"):
+                matches = by_sku.get(str(item["sku"]).lower(), [])
+                if not matches:
+                    raise ValidationException(
+                        message=f"SKU {item['sku']} is not on PO {po.po_number}"
+                    )
+                if len(matches) > 1:
+                    raise ValidationException(
+                        message=(
+                            f"PO {po.po_number} has {len(matches)} lines for SKU {item['sku']}; "
+                            "send line_id so the receipt books the right one"
+                        ),
+                        detail={"sku": item["sku"], "line_ids": [m["id"] for m in matches]},
+                    )
+                line = matches[0]
+            else:
+                raise ValidationException(message="A received line needs line_id or sku")
+
+            if not line["sku"]:
+                raise ValidationException(
+                    message=(
+                        f"Line {line['id']} has no SKU, so there is no inventory row to "
+                        "receive it into; give the line a sku_id or sku before receiving it"
+                    )
+                )
+            plan.append((line, qty, item))
+
+    if not plan:
+        raise ValidationException(
+            message=(
+                "Nothing was received (every line was zero): the PO stays as it is. "
+                "A delivery of nothing is not a receipt."
+            )
+        )
+
+    # adjust_inventory() rolls the session back and retries when another
+    # transaction moved the inventory row underneath it.  In a multi-line
+    # receipt that rollback also throws away the lines already booked, so the
+    # receipt cannot quietly carry on with half its bookkeeping gone: if the
+    # transaction changes mid-receipt, the whole receipt is reported as a
+    # conflict and nothing is committed.  The caller re-reads and retries.
+    po_number = str(po.po_number)  # read now: a rollback expires the ORM object
+    tx_before = db.get_transaction()
+
+    now = _now()
+    for line, qty, item in plan:
+        # The line and the stock land in one transaction (commit=False on the
+        # adjustment, committed once below): booking the delivery while the
+        # ordered line still says "0 received" leaves inventory no order
+        # accounts for, and a replay of the same receipt would book it twice.
+        await db.execute(
+            PurchaseOrderLine.__table__.update()
+            .where(PurchaseOrderLine.id == _to_uuid(line["id"]))
+            .values(
+                received_qty=Decimal(str(line["received_qty"] or 0)) + qty,
+                received_at=now,
+            )
+        )
+        await adjust_inventory(
+            db,
+            {
+                "warehouse_id": str(wh_id),
+                "location_id": str(loc_id),
+                "sku": line["sku"],
+                "quantity": qty,
+                # The batch the delivery note names; without it the received
+                # units merge into "DEFAULT" and the dated batch never expires.
+                # The receipt's own audit trail is the line's received_qty /
+                # received_at: StockMovement's type enum has no RECEIPT member,
+                # so its movement row reads as a movement into the location.
+                "batch_no": item.get("batch_no") or "DEFAULT",
+                "expiry_date": item.get("expiry_date"),
+                "manufacturing_date": item.get("manufacturing_date"),
+            },
+            commit=False,
+        )
+
+        if db.get_transaction() is not tx_before:
+            raise ConflictException(
+                message=(
+                    f"Stock changed while receiving {po_number}; this receipt was "
+                    "not applied. Re-read the order and receive it again."
+                ),
+                detail={"po_number": po_number, "sku": line["sku"]},
+            )
+
+    landed = await _po_lines(db, po)
+    complete = all(
+        Decimal(str(line["received_qty"] or 0)) >= Decimal(str(line["quantity"]))
+        for line in landed
+    )
+    po.status = "received" if complete else "partial"
+
     await db.commit()
     await db.refresh(po)
-    return model_to_dict(po)
+    return await _po_payload(db, po)
 
 
 # ── Invoice CRUD ───────────────────────────────────────────────────────
+
+
+async def _lines_by_parent(
+    db: AsyncSession,
+    line_model,
+    parent_field: str,
+    parent_ids: list,
+) -> dict[str, list[dict]]:
+    """Child rows for several parents, in one query, keyed by parent id.
+
+    Read through the ORM relationship instead and the async session lazy-loads
+    from another greenlet and raises; read per parent and a list endpoint turns
+    into one query per invoice.
+    """
+    ids = [i for i in parent_ids if i is not None]
+    if not ids:
+        return {}
+    result = await db.execute(select(line_model).where(getattr(line_model, parent_field).in_(ids)))
+    grouped: dict[str, list[dict]] = {}
+    for line in result.scalars().all():
+        payload = model_to_dict(line)
+        grouped.setdefault(str(payload[parent_field]), []).append(payload)
+    return grouped
+
+
+async def _invoice_payload(db: AsyncSession, inv: Invoice) -> dict:
+    payload = model_to_dict(inv)
+    lines = await _lines_by_parent(db, InvoiceLine, "invoice_id", [inv.id])
+    payload["lines"] = lines.get(str(inv.id), [])
+    return payload
 
 
 async def create_invoice(db: AsyncSession, data: dict) -> dict:
@@ -1109,8 +1709,8 @@ async def create_invoice(db: AsyncSession, data: dict) -> dict:
         invoice_number=data["invoice_number"],
         entity_type=data["entity_type"],
         entity_id=_to_uuid(data.get("entity_id")) if data.get("entity_id") else None,
-        issue_date=datetime.fromisoformat(data["issue_date"]).date() if data.get("issue_date") else None,
-        due_date=datetime.fromisoformat(data["due_date"]).date() if data.get("due_date") else None,
+        issue_date=_as_date(data.get("issue_date"), "issue_date"),
+        due_date=_as_date(data.get("due_date"), "due_date"),
         notes=data.get("notes", ""),
     )
     db.add(inv)
@@ -1128,10 +1728,13 @@ async def create_invoice(db: AsyncSession, data: dict) -> dict:
         db.add(line)
         total += line.quantity * line.unit_price
 
+    # The total is a fact about the lines, not a number somebody types: an
+    # invoice whose amount disagrees with what is on it is a document two
+    # departments will spend a week reconciling.
     inv.total_amount = total
     await db.commit()
     await db.refresh(inv)
-    return model_to_dict(inv)
+    return await _invoice_payload(db, inv)
 
 
 async def get_invoice(db: AsyncSession, invoice_id: str) -> dict:
@@ -1139,25 +1742,58 @@ async def get_invoice(db: AsyncSession, invoice_id: str) -> dict:
     inv = result.scalar_one_or_none()
     if not inv:
         raise NotFoundException(message=f"Invoice {invoice_id} not found")
-    return model_to_dict(inv)
+    return await _invoice_payload(db, inv)
 
 
 async def list_invoices(db: AsyncSession) -> list[dict]:
     result = await db.execute(select(Invoice).order_by(Invoice.created_at.desc()))
-    return [model_to_dict(inv) for inv in result.scalars().all()]
+    invoices = list(result.scalars().all())
+    lines = await _lines_by_parent(db, InvoiceLine, "invoice_id", [inv.id for inv in invoices])
+    out = []
+    for inv in invoices:
+        payload = model_to_dict(inv)
+        payload["lines"] = lines.get(str(inv.id), [])
+        out.append(payload)
+    return out
 
 
 # ── CreditMemo CRUD ─────────────────────────────────────────────────────
 
 
+async def _credit_memo_payload(db: AsyncSession, cm: CreditMemo) -> dict:
+    payload = model_to_dict(cm)
+    lines = await _lines_by_parent(db, CreditMemoLine, "credit_memo_id", [cm.id])
+    payload["lines"] = lines.get(str(cm.id), [])
+    return payload
+
+
 async def create_credit_memo(db: AsyncSession, data: dict) -> dict:
+    raw_invoice_id = data.get("invoice_id")
+    invoice_id = _to_uuid(raw_invoice_id) if raw_invoice_id else None
+    # _to_uuid() answers None for anything it cannot parse.  Without this check
+    # a memo written against a mistyped invoice id becomes a memo against
+    # nothing, and the refund can no longer be traced back to the document it
+    # was issued for.
+    if raw_invoice_id and invoice_id is None:
+        raise ValidationException(
+            message=f"invoice_id is not a valid invoice reference: {raw_invoice_id!r}",
+            detail={"invoice_id": str(raw_invoice_id)},
+        )
+    if invoice_id is not None:
+        found = await db.execute(select(Invoice.id).where(Invoice.id == invoice_id))
+        if found.scalar_one_or_none() is None:
+            raise NotFoundException(
+                message=f"Invoice {raw_invoice_id} not found: this credit memo would correct nothing",
+                detail={"invoice_id": str(raw_invoice_id)},
+            )
+
     cm = CreditMemo(
         id=uuid.uuid4(),
         credit_memo_number=data["credit_memo_number"],
-        invoice_id=_to_uuid(data.get("invoice_id")) if data.get("invoice_id") else None,
+        invoice_id=invoice_id,
         entity_type=data["entity_type"],
         entity_id=_to_uuid(data.get("entity_id")) if data.get("entity_id") else None,
-        issue_date=datetime.fromisoformat(data["issue_date"]).date() if data.get("issue_date") else None,
+        issue_date=_as_date(data.get("issue_date"), "issue_date"),
         reason=data.get("reason", ""),
         notes=data.get("notes", ""),
     )
@@ -1179,7 +1815,7 @@ async def create_credit_memo(db: AsyncSession, data: dict) -> dict:
     cm.total_amount = total
     await db.commit()
     await db.refresh(cm)
-    return model_to_dict(cm)
+    return await _credit_memo_payload(db, cm)
 
 
 async def get_credit_memo(db: AsyncSession, cm_id: str) -> dict:
@@ -1187,12 +1823,19 @@ async def get_credit_memo(db: AsyncSession, cm_id: str) -> dict:
     cm = result.scalar_one_or_none()
     if not cm:
         raise NotFoundException(message=f"CreditMemo {cm_id} not found")
-    return model_to_dict(cm)
+    return await _credit_memo_payload(db, cm)
 
 
 async def list_credit_memos(db: AsyncSession) -> list[dict]:
     result = await db.execute(select(CreditMemo).order_by(CreditMemo.created_at.desc()))
-    return [model_to_dict(cm) for cm in result.scalars().all()]
+    memos = list(result.scalars().all())
+    lines = await _lines_by_parent(db, CreditMemoLine, "credit_memo_id", [cm.id for cm in memos])
+    out = []
+    for cm in memos:
+        payload = model_to_dict(cm)
+        payload["lines"] = lines.get(str(cm.id), [])
+        out.append(payload)
+    return out
 
 
 # ── Stock In / Out (入库/出库) ───────────────────────────────────────────────
@@ -1225,15 +1868,15 @@ async def stock_in(
     wh = wh_result.scalar_one_or_none()
     if not wh:
         raise NotFoundException(message=f"Warehouse {wh_id} not found")
-    if wh.status != WarehouseStatus.ACTIVE.value:
+    if wh.status != WarehouseStatus.ACTIVE:
         raise ValidationException(message=f"Warehouse {wh.code} is inactive (status={wh.status})")
 
     # 2. 解析入库项数据
     sku_str = data["sku"]
     qty = Decimal(str(data["quantity"]))
     batch_no = data.get("batch_no", "DEFAULT")
-    expiry_date = data.get("expiry_date")
-    manufacturing_date = data.get("manufacturing_date")
+    expiry_date = _as_date(data.get("expiry_date"), "expiry_date")
+    manufacturing_date = _as_date(data.get("manufacturing_date"), "manufacturing_date")
 
     # 3. 查找或创建 SKU
     sku_result = await db.execute(select(SKU).where(SKU.sku == sku_str))
@@ -1289,10 +1932,10 @@ async def stock_in(
             inventory_id=inv.id,
             change_type=InventoryChangeType.INBOUND,
             quantity_change=qty,
-            quantity_before=float(inv.quantity) - qty if inv else 0.0,
+            quantity_before=float(inv.quantity) - float(qty) if inv else 0.0,
             quantity_after=float(inv.quantity),
             reference_type="stock_in",
-            reference_id=str(inv.id),
+            reference_id=inv.id,
             operator_id=_to_uuid(current_user.get("id")) if current_user.get("id") else None,
             remark=data.get("remark"),
         )
@@ -1319,10 +1962,10 @@ async def stock_in(
             inventory_id=inv.id,
             change_type=InventoryChangeType.OUTBOUND,
             quantity_change=qty,
-            quantity_before=float(inv.quantity) - qty if inv else 0.0,
+            quantity_before=float(inv.quantity) - float(qty) if inv else 0.0,
             quantity_after=float(inv.quantity),
-            reference_type="stock_in",
-            reference_id=str(inv.id),
+            reference_type="stock_out",
+            reference_id=inv.id,
             operator_id=_to_uuid(current_user.get("id")) if current_user.get("id") else None,
             remark=data.get("remark"),
         )
@@ -1357,7 +2000,7 @@ async def stock_out(
     wh = wh_result.scalar_one_or_none()
     if not wh:
         raise NotFoundException(message=f"Warehouse {wh_id} not found")
-    if wh.status != WarehouseStatus.ACTIVE.value:
+    if wh.status != WarehouseStatus.ACTIVE:
         raise ValidationException(message=f"Warehouse {wh.code} is inactive (status={wh.status})")
 
     # 2. 解析出库项数据
@@ -1374,12 +2017,14 @@ async def stock_out(
         await db.flush()
 
     # 4. 查找现有库存记录（按仓库 +SKU）
+    # FOR UPDATE：并发出库必须串行扣同一批库存行，否则两个请求都通过
+    # "库存充足"检查、双双扣减 → 超卖（PostgreSQL 行锁；SQLite 自动忽略）。
     inv_result = await db.execute(
         select(Inventory).where(
             Inventory.warehouse_id == wh_id,
             Inventory.sku_id == sku.id,
             Inventory.quantity > 0,
-        )
+        ).with_for_update()
     )
     inventory_rows = inv_result.scalars().all()
 
@@ -1414,6 +2059,9 @@ async def stock_out(
     if total_available < need:
         raise ValidationException(message="Insufficient stock")
 
+    # Record initial quantities before deduction
+    initial_qty = float(batches[0]["inv"].quantity) if batches else 0
+
     # 扣减库存（从第一个批次开始）
     remaining = need
     for batch in batches:
@@ -1430,7 +2078,7 @@ async def stock_out(
         inventory_id=batches[0]["inv"].id,
         change_type=InventoryChangeType.OUTBOUND,
         quantity_change=-qty,
-        quantity_before=float(batches[0]["inv"].quantity) + qty,
+        quantity_before=initial_qty,
         quantity_after=float(batches[0]["inv"].quantity),
         reference_type="stock_out",
         operator_id=_to_uuid(current_user.get("id")) if current_user.get("id") else None,

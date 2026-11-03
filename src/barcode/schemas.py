@@ -24,7 +24,7 @@ class BarcodeResponse(BaseModel):
     id: str
     gtin: str
     entity_type: str
-    entity_id: str
+    entity_id: str | None = None
     format: str
     raw_data: str
     created_at: str

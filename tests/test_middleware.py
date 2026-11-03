@@ -269,3 +269,39 @@ class TestMiddlewareIntegration:
         )
 
         assert response.status_code == 200
+
+
+class TestWriteWithLapsedToken:
+    """AuditLogMiddleware reads the bearer token to name the actor in the audit
+    line.  It caught JWTError/TokenInvalid but not TokenExpired — its own
+    Exception subclass — so an expired token raised out of the middleware and
+    the request never reached the endpoint that would have said 401.  A PDA that
+    replays its queue after the access token lapsed hits this on every write."""
+
+    @pytest.mark.asyncio
+    async def test_write_with_expired_token_is_401_not_a_crash(self, async_client: AsyncClient):
+        from datetime import timedelta
+
+        from src.core.security import create_access_token
+
+        lapsed = create_access_token({"sub": "lapsed-user"}, expires_delta=timedelta(minutes=-1))
+        response = await async_client.post(
+            "/api/v1/warehouses",
+            json={"name": "Lapsed WH", "code": "WH-LAPSED", "type": "center"},
+            headers={"Authorization": f"Bearer {lapsed}"},
+        )
+
+        assert response.status_code == 401, response.text[:200]
+
+    @pytest.mark.asyncio
+    async def test_read_with_expired_token_is_401(self, async_client: AsyncClient):
+        from datetime import timedelta
+
+        from src.core.security import create_access_token
+
+        lapsed = create_access_token({"sub": "lapsed-user"}, expires_delta=timedelta(minutes=-1))
+        response = await async_client.get(
+            "/api/v1/warehouses", headers={"Authorization": f"Bearer {lapsed}"}
+        )
+
+        assert response.status_code == 401, response.text[:200]

@@ -10,11 +10,12 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import StrEnum
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.cache.decorators import cached, distributed_lock, rate_limit
+from src.cache.decorators import cached, distributed_lock
 from src.core.exceptions import NotFoundException, ValidationException
 from src.models.base import model_to_dict
 from src.tms.models import (
@@ -23,6 +24,7 @@ from src.tms.models import (
     CarrierServiceType,
     DeviceSession,
     DeviceStatus,
+    FreightRule,
     FreightTier,
     HubConnection,
     HubStatus,
@@ -62,7 +64,85 @@ def _to_uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
     """Convert a string or UUID value to ``uuid.UUID``, or return None."""
     if val is None or isinstance(val, uuid.UUID):
         return val
-    return uuid.UUID(val)
+    try:
+        return uuid.UUID(val)
+    except (ValueError, TypeError):
+        return None
+
+
+_ALLOWED_EVENT_TYPES = [event.value for event in TrackingEventType]
+
+
+def _as_event_type(value: object) -> TrackingEventType:
+    """Name the event types this API accepts instead of raising.
+
+    ``TrackingEventType(value)`` on a typo raises ValueError, which the global
+    error handler reports as a 500: the caller is told the server broke when
+    what they wrote was "PICKED_UP", and nothing tells them the API calls that
+    event "pickup_completed".  The HTTP schemas catch this now; the guard stays
+    here because tasks, seed scripts and tests call the service directly.
+    """
+    if value is None:
+        raise ValidationException(
+            message=f"event_type is required (one of: {', '.join(_ALLOWED_EVENT_TYPES)})",
+            detail={"allowed": _ALLOWED_EVENT_TYPES},
+        )
+    try:
+        return TrackingEventType(value)
+    except ValueError:
+        raise ValidationException(
+            message=f"event_type must be one of: {', '.join(_ALLOWED_EVENT_TYPES)}, got {value!r}",
+            detail={"event_type": str(value), "allowed": _ALLOWED_EVENT_TYPES},
+        ) from None
+
+
+def _as_choice[E: StrEnum](value: object, enum: type[E], *, field: str) -> E:
+    """Read a vocabulary member out of a request value, naming the members it accepts.
+
+    ``ReturnReason(data["reason"])`` on a typo — and the console's return form is
+    a free-text textarea, so a typo is the normal case — raised ``ValueError``
+    inside the handler: the caller was told the server broke, and nothing told
+    them the reason codes the domain knows.  The HTTP schemas refuse these
+    before the handler runs; this guard is here because tasks, seed scripts and
+    tests call the service directly.
+    """
+    allowed = ", ".join(member.value for member in enum)
+    if value is None:
+        raise ValidationException(message=f"{field} is required (one of: {allowed})")
+    try:
+        return enum(value)
+    except ValueError:
+        raise ValidationException(
+            message=f"{field} must be one of: {allowed}, got {value!r}",
+            detail={field: str(value), "allowed": [member.value for member in enum]},
+        ) from None
+
+
+def _as_decimal(value: object, *, field: str) -> Decimal:
+    """Read a quantity out of a request value without raising inside the handler.
+
+    ``Decimal(str(data.get("refund_amount", "0")))`` on ``"五十九元"`` raised
+    ``decimal.InvalidOperation`` — a 500 for a number typed into the wrong box.
+    A value that is not a number is refused by the field it arrived in.
+    """
+    try:
+        return Decimal(str(value))
+    except Exception:
+        raise ValidationException(
+            message=f"{field} must be a number, got {value!r}",
+            detail={field: str(value)},
+        ) from None
+
+
+def _as_int(value: object, *, field: str) -> int:
+    """Read a count out of a request value without raising inside the handler."""
+    try:
+        return int(str(value))
+    except (ValueError, TypeError):
+        raise ValidationException(
+            message=f"{field} must be a whole number, got {value!r}",
+            detail={field: str(value)},
+        ) from None
 
 
 def _safe_uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
@@ -75,25 +155,92 @@ def _safe_uuid(val: str | uuid.UUID | None) -> uuid.UUID | None:
         return None
 
 
+async def _resolve_transport_order(db: AsyncSession, raw: object, *, field: str = "transport_order_id") -> uuid.UUID:
+    """Find a transport order by id *or* transport number, naming the field that named it.
+
+    The two screens that link a record to a shipment — ``ReturnOrderList.vue``
+    files a return against the number shown in the list, ``ExceptionList.vue``
+    reports an exception against the number the operator typed — both send
+    ``TPL-…`` numbers, and the services read that column as a uuid:
+    ``uuid.UUID("TPL-20260718-0001")`` raised ValueError inside the handler, so
+    a request naming a real shipment in the form the API printed for it was
+    reported as a server failure.  Ids and numbers are both accepted; a value
+    that is neither is refused by the field that carried it.
+    """
+    value = str(raw).strip()
+    as_id = _safe_uuid(value)
+    if as_id is not None:
+        found = await db.scalar(select(TransportOrder.id).where(TransportOrder.id == as_id))
+        if found is not None:
+            return found
+    by_no = await db.scalar(select(TransportOrder.id).where(TransportOrder.transport_no == value))
+    if by_no is None:
+        raise NotFoundException(
+            message=f"{field} {value!r} is neither a transport order id nor a known transport number",
+        )
+    return by_no
+
+
+async def _resolve_warehouse_id(db: AsyncSession, raw: object, *, field: str = "destination_warehouse_id") -> uuid.UUID:
+    """Find a warehouse by id *or* code, naming the field that named it.
+
+    A return is filed to a warehouse; the value a handheld sends is the code
+    printed on its bay door, and a value the lookup cannot read used to reach
+    the UUID column as a string.  Same rule as the transfer endpoints: id first,
+    code second, refusal naming the field.
+    """
+    from src.wms.models import Warehouse
+
+    value = str(raw).strip()
+    as_id = _safe_uuid(value)
+    if as_id is not None:
+        found = await db.scalar(select(Warehouse.id).where(Warehouse.id == as_id))
+        if found is not None:
+            return found
+    by_code = await db.scalar(select(Warehouse.id).where(Warehouse.code == value))
+    if by_code is None:
+        raise NotFoundException(
+            message=f"{field} {value!r} is neither a warehouse id nor a known warehouse code",
+        )
+    return by_code
+
+
 # ── Device CRUD ──────────────────────────────────────────────────────────────
 
 async def register_device(db: AsyncSession, data: dict) -> dict:
-    """Register a new terminal device."""
-    # Check unique code
-    existing = await db.execute(select(TerminalDevice).where(TerminalDevice.code == data["code"]))
-    if existing.scalar_one_or_none():
-        raise ValidationException(message=f"Device code '{data['code']}' already exists")
+    """Register a new terminal device.
+
+    The console (``frontend/src/views/devices/DeviceList.vue``) posts
+    ``{device_code, name, device_type}`` and this function read
+    ``data["code"]``: a ``KeyError`` inside the handler, reported as a server
+    failure, for the ordinary case of registering the device the form described.
+    The body (``DeviceRegister``) accepts ``device_code`` as the code now, and
+    the device's warehouse is resolved by id *or* code — ``_to_uuid`` answers
+    None for a code, and the device was filed with no warehouse, silently.
+    """
+    code = data.get("code")
+    if not code:
+        raise ValidationException(
+            message="code is required — a device is identified by the code printed on it",
+        )
+    code = str(code).strip()
+    existing = await db.scalar(select(TerminalDevice.id).where(TerminalDevice.code == code))
+    if existing is not None:
+        raise ValidationException(message=f"Device code {code!r} already exists")
 
     device = TerminalDevice(
         id=uuid.uuid4(),
-        code=data["code"],
+        code=code,
         name=data.get("name", ""),
-        device_type=TerminalDeviceType(data.get("device_type", "pda")),
-        platform=PlatformType(data.get("platform", "android")),
+        device_type=_as_choice(data.get("device_type") or "pda", TerminalDeviceType, field="device_type"),
+        platform=_as_choice(data.get("platform") or "android", PlatformType, field="platform"),
         os_version=data.get("os_version", ""),
         app_version=data.get("app_version", ""),
         status=DeviceStatus.OFFLINE,
-        warehouse_id=_to_uuid(data.get("warehouse_id")),
+        warehouse_id=(
+            await _resolve_warehouse_id(db, data["warehouse_id"], field="warehouse_id")
+            if data.get("warehouse_id") else None
+        ),
         config=data.get("config"),
         push_token=data.get("push_token"),
     )
@@ -147,15 +294,35 @@ async def update_device(db: AsyncSession, dev_id: str, data: dict) -> dict:
     if not dev:
         raise NotFoundException(message=f"Device {dev_id} not found")
 
-    updatable = {"name", "os_version", "app_version", "warehouse_id", "config", "push_token", "status"}
+    # The fields an update carries.  ``code``, ``device_type`` and ``platform``
+    # are among them: the console's edit form sends the code and the type, and
+    # an edit that renamed a device, or corrected a scanner registered as a
+    # phone, had its two meaningful fields dropped.
+    updatable = {"code", "name", "device_type", "platform", "os_version", "app_version",
+                 "warehouse_id", "config", "push_token", "status"}
     for key in updatable:
-        if key in data and data[key] is not None:
-            if key == "status":
-                setattr(dev, key, DeviceStatus(data[key]))
-            elif key == "warehouse_id":
-                setattr(dev, key, uuid.UUID(data[key]) if data[key] else None)
-            else:
-                setattr(dev, key, data[key])
+        if key not in data or data[key] is None:
+            continue
+        if key == "status":
+            setattr(dev, key, _as_choice(data[key], DeviceStatus, field="status"))
+        elif key == "device_type":
+            setattr(dev, key, _as_choice(data[key], TerminalDeviceType, field="device_type"))
+        elif key == "platform":
+            setattr(dev, key, _as_choice(data[key], PlatformType, field="platform"))
+        elif key == "warehouse_id":
+            setattr(dev, key, await _resolve_warehouse_id(db, data[key], field="warehouse_id"))
+        elif key == "code":
+            # Codes are unique; a rename that lands on another device's code has
+            # to be refused here, not at commit, where it is a 500.
+            code = str(data[key]).strip()
+            clash = await db.scalar(
+                select(TerminalDevice.id).where(TerminalDevice.code == code, TerminalDevice.id != dev.id)
+            )
+            if clash is not None:
+                raise ValidationException(message=f"Device code {code!r} already exists")
+            dev.code = code
+        else:
+            setattr(dev, key, data[key])
     dev.updated_at = _now()
 
     await db.commit()
@@ -202,15 +369,22 @@ async def record_sync(db: AsyncSession, dev_id: str, data: dict) -> dict:
         raise NotFoundException(message=f"Device {dev_id} not found")
 
     now = _now()
+    # The vocabularies are read as vocabularies: a device that reported
+    # ``sync_type: "upload_data"`` reached SyncLogType(...) inside this handler,
+    # so the sync that failed on the floor failed on the way in as well, as a
+    # 500 that named nothing.
+    sync_type = _as_choice(data.get("sync_type") or "download", SyncLogType, field="sync_type")
+    status = _as_choice(data.get("status") or "pending", SyncLogStatus, field="status")
     log = SyncLog(
         id=uuid.uuid4(),
         device_id=dev_uuid,
-        sync_type=SyncLogType(data.get("sync_type", "download")),
-        status=SyncLogStatus(data.get("status", "pending")),
-        records_count=data.get("records_count", 0),
+        sync_type=sync_type,
+        status=status,
+        records_count=_as_int(data.get("records_count") if data.get("records_count") is not None else 0,
+                              field="records_count"),
         error_message=data.get("error_message"),
         started_at=now,
-        completed_at=now if data.get("status") in ("completed", "failed") else None,
+        completed_at=now if status in (SyncLogStatus.COMPLETED, SyncLogStatus.FAILED) else None,
     )
     db.add(log)
 
@@ -469,21 +643,48 @@ async def change_transport_status(db: AsyncSession, order_id: str, new_status: s
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def create_hub(db: AsyncSession, data: dict) -> dict:
-    """Create a new transfer hub."""
-    existing = await db.execute(
-        select(TransferHub).where(TransferHub.code == data["code"])
-    )
+    """Create a new transfer hub.
+
+    The hub's type is read as a vocabulary (``TransferHubType``) and its capacity as
+    a number — both by the guards the rest of this module uses, so a task or seed
+    script that calls this directly gets a 422 naming the field, the way the HTTP
+    layer does.  The console's key is ``type``, the column is ``hub_type``; both
+    spellings name the same thing.
+    """
+    code = str(data.get("code") or "").strip()
+    if not code:
+        raise ValidationException(message="code is required — a hub is picked by the code on its sign")
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValidationException(message="name is required")
+    city = str(data.get("city") or "").strip()
+    if not city:
+        raise ValidationException(message="city is required — the route planner routes by city")
+
+    existing = await db.execute(select(TransferHub).where(TransferHub.code == code))
     if existing.scalar_one_or_none():
-        raise ValidationException(message=f"Hub code '{data['code']}' already exists")
+        raise ValidationException(message=f"Hub code '{code}' already exists")
+
+    capacity = _as_decimal(
+        data.get("capacity_weight_kg") if data.get("capacity_weight_kg") not in (None, "") else "0",
+        field="capacity_weight_kg",
+    )
+    if capacity < 0:
+        raise ValidationException(
+            message=f"capacity_weight_kg {capacity} is negative — a hub that lifts negative weight "
+                    "matches every shipment and prices none of them",
+        )
 
     hub = TransferHub(
         id=uuid.uuid4(),
-        code=data["code"],
-        name=data["name"],
-        hub_type=TransferHubType(data.get("type", "primary")),
-        city=data["city"],
+        code=code,
+        name=name,
+        hub_type=_as_choice(
+            data.get("hub_type") or data.get("type") or "primary", TransferHubType, field="hub_type",
+        ),
+        city=city,
         address=data.get("address"),
-        capacity_weight_kg=Decimal(str(data.get("capacity_weight_kg", "0"))),
+        capacity_weight_kg=capacity,
         contact_name=data.get("contact_name"),
         contact_phone=data.get("contact_phone"),
         status=HubStatus.OPEN,
@@ -533,20 +734,48 @@ async def update_hub(db: AsyncSession, hub_id: str, data: dict) -> dict:
     if not hub:
         raise NotFoundException(message=f"Hub {hub_id} not found")
 
-    updatable = {"name", "hub_type", "city", "address", "capacity_weight_kg",
+    # The console's edit dialog offers 编码, 名称, 类型 and 城市.  ``code`` was not in
+    # this set and neither was the key the form sends for the type (``type``), so
+    # two of the four fields the operator edited were dropped on every save — the
+    # hub kept its old code, and kept the type the route planner routes by.
+    updatable = {"code", "name", "hub_type", "type", "city", "address", "capacity_weight_kg",
                  "contact_name", "contact_phone", "status"}
     for key in updatable:
-        if key in data and data[key] is not None:
-            if key == "hub_type":
-                setattr(hub, key, TransferHubType(data[key]))
-            elif key == "status":
-                setattr(hub, key, HubStatus(data[key]))
-            else:
-                setattr(hub, key, data[key])
+        if key not in data or data[key] is None:
+            continue
+        if key == "hub_type" or key == "type":
+            hub.hub_type = _as_choice(data[key], TransferHubType, field="hub_type")
+        elif key == "status":
+            hub.status = _as_choice(data[key], HubStatus, field="status")
+        elif key == "capacity_weight_kg":
+            capacity = _as_decimal(data[key], field="capacity_weight_kg")
+            if capacity < 0:
+                raise ValidationException(
+                    message=f"capacity_weight_kg {capacity} is negative — a hub that lifts negative "
+                            "weight matches every shipment and prices none of them",
+                )
+            hub.capacity_weight_kg = capacity
+        elif key == "code":
+            # ``transfer_hubs.code`` is unique, and it is how the hub-network
+            # screens and the hub-connection rows refer to a hub: a rename that
+            # lands on another hub's code has to be refused here, not at commit.
+            code = str(data[key]).strip()
+            if not code:
+                raise ValidationException(message="code cannot be blank — the hub is picked by its code")
+            clash = await db.scalar(
+                select(TransferHub.id).where(TransferHub.code == code, TransferHub.id != hub.id)
+            )
+            if clash is not None:
+                raise ValidationException(message=f"Hub code {code!r} already exists")
+            hub.code = code
+        else:
+            setattr(hub, key, data[key])
     hub.updated_at = _now()
 
     await db.commit()
     await db.refresh(hub)
+    # A hub's city/type change rewires the pricing graph — invalidate plans.
+    await _bump_route_cache_version()
     return model_to_dict(hub)
 
 
@@ -571,6 +800,7 @@ async def add_carrier_route(db: AsyncSession, data: dict) -> dict:
     db.add(route)
     await db.commit()
     await db.refresh(route)
+    await _bump_route_cache_version()
     return model_to_dict(route)
 
 
@@ -591,6 +821,51 @@ async def list_carrier_routes(
     stmt = stmt.order_by(CarrierRoute.created_at.desc())
     result = await db.execute(stmt)
     return [model_to_dict(r) for r in result.scalars().all()]
+
+
+async def update_carrier_rate(
+    db: AsyncSession,
+    carrier_code: str,
+    rate_data: dict,
+) -> int:
+    """Update freight tiers for a carrier from ERP rate data.
+
+    ``rate_data`` is a list of tier dicts, each with keys:
+        rule_type, min_value, max_value, price_per_unit, surcharge_express
+
+    Returns the number of tiers upserted.
+    """
+    code = CarrierCode(carrier_code)
+    tiers = rate_data if isinstance(rate_data, list) else rate_data.get("tiers", [])
+    count = 0
+    for tier_data in tiers:
+        rule_type = FreightRule(tier_data["rule_type"])
+        # Upsert: delete existing tier for same carrier+rule+min, then insert
+        existing = await db.execute(
+            select(FreightTier).where(
+                FreightTier.carrier_code == code,
+                FreightTier.rule_type == rule_type,
+                FreightTier.min_value == Decimal(str(tier_data["min_value"])),
+            )
+        )
+        old = existing.scalar_one_or_none()
+        if old:
+            old.max_value = Decimal(str(tier_data["max_value"])) if tier_data.get("max_value") is not None else None
+            old.price_per_unit = Decimal(str(tier_data["price_per_unit"]))
+            old.surcharge_express = Decimal(str(tier_data.get("surcharge_express", "0")))
+        else:
+            db.add(FreightTier(
+                id=uuid.uuid4(),
+                carrier_code=code,
+                rule_type=rule_type,
+                min_value=Decimal(str(tier_data["min_value"])),
+                max_value=Decimal(str(tier_data["max_value"])) if tier_data.get("max_value") is not None else None,
+                price_per_unit=Decimal(str(tier_data["price_per_unit"])),
+                surcharge_express=Decimal(str(tier_data.get("surcharge_express", "0"))),
+            ))
+        count += 1
+    await db.commit()
+    return count
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -621,6 +896,7 @@ async def add_hub_connection(db: AsyncSession, data: dict) -> dict:
     db.add(conn)
     await db.commit()
     await db.refresh(conn)
+    await _bump_route_cache_version()
     return model_to_dict(conn)
 
 
@@ -768,6 +1044,12 @@ class _PriorityNode:
     path: list[str] = field(compare=False)
     total_distance: Decimal = field(compare=False)
     total_hours: Decimal = field(compare=False)
+    # Per-edge distance/hours recorded as the node was expanded, so segment
+    # metrics come straight off the winner instead of being re-guessed from
+    # the graph (the old lookup duplicated segments whenever two hubs had
+    # parallel edges).
+    edge_distances: tuple = field(default=(), compare=False)
+    edge_hours: tuple = field(default=(), compare=False)
 
 
 async def _find_best_route_plan_impl(
@@ -809,11 +1091,20 @@ async def _find_best_route_plan_impl(
     # Step 4 — Load carrier routes for pricing
     carrier_routes = await list_carrier_routes(db)
 
-    # Build pricing lookup: (origin_city, dest_city, carrier) → price_per_kg
-    price_map: dict[tuple[str, str, str], Decimal] = {}
+    # Lane pricing lookup: (origin_city, dest_city) → cheapest price_per_kg
+    # across carriers.  A CarrierRoute prices the WHOLE lane between two
+    # cities, so graph edges are priced per hub-city pair below.
+    lane_price: dict[tuple[str, str], Decimal] = {}
     for cr in carrier_routes:
-        key = (cr["origin_city"], cr["dest_city"], cr["carrier_code"])
-        price_map[key] = Decimal(str(cr["base_price_per_kg"]))
+        key = (cr["origin_city"], cr["dest_city"])
+        price = Decimal(str(cr["base_price_per_kg"]))
+        if key not in lane_price or price < lane_price[key]:
+            lane_price[key] = price
+
+    # Hub code → city, so every edge pays its own city-pair lane price
+    # (武汉→长沙→柳州 pays 武汉→长沙 plus 长沙→柳州, never the full lane twice).
+    all_hubs = await list_hubs(db)
+    hub_cities: dict[str, str] = {h["code"]: (h.get("city") or "") for h in all_hubs}
 
     # Step 5 — Run Dijkstra for each origin→dest hub pair
     best_result: dict | None = None
@@ -824,7 +1115,7 @@ async def _find_best_route_plan_impl(
         for d_hub in dest_hubs:
             d_code = d_hub["code"]
             result = _dijkstra(
-                o_code, d_code, graph, price_map, pickup_city, delivery_city, weight_kg,
+                o_code, d_code, graph, lane_price, hub_cities, weight_kg,
             )
             if result and result["total_cost"] < best_cost:
                 best_cost = result["total_cost"]
@@ -855,17 +1146,39 @@ async def _find_best_route_plan_impl(
 
 
 _ROUTE_CACHE_TTL = 86400  # 24 hours
+_ROUTE_CACHE_VERSION_KEY = "route:version"
 
 
-@rate_limit(max_calls=10, window=60)
+async def _bump_route_cache_version() -> None:
+    """Invalidate cached route plans after hub / connection / lane changes.
+
+    Bumps a global version counter; cache keys embed the version, so old
+    entries become unreachable and age out via their own TTL.  Called from
+    add_carrier_route / add_hub_connection / update_hub — previously the
+    docstring promised invalidation but nothing ever bumped anything, so
+    route plans could serve stale pricing for up to 24 h after a rate change.
+    """
+    try:
+        from src.cache.redis_client import get_redis
+
+        async with get_redis() as r:
+            if r:
+                await r.incr(_ROUTE_CACHE_VERSION_KEY)
+    except Exception:
+        logger.warning("Route cache version bump failed")
+
+
 async def find_best_route_plan(
     transport_order_id: str, db: AsyncSession
 ) -> dict:
     """Dijkstra + price optimisation with Redis result cache.
 
     When Redis is available, route plans are cached by
-    ``route:{pickup_city}:{delivery_city}:{weight_kg}`` for 24 h.
-    Cache is invalidated when carrier routes or hub connections change.
+    ``route:v{version}:{pickup_city}:{delivery_city}:{weight_kg}`` for 24 h.
+    ``version`` is bumped whenever carrier routes, hub connections or hubs
+    change, which makes every previously cached plan unreachable immediately.
+    The key deliberately does NOT include the transport order id — plans only
+    depend on (cities, weight), so identical shipments reuse one entry.
     """
     order_uuid = _safe_uuid(transport_order_id)
     if order_uuid is None:
@@ -889,7 +1202,8 @@ async def find_best_route_plan(
                     pickup_city = (order.pickup_address or {}).get("city", "")
                     delivery_city = (order.delivery_address or {}).get("city", "")
                     weight_kg = str(order.total_weight_kg or "1")
-                    cache_key = f"route:{transport_order_id}:{pickup_city}:{delivery_city}:{weight_kg}"
+                    version = int(await r.get(_ROUTE_CACHE_VERSION_KEY) or 1)
+                    cache_key = f"route:v{version}:{pickup_city}:{delivery_city}:{weight_kg}"
                     cached = await r.get(cache_key)
                     if cached:
                         return json.loads(cached)
@@ -903,8 +1217,11 @@ async def find_best_route_plan(
 
         async with get_redis() as r:
             if r:
-                cache_key = f"route:{transport_order_id}:{pickup_city}:{delivery_city}:{weight_kg}"
-                await r.setex(cache_key, _ROUTE_CACHE_TTL, json.dumps(result))
+                version = int(await r.get(_ROUTE_CACHE_VERSION_KEY) or 1)
+                cache_key = f"route:v{version}:{pickup_city}:{delivery_city}:{weight_kg}"
+                # ``setex`` is deprecated in redis-py 5; ``set(..., ex=…)`` is the
+                # same write with the current spelling.
+                await r.set(cache_key, json.dumps(result), ex=_ROUTE_CACHE_TTL)
     except Exception:
         logger.warning("Route plan cache write failed")
 
@@ -915,35 +1232,34 @@ def _dijkstra(
     origin: str,
     destination: str,
     graph: dict[str, list[tuple[str, Decimal, Decimal]]],
-    price_map: dict[tuple[str, str, str], Decimal],
-    origin_city: str,
-    dest_city: str,
+    lane_price: dict[tuple[str, str], Decimal],
+    hub_cities: dict[str, str],
     weight_kg: Decimal,
 ) -> dict | None:
-    """Internal Dijkstra over hub graph returning cheapest path + costs."""
-    # Priority queue entries: (total_cost, current_hub, path, total_distance, total_hours)
-    # cost = distance * price_per_km  (approximate if no exact carrier route)
+    """Internal Dijkstra over hub graph returning cheapest path + costs.
+
+    Cost semantics (corrected): a carrier lane price is per-kg for the WHOLE
+    city→city lane, so traversing an edge costs ``weight × lane_price`` only
+    for edges whose hub cities form a priced lane.  The previous version added
+    the full origin→destination lane price once PER SEGMENT, so a 3-segment
+    route was charged 3× the lane and multi-hop routes were mis-ranked.
+    Edges without a priced lane fall back to a generic 0.5/km estimate.
+    """
+    fallback_rate = Decimal("0.5")  # fallback ¥/km when no carrier lane covers the edge
     inf_val = Decimal("Infinity")
     best: dict[str, Decimal] = {}  # hub_code → best cost so far
     path_by_hub: dict[str, _PriorityNode] = {}  # hub_code → node that set the current best
 
-    # Starting nodes — find carrier routes from origin_city to first hub
-    start_hubs = [origin]
-    heap: list[_PriorityNode] = []
-    for sh in start_hubs:
-        # Estimate starting cost using generic ₽/km if no carrier route
-        start_cost = Decimal("0")
-        best[sh] = start_cost
-        start_node = _PriorityNode(
-            priority=start_cost,
-            hub_code=sh,
-            path=[sh],
-            total_distance=Decimal("0"),
-            total_hours=Decimal("0"),
-        )
-        heap.append(start_node)
-        path_by_hub[sh] = start_node
-
+    start_node = _PriorityNode(
+        priority=Decimal("0"),
+        hub_code=origin,
+        path=[origin],
+        total_distance=Decimal("0"),
+        total_hours=Decimal("0"),
+    )
+    best[origin] = Decimal("0")
+    heap: list[_PriorityNode] = [start_node]
+    path_by_hub[origin] = start_node
     heapq.heapify(heap)
 
     while heap:
@@ -953,18 +1269,14 @@ def _dijkstra(
         if node.priority > best.get(node.hub_code, inf_val):
             continue
 
+        from_city = hub_cities.get(node.hub_code, "")
         for next_hub, dist, hours in graph.get(node.hub_code, []):
-            # Estimate cost for this segment
-            # Try to find a carrier route from origin_city→dest_city matching these hubs
-            seg_cost = dist * Decimal("0.5")  # fallback ₽/km
-            # Check carrier route pricing — find cheapest matching route
-            best_price = None
-            for (oc, dc, cc), price in price_map.items():
-                if oc == origin_city and dc == dest_city:
-                    if best_price is None or price < best_price:
-                        best_price = price
-            if best_price is not None:
-                seg_cost = weight_kg * best_price
+            to_city = hub_cities.get(next_hub, "")
+            price = lane_price.get((from_city, to_city))
+            if price is not None:
+                seg_cost = weight_kg * price
+            else:
+                seg_cost = dist * fallback_rate
 
             new_cost = node.priority + seg_cost
             if new_cost < best.get(next_hub, inf_val):
@@ -975,6 +1287,8 @@ def _dijkstra(
                     path=node.path + [next_hub],
                     total_distance=node.total_distance + dist,
                     total_hours=node.total_hours + hours,
+                    edge_distances=node.edge_distances + (dist,),
+                    edge_hours=node.edge_hours + (hours,),
                 )
                 heapq.heappush(heap, pushed)
                 path_by_hub[next_hub] = pushed
@@ -989,18 +1303,8 @@ def _dijkstra(
         "total_distance": winner.total_distance,
         "total_hours": winner.total_hours,
         "total_cost": best[destination],
-        "seg_distances": [
-            Decimal(str(graph[winner.path[i]][j][1]))
-            for i in range(len(winner.path) - 1)
-            for j, (nh, _, _) in enumerate(graph.get(winner.path[i], []))
-            if nh == winner.path[i + 1]
-        ],
-        "seg_hours": [
-            Decimal(str(graph[winner.path[i]][j][2]))
-            for i in range(len(winner.path) - 1)
-            for j, (nh, _, _) in enumerate(graph.get(winner.path[i], []))
-            if nh == winner.path[i + 1]
-        ],
+        "seg_distances": list(winner.edge_distances),
+        "seg_hours": list(winner.edge_hours),
     }
 
 
@@ -1008,7 +1312,6 @@ def _dijkstra(
 # Phase A3 — generate_route_plan
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@rate_limit(max_calls=10, window=60)
 @distributed_lock(key="generate_route_plan", timeout=30)
 async def generate_route_plan(
     transport_order_id: str,
@@ -1105,27 +1408,39 @@ async def create_tracking_event(db: AsyncSession, data: dict) -> dict:
     )
 
     result = await db.execute(
-        select(TransportOrder).where(TransportOrder.id == _safe_uuid(data["transport_order_id"]))
+        select(TransportOrder).where(TransportOrder.id == _to_uuid(data["transport_order_id"])).with_for_update()
     )
     order = result.scalar_one_or_none()
     if not order:
         raise NotFoundException(message=f"TransportOrder {data['transport_order_id']} not found")
 
+    event_type = _as_event_type(data.get("event_type"))
+
+    raw_operator_id = data.get("operator_id")
+    operator_id = _to_uuid(raw_operator_id) if raw_operator_id else None
+    # _to_uuid() answers None for anything it cannot parse; used directly that
+    # filed the scan with no operator rather than saying the id was wrong.
+    if raw_operator_id and operator_id is None:
+        raise ValidationException(
+            message=f"operator_id is not a valid id: {raw_operator_id!r}",
+            detail={"operator_id": str(raw_operator_id)},
+        )
+
     event = _TrackingEvent(
         id=uuid.uuid4(),
         transport_order_id=_to_uuid(data["transport_order_id"]),
-        event_type=TrackingEventType(data["event_type"]),
+        event_type=event_type,
         location_code=data.get("location_code"),
         location_name=data.get("location_name"),
         latitude=data.get("latitude"),
         longitude=data.get("longitude"),
-        operator_id=data.get("operator_id") and uuid.UUID(data["operator_id"]) or None,
+        operator_id=operator_id,
         remark=data.get("remark"),
     )
     db.add(event)
 
     # Update parent order before commit — otherwise the change is lost
-    if data["event_type"] == "delivered" and not order.actual_delivery_time:
+    if event_type == TrackingEventType.DELIVERED and not order.actual_delivery_time:
         order.actual_delivery_time = _now()
 
     await db.commit()
@@ -1147,39 +1462,102 @@ async def list_tracking_events(db: AsyncSession, transport_order_id: str) -> lis
     return [model_to_dict(e) for e in result.scalars().all()]
 
 
-async def create_pod(db: AsyncSession, data_or_transport_order_id: str | dict, data: dict | None = None) -> dict:
-    """Create or update POD (Proof of Delivery) for a transport order."""
-    # Support both signatures: create_pod(db, data) and create_pod(db, order_id, data)
-    if isinstance(data_or_transport_order_id, str):
-        # Called as create_pod(db, order_id, data) — convert to the other signature
-        transport_order_id = data_or_transport_order_id
-        data = data  # noqa: F841
-        real_data = {"transport_order_id": transport_order_id, **(data or {})}
-    else:
-        real_data = data_or_transport_order_id
+def _photo_rows(value: object) -> list[dict] | None:
+    """Delivery photos in the shape ``pod_records.delivery_photo_urls`` documents.
 
+    The column is documented ``[{url, timestamp}]``, and the screen that lists
+    the photos (``frontend/src/views/transport/TransportOrderDetail.vue``) reads
+    a list of bare URLs — so the clients that post photos send URLs, and the
+    record they get back is the shape the screen cannot display.  Bare strings
+    and ``{url, timestamp}`` objects are both accepted and stored as the
+    documented row; an entry that is neither is refused, because a photo the
+    record cannot point at is a photo nobody can see.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValidationException(
+            message="delivery_photo_urls must be a list of URLs or {url, timestamp} objects",
+        )
+    rows: list[dict] = []
+    for item in value:
+        if isinstance(item, str):
+            rows.append({"url": item, "timestamp": None})
+        elif isinstance(item, dict) and item.get("url"):
+            rows.append({"url": str(item["url"]), "timestamp": item.get("timestamp")})
+        else:
+            raise ValidationException(
+                message=f"delivery_photo_urls entry {item!r} names no URL — send a URL string "
+                        "or {\"url\": ..., \"timestamp\": ...}",
+            )
+    return rows
+
+
+async def create_pod(db: AsyncSession, data_or_transport_order_id: str | dict, data: dict | None = None) -> dict:
+    """Create — and on a second submission, update — the POD of a transport order.
+
+    Two call forms are supported: ``create_pod(db, data)`` and
+    ``create_pod(db, order_id, data)``; the route names the order in its path.
+
+    A POD is one per transport order (``pod_records.transport_order_id`` is
+    unique), and the route used to treat a second submission as the first: the
+    record existed, so nothing in the body was read, and the caller was answered
+    201 for a signature they had just sent that was never recorded — a driver who
+    re-submitted a POD after adding the delivery photos was told it was filed.
+    The re-submission is applied now, field by field, so the fields a caller
+    sends are the fields that change.
+
+    The order named is also checked against ``transport_orders``.  Parsing the
+    string was the whole check, so a POD written for a well-formed id that names
+    no order reached the foreign key and failed at commit: a 500 for a request
+    naming a shipment that does not exist, where a 404 naming it is the truth.
+    """
     from src.tms.models import ProofOfDelivery
 
-    order_uuid = _safe_uuid(real_data["transport_order_id"])
-    if order_uuid is None:
-        raise NotFoundException(message=f"TransportOrder {real_data['transport_order_id']} not found")
-    result = await db.execute(
-        select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == order_uuid)
-    )
-    pod = result.scalar_one_or_none()
+    if isinstance(data_or_transport_order_id, str):
+        real_data: dict = {"transport_order_id": data_or_transport_order_id, **(data or {})}
+    else:
+        real_data = dict(data_or_transport_order_id)
 
-    if not pod:
+    raw_order = real_data.get("transport_order_id")
+    if not raw_order:
+        raise ValidationException(
+            message="transport_order_id is required — a POD records the delivery of a transport order",
+        )
+    order_uuid = _safe_uuid(raw_order)
+    if order_uuid is None:
+        raise NotFoundException(message=f"TransportOrder {raw_order} not found")
+    if await db.scalar(select(TransportOrder).where(TransportOrder.id == order_uuid)) is None:
+        raise NotFoundException(message=f"TransportOrder {raw_order} not found")
+
+    pod = await db.scalar(select(ProofOfDelivery).where(ProofOfDelivery.transport_order_id == order_uuid))
+    photos = _photo_rows(real_data.get("delivery_photo_urls"))
+
+    if pod is None:
         pod = ProofOfDelivery(
             id=uuid.uuid4(),
-            transport_order_id=_to_uuid(real_data["transport_order_id"]),
-            signed_by=(data or {}).get("signed_by", "unknown"),
-            signature_type=(data or {}).get("signature_type", "physical"),
-            signature_image_url=(data or {}).get("signature_image_url"),
-            delivery_photo_urls=(data or {}).get("delivery_photo_urls") or [],
+            transport_order_id=order_uuid,
+            signed_by=real_data.get("signed_by") or "unknown",
+            signature_type=real_data.get("signature_type") or "physical",
+            signature_image_url=real_data.get("signature_image_url"),
+            delivery_photo_urls=photos or [],
             delivered_to_address=real_data.get("delivered_to_address"),
             notes=real_data.get("notes"),
         )
         db.add(pod)
+    else:
+        updates = {
+            "signed_by": real_data.get("signed_by"),
+            "signature_type": real_data.get("signature_type"),
+            "signature_image_url": real_data.get("signature_image_url"),
+            "delivery_photo_urls": photos,
+            "delivered_to_address": real_data.get("delivered_to_address"),
+            "notes": real_data.get("notes"),
+        }
+        for key, value in updates.items():
+            if value is not None:
+                setattr(pod, key, value)
+        pod.updated_at = _now()
 
     await db.commit()
     await db.refresh(pod)
@@ -1214,10 +1592,14 @@ async def update_pod(db: AsyncSession, transport_order_id: str, data: dict) -> d
     if not pod:
         raise NotFoundException(message="POD not found")
 
-    updatable = {"signed_by", "signature_image_url", "delivery_photo_urls", "delivered_to_address", "notes"}
+    # The fields a POD update carries.  ``signature_type`` is one of them: the
+    # route accepted it, the set did not contain it, and an update that changed
+    # a paper receipt to an on-screen signature left it as a paper receipt.
+    updatable = {"signed_by", "signature_type", "signature_image_url", "delivery_photo_urls",
+                 "delivered_to_address", "notes"}
     for key in updatable:
         if key in data and data[key] is not None:
-            setattr(pod, key, data[key])
+            setattr(pod, key, _photo_rows(data[key]) if key == "delivery_photo_urls" else data[key])
     pod.updated_at = _now()
 
     await db.commit()
@@ -1230,21 +1612,49 @@ async def update_pod(db: AsyncSession, transport_order_id: str, data: dict) -> d
 # ═══════════════════════════════════════════════════════════════════════
 
 async def create_return_order(db: AsyncSession, data: dict) -> dict:
+    """File a return / reverse-logistics request.
+
+    Every field of this body was read with a constructor that raises:
+    ``ReturnReason(data["reason"])`` (KeyError on the console's body, ValueError
+    on a reason code the domain does not know — and the console's reason field is
+    a free-text textarea, so "damaged package" is the normal input),
+    ``uuid.UUID(data["transport_order_id"])`` on the transport *number* the
+    console sends, ``CarrierCode(...)``, and
+    ``Decimal(str(data.get("refund_amount", "0")))``.  Any one of them raised
+    inside the handler, so the console's 创建退货 button answered 500 and named
+    nothing — a refund request typed by a person became a server failure.
+
+    ``destination_warehouse_id`` was written straight from the body into a UUID
+    column, so a warehouse code — what a handheld scans — arrived as a string.
+    It is resolved by id *or* code now, refused by the field that named it.
+    """
     from datetime import date
 
     from src.tms.models import ReturnOrder, ReturnReason
+
     count = (await db.execute(select(func.count()).select_from(ReturnOrder))).scalar() or 0
     ret = ReturnOrder(
         id=uuid.uuid4(), return_no=f"RTN-{date.today().strftime('%Y%m%d')}-{count+1:04d}",
-        status="requested", reason=ReturnReason(data["reason"]),
+        status="requested", reason=_as_choice(data.get("reason"), ReturnReason, field="reason"),
         reason_detail=data.get("reason_detail"),
-        transport_order_id=uuid.UUID(data["transport_order_id"]) if data.get("transport_order_id") else None,
-        carrier_code=CarrierCode(data["carrier_code"]) if data.get("carrier_code") else None,
+        transport_order_id=(
+            await _resolve_transport_order(db, data["transport_order_id"], field="transport_order_id")
+            if data.get("transport_order_id") else None
+        ),
+        carrier_code=_carrier_code(data["carrier_code"]) if data.get("carrier_code") else None,
         return_tracking_number=data.get("return_tracking_number"),
-        pickup_address=data.get("pickup_address", {}),
-        destination_warehouse_id=data.get("destination_warehouse_id"),
-        refund_amount=Decimal(str(data.get("refund_amount", "0"))),
+        pickup_address=data.get("pickup_address") or {},
+        destination_warehouse_id=(
+            await _resolve_warehouse_id(db, data["destination_warehouse_id"])
+            if data.get("destination_warehouse_id") else None
+        ),
+        refund_amount=_as_decimal(data.get("refund_amount", "0"), field="refund_amount"),
     )
+    if ret.refund_amount < 0:
+        raise ValidationException(
+            message=f"refund_amount must be zero or more, got {ret.refund_amount} — a refund is "
+                    "money leaving the seller, and the settlement step reads it as such",
+        )
     db.add(ret)
     await db.commit()
     await db.refresh(ret)
@@ -1290,8 +1700,16 @@ async def update_return_status(db: AsyncSession, return_id: str, target: str) ->
         "returned_to_warehouse": {"refunded", "closed"}}
     current = ret.status
     if target not in allowed_transitions.get(current, set()):
-        raise ValidationException(message=f"Cannot transition return from '{current}' to '{target}'",
-            detail=f"Allowed: {allowed_transitions.get(current)}")
+        # The allowed moves are named in the message, not only in a detail the
+        # caller has to know to ask for: the screen drives this lifecycle by
+        # button, and "you cannot do that" without the moves that exist is a
+        # dead end.
+        allowed = allowed_transitions.get(current, set())
+        raise ValidationException(
+            message=f"Cannot transition return from '{current}' to '{target}' — from '{current}' the "
+                    f"moves are: {', '.join(sorted(allowed)) if allowed else 'none (this is a final state)'}",
+            detail=f"Allowed: {sorted(allowed)}",
+        )
     ret.status = target
     await db.commit()
     await db.refresh(ret)
@@ -1361,7 +1779,7 @@ async def mark_return_inspected(db: AsyncSession, return_id: str, accepted: bool
         ret.shipment_status = ReturnShipmentStatus.RETURNED_TO_WAREHOUSE
     else:
         # Reject → send back to supplier (handled by admin workflow)
-        ret.status = ReturnStatus.CLOSED
+        ret.status = ReturnStatus.CANCELLED
         ret.shipment_status = ReturnShipmentStatus.RETURNED_TO_WAREHOUSE
 
     await db.commit()
@@ -1398,28 +1816,57 @@ async def cancel_return_order(db: AsyncSession, return_id: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 async def create_exception(db: AsyncSession, data: dict) -> dict:
+    """Report a transport exception.
+
+    The type was read as ``ExceptionType(data["type"])``.  The console that
+    reports exceptions (``frontend/src/views/transport/ExceptionList.vue``) sends
+    ``exception_type``, so the key the handler reached for was never in the body:
+    a ``KeyError`` inside the handler, reported as a server failure, for a person
+    reporting a delayed shipment.  The type is read as the vocabulary the domain
+    knows, and a value outside it names that vocabulary.
+
+    The order named was *checked* as an id and *written* as whatever arrived, so
+    a transport number — the form the API itself prints, and the form the
+    console sends — answered 404 for a shipment that exists, and any value that
+    passed the parse was written into a UUID column.  It is resolved by id *or*
+    transport number and written as the order's id.
+    """
     from src.tms.models import ExceptionType, TransportException
 
     # transport_order_id may be optional (exceptions not linked to an order)
     order_id = data.get("transport_order_id")
-    if order_id:
-        order_uuid = _safe_uuid(order_id)
-        if order_uuid is None:
-            raise NotFoundException(message=f"TransportOrder {order_id} not found")
-        result = await db.execute(select(TransportOrder).where(TransportOrder.id == order_uuid))
-        if not result.scalar_one_or_none():
-            raise NotFoundException(message=f"TransportOrder {order_id} not found")
+    order_uuid = await _resolve_transport_order(db, order_id) if order_id else None
 
     exc = TransportException(
         id=uuid.uuid4(),
-        transport_order_id=_to_uuid(str(order_id)) if order_id else None,
-        type=ExceptionType(data["type"]), status="open", severity=data.get("severity", "normal"),
+        transport_order_id=order_uuid,
+        type=_as_choice(data.get("type"), ExceptionType, field="type"),
+        status="open", severity=data.get("severity", "normal"),
         description=data.get("description"), resolution_notes=data.get("resolution_notes"),
     )
     db.add(exc)
     await db.commit()
     await db.refresh(exc)
-    return model_to_dict(exc)
+    return await _exception_payload(db, exc)
+
+
+async def _exception_payload(db: AsyncSession, exc: object) -> dict:
+    """An exception record with the shipment's number next to its id.
+
+    An exception is acted on at a shipment, and the number a person reads on a
+    box, in a list, and in a carrier's own site is ``transport_no`` — the API's
+    own answer for a transport order prints it.  An exception list that carries
+    only the shipment's uuid asks the operator to read a uuid, which is why the
+    console (``ExceptionList.vue``) shows a 运单号 column that has never had a
+    value in it.
+    """
+    payload = model_to_dict(exc)
+    order_id = _safe_uuid(payload.get("transport_order_id"))
+    payload["transport_order_no"] = (
+        await db.scalar(select(TransportOrder.transport_no).where(TransportOrder.id == order_id))
+        if order_id is not None else None
+    )
+    return payload
 
 
 async def list_exceptions(db: AsyncSession, transport_order_id=None, status="open") -> list[dict]:
@@ -1431,7 +1878,26 @@ async def list_exceptions(db: AsyncSession, transport_order_id=None, status="ope
             return []
         stmt = stmt.where(TransportException.transport_order_id == order_uuid)
     result = await db.execute(stmt.order_by(TransportException.created_at.desc()))
-    return [model_to_dict(e) for e in result.scalars().all()]
+    return [await _exception_payload(db, e) for e in result.scalars().all()]
+
+
+async def get_exception(db: AsyncSession, exc_id: str) -> dict:
+    """One exception by id, with the shipment's number beside its id.
+
+    The console reads a single exception (``ExceptionList.vue`` 详情); there was
+    no route for one, so it queried the list with an ``exception_id`` parameter
+    the route ignores — and the list defaults to ``status="open"``, which is why
+    a resolved exception's detail view has never shown what it was resolved with.
+    """
+    from src.tms.models import TransportException
+
+    exc_uuid = _safe_uuid(exc_id)
+    if exc_uuid is None:
+        raise NotFoundException(message=f"TransportException {exc_id} not found")
+    exc = await db.scalar(select(TransportException).where(TransportException.id == exc_uuid))
+    if exc is None:
+        raise NotFoundException(message=f"TransportException {exc_id} not found")
+    return await _exception_payload(db, exc)
 
 
 async def resolve_exception(db: AsyncSession, exc_id: str, resolution_notes=None) -> dict:
@@ -1447,22 +1913,125 @@ async def resolve_exception(db: AsyncSession, exc_id: str, resolution_notes=None
     exc.resolution_notes = resolution_notes or exc.resolution_notes
     await db.commit()
     await db.refresh(exc)
-    return model_to_dict(exc)
+    return await _exception_payload(db, exc)
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # FreightTier (Shipping Cost Calculation)
 # ═══════════════════════════════════════════════════════════════════════
 
+def _carrier_code(value: object) -> CarrierCode:
+    """Carrier codes are a closed set, and an unknown one is a request error.
+
+    ``CarrierCode(value)`` on a typo raised a bare ValueError, which the generic
+    handler turned into a 500 — and in ``estimate_freight`` the unknown code was
+    never checked at all, so a misspelled carrier quietly received a generic
+    price.  Both now get a 422 that names the code it did not recognise.
+    """
+    try:
+        return CarrierCode(str(value))
+    except ValueError:
+        valid = ", ".join(sorted(code.value for code in CarrierCode))
+        raise ValidationException(
+            message=f"unknown carrier_code {value!r} (expected one of: {valid})"
+        ) from None
+
+
+async def _freight_tiers(db: AsyncSession, carrier: CarrierCode) -> list[FreightTier]:
+    result = await db.execute(select(FreightTier).where(FreightTier.carrier_code == carrier))
+    return list(result.scalars().all())
+
+
+def _match_freight_tier(
+    tiers: list[FreightTier],
+    *,
+    weight_kg: Decimal,
+    volume_m3: Decimal,
+    distance_km: Decimal,
+) -> FreightTier | None:
+    """The tier whose bracket covers this shipment.
+
+    Shared with estimate_freight() on purpose: which rule measures what is one
+    rule, and having it written twice is how a quote and an invoice stop agreeing.
+    """
+    for tier in tiers:
+        if tier.rule_type == FreightRule.DISTANCE_TIERED:
+            measure = distance_km
+        elif tier.rule_type == FreightRule.VOLUME_BASED:
+            measure = volume_m3
+        else:  # WEIGHT_TIERED and FLAT_RATE bracket on weight
+            measure = weight_kg
+        if measure <= 0:
+            continue  # request lacks the measurement this rule prices on
+        if tier.min_value <= measure and (tier.max_value is None or measure <= tier.max_value):
+            return tier
+    return None
+
+
+def _price_freight_tier(
+    tier: FreightTier,
+    *,
+    weight_kg: Decimal,
+    volume_m3: Decimal,
+    distance_km: Decimal,
+    express: bool = False,
+) -> Decimal:
+    """Money for one tier, honouring its ``rule_type``."""
+    unit_price = Decimal(str(tier.price_per_unit))
+    if tier.rule_type == FreightRule.FLAT_RATE:
+        total = unit_price
+    elif tier.rule_type == FreightRule.DISTANCE_TIERED:
+        total = unit_price * distance_km
+    elif tier.rule_type == FreightRule.VOLUME_BASED:
+        total = unit_price * volume_m3
+    else:  # WEIGHT_TIERED
+        total = unit_price * weight_kg
+
+    if express:
+        total += Decimal(str(tier.surcharge_express or 0))
+    return total.quantize(Decimal("0.01"))
+
+
 async def create_freight_tier(db: AsyncSession, data: dict) -> dict:
+    """Add a bracket to a carrier's rate card.
+
+    ``FreightTierList.vue`` posts ``{carrier_code, weight_from, weight_to,
+    price_per_kg}``; this function read ``data["rule_type"]`` and
+    ``data["price_per_unit"]`` — two ``KeyError``s for a request whose bracket
+    the form fully described, so the console's 提交 answered 500 and no carrier
+    has ever gained a tier from that screen.  The bracket's keys are the
+    console's spellings (accepted by ``FreightTierCreate``), the rule defaults to
+    the one the form's fields measure, and a bracket whose ceiling is below its
+    floor is refused: it covers no shipment, and a carrier holding it answers
+    "no matching freight tier" for the shipments that should have matched it.
+    """
+    min_value = _as_decimal(data.get("min_value") if data.get("min_value") is not None else "0",
+                            field="min_value")
+    max_value = (_as_decimal(data["max_value"], field="max_value")
+                 if data.get("max_value") not in (None, "") else None)
+    if max_value is not None and max_value < min_value:
+        raise ValidationException(
+            message=f"max_value {max_value} is below min_value {min_value} — a bracket whose ceiling "
+                    "is under its floor covers no shipment",
+        )
     tier = FreightTier(
-        id=uuid.uuid4(), carrier_code=CarrierCode(data["carrier_code"]),
-        rule_type=data["rule_type"],  # already a FreightRule enum value
-        min_value=Decimal(str(data.get("min_value", "0"))),
-        max_value=Decimal(str(data["max_value"])) if data.get("max_value") else None,
-        price_per_unit=Decimal(str(data["price_per_unit"])),
-        surcharge_express=Decimal(str(data.get("surcharge_express", "0"))),
+        id=uuid.uuid4(), carrier_code=_carrier_code(data.get("carrier_code")),
+        rule_type=_as_choice(data.get("rule_type") or "weight_tiered", FreightRule, field="rule_type"),
+        min_value=min_value,
+        max_value=max_value,
+        price_per_unit=_as_decimal(
+            data.get("price_per_unit") if data.get("price_per_unit") is not None else "",
+            field="price_per_unit",
+        ),
+        surcharge_express=_as_decimal(data.get("surcharge_express")
+                                      if data.get("surcharge_express") is not None else "0",
+                                      field="surcharge_express"),
     )
+    if tier.min_value < 0 or tier.price_per_unit < 0 or tier.surcharge_express < 0:
+        raise ValidationException(
+            message="a rate-card bracket cannot carry negative bounds — a negative price per unit "
+                    "pays the shipper, and the settlement step reads it as a charge",
+        )
     db.add(tier)
     await db.commit()
     await db.refresh(tier)
@@ -1470,31 +2039,66 @@ async def create_freight_tier(db: AsyncSession, data: dict) -> dict:
 
 
 async def calculate_freight(db: AsyncSession, data: dict) -> dict:
-    from src.tms.models import CarrierCode, FreightTier
-    carrier = CarrierCode(data["carrier_code"])
-    weight_kg = Decimal(str(data.get("weight", 1)))
+    """Calculate freight honouring each tier's ``rule_type``.
 
-    tiers = await db.execute(
-        select(FreightTier).where(FreightTier.carrier_code == carrier)
+    Previously every tier was billed as ``price_per_unit × weight`` regardless
+    of its rule — FLAT_RATE tiers got multiplied by weight, DISTANCE_TIERED
+    charged weight instead of kilometres, VOLUME_BASED charged weight instead
+    of cubic metres, and the math ran through float.  Now:
+
+        WEIGHT_TIERED   bracket matched on weight,   price × weight
+        DISTANCE_TIERED bracket matched on km,       price × distance_km
+        VOLUME_BASED    bracket matched on volume,   price × volume_m3
+        FLAT_RATE       bracket matched on weight,   fixed price (no multiply)
+
+    ``distance_km`` / ``volume_m3`` are new optional request fields; rules that
+    need them skip tiers when the request omits the measurement.
+    """
+    # ``data.get("weight", 1)`` — the console sends ``total_weight_kg``, so the
+    # weight the operator typed never reached the calculation and every quote
+    # the console showed priced the shipment as 1 kg.  ``FreightCalculateRequest``
+    # accepts the console's spelling; the guard here keeps a non-number a 422 for
+    # callers that reach the service directly.
+    carrier = _carrier_code(data.get("carrier_code"))
+    # Each measurement is spelled a few ways by the clients that send it: the
+    # rate-card screen says ``total_weight_kg``, the body's own field is
+    # ``weight``, a distance is a ``distance`` on one form and a ``distance_km``
+    # on the other.  All of them name the same measurement.
+    def _sent(*keys: str, default: object) -> Decimal:
+        for key in keys:
+            if data.get(key) is not None:
+                return _as_decimal(data[key], field=key)
+        return Decimal(str(default))
+
+    weight_kg = _sent("weight", "weight_kg", "total_weight_kg", default=1)
+    volume_m3 = _sent("volume", "volume_m3", default=0)
+    distance_km = _sent("distance_km", "distance", default=0)
+    for name, qty in (("weight", weight_kg), ("volume", volume_m3), ("distance_km", distance_km)):
+        if qty < 0:
+            raise ValidationException(message=f"{name} cannot be negative, got {qty}")
+
+    tier = _match_freight_tier(
+        await _freight_tiers(db, carrier),
+        weight_kg=weight_kg, volume_m3=volume_m3, distance_km=distance_km,
     )
-    matching_tier = None
-    for t in tiers.scalars().all():
-        if t.min_value <= weight_kg and (t.max_value is None or weight_kg <= t.max_value):
-            matching_tier = t
-            break
+    if tier is None:
+        raise ValidationException(
+            message="No matching freight tier found "
+            "(check weight/volume/distance against the carrier's tiers)"
+        )
 
-    if not matching_tier:
-        raise ValidationException(message="No matching freight tier found")
-
-    total_price = float(matching_tier.price_per_unit) * float(weight_kg)
-    if data.get("express"):
-        total_price += float(matching_tier.surcharge_express)
+    total_price = _price_freight_tier(
+        tier,
+        weight_kg=weight_kg, volume_m3=volume_m3, distance_km=distance_km,
+        express=bool(data.get("express")),
+    )
 
     return {"carrier_code": carrier.value, "weight_kg": str(weight_kg),
-            "total_freight_yuan": f"{total_price:.2f}",
-            "rule_type": matching_tier.rule_type.value,
-            "tier_min_value": str(matching_tier.min_value),
-            "tier_max_value": str(matching_tier.max_value) if matching_tier.max_value else None}
+            "total_freight_yuan": str(total_price),
+            "rule_type": tier.rule_type.value,
+            "price_per_unit": str(tier.price_per_unit),
+            "tier_min_value": str(tier.min_value),
+            "tier_max_value": str(tier.max_value) if tier.max_value else None}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1502,10 +2106,31 @@ async def calculate_freight(db: AsyncSession, data: dict) -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 async def record_forecast_observation(db: AsyncSession, data: dict) -> dict:
-    """Record daily order count for the forecast model."""
+    """Record daily order count for the forecast model.
+
+    ``float(data["count"])`` raised on the two ordinary failures of a hand-typed
+    count — absent, and written as text — and the demand model's own input was
+    reported as a server failure.  The lane is checked too: an observation on an
+    empty lane key trains the model on a city pair no order will ever match.
+    """
     from src.tms.ml.forecast import forecaster
-    key = f"{data.get('origin_city', '')}-{data.get('destination_city', '')}"
-    forecaster.add_observation(key, float(data["count"]))
+
+    origin = str(data.get("origin_city") or "").strip()
+    destination = str(data.get("destination_city") or "").strip()
+    if not origin or not destination:
+        raise ValidationException(
+            message="origin_city and destination_city are required — an observation belongs to a lane",
+            detail={"origin_city": origin, "destination_city": destination},
+        )
+    if data.get("count") is None:
+        raise ValidationException(message="count is required — the observation is the order count")
+    count = _as_int(data["count"], field="count")
+    if count < 0:
+        raise ValidationException(
+            message=f"count {count} is negative — a day with negative orders is not an observation",
+        )
+    key = f"{origin}-{destination}"
+    forecaster.add_observation(key, float(count))
     return {"status": "ok", "key": key}
 
 
@@ -1519,83 +2144,176 @@ async def get_forecast(db: AsyncSession, data: dict) -> list[dict]:
 
 
 async def train_forecast(db: AsyncSession, months: int = 6) -> dict:
-    """Batch train the forecast model from historical transport orders."""
+    """Batch train the forecast model from historical transport orders.
+
+    ``months`` is read through :func:`_as_int` and bounded to the window the
+    forecaster has: a task calling this with ``"6"`` used to reach ``timedelta``
+    and raise, and a window of 600 months asked the model to extrapolate over
+    data far older than the series it was built on.  Orders whose address has no
+    city are skipped, not trained on — same reason as
+    :func:`record_forecast_observation`: a lane key of ``"-"`` is a city pair no
+    order will ever look up.
+    """
     from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy import func, select
+    from sqlalchemy import select
 
     from src.tms.models import TransportOrder
 
-    cutoff = datetime.now(UTC) - timedelta(days=30 * months)
-    stmt = (
-        select(
-            TransportOrder.pickup_address,
-            TransportOrder.delivery_address,
-            func.date_trunc("day", TransportOrder.created_at).label("day"),
-            func.count(TransportOrder.id).label("cnt"),
+    window = _as_int(months, field="months")
+    if not 1 <= window <= 36:
+        raise ValidationException(
+            message=f"months {window} is outside the training window (1-36)",
+            detail={"months": str(window)},
         )
-        .where(TransportOrder.created_at >= cutoff)
-        .group_by(
-            TransportOrder.pickup_address,
-            TransportOrder.delivery_address,
-            func.date_trunc("day", TransportOrder.created_at),
-        )
-    )
-    result = await db.execute(stmt)
+    cutoff = datetime.now(UTC) - timedelta(days=30 * window)
+    stmt = select(
+        TransportOrder.pickup_address,
+        TransportOrder.delivery_address,
+        TransportOrder.created_at,
+    ).where(TransportOrder.created_at >= cutoff)
+    rows = (await db.execute(stmt)).all()
+
     from src.tms.ml.forecast import forecaster
-    count = 0
-    for row in result.all():
-        origin = (row.pickup_address or {}).get("city", "")
-        dest = (row.delivery_address or {}).get("city", "")
-        key = f"{origin}-{dest}"
-        forecaster.add_observation(key, float(row.cnt))
-        count += 1
-    return {"status": "ok", "trained": count}
+
+    # The day bucket happens here, not in SQL: the grouping this needs used
+    # ``date_trunc``, which is a PostgreSQL function, so the training run raised
+    # on every other dialect — answered 500, and never worked at all on the
+    # SQLite file the test suite runs on.  Grouping in Python is dialect-neutral
+    # and the window is bounded by ``months``, so the rows are bounded too.
+    buckets: dict[tuple[str, str, str], int] = {}
+    skipped = 0
+    for pickup, delivery, created_at in rows:
+        origin = ((pickup or {}).get("city") or "").strip()
+        dest = ((delivery or {}).get("city") or "").strip()
+        if not origin or not dest:
+            skipped += 1
+            continue
+        day = (created_at.date() if created_at else datetime.now(UTC).date()).isoformat()
+        lane_day = (origin, dest, day)
+        buckets[lane_day] = buckets.get(lane_day, 0) + 1
+
+    for (origin, dest, _day), orders in buckets.items():
+        forecaster.add_observation(f"{origin}-{dest}", float(orders))
+    return {"status": "ok", "trained": len(buckets), "skipped": skipped}
 
 
-# Alias: allow test transport_service to call create_exception(db, data) with no order_id
-async def _create_exception_alias(db, data):
-    return await create_exception(db, {"transport_order_id": None, **data})
+# ═══════════════════════════════════════════════════════════════════════
+# Freight estimation
+# ═══════════════════════════════════════════════════════════════════════
+#
+# An estimate is the one price produced without a transport order and without a
+# route.  That is legitimate — a quote has to be answerable before either exists
+# — but the number has to say where it came from, and it has to come from the
+# same rules an invoice uses.
+#
+# What was here instead was a hard-coded four-carrier table named
+# ``estimate_freight_sync`` ("sync wrapper … used by tests that call directly")
+# with an async wrapper named ``estimate_freight`` ("async alias … used by
+# tests").  The wrapper is what ``src/tms/router.py`` calls, so every
+# /freight-estimate quote ignored the carrier's configured FreightTier rows
+# entirely, priced any carrier code that missed the table at a generic 7.0,
+# reported a 2-day transit for every carrier and every service level, and could
+# not be told apart from a real rate-card price in the response.
 
-record_tracking_event = create_tracking_event
-
-# Aliases for test compatibility
-get_tracking_events = list_tracking_events  # alias used by tests
-change_transport_status_alias = change_transport_status  # allow change_transport(db, id, status) calls
-create_exception_optional_order = _create_exception_alias
-
-
-# ── Test-friendly aliases for POD & freight ───────────────
-
-async def get_pod_via_alias(transport_order_id):
-    """Alias used by tests — delegates to the real async get_pod."""
-    return await get_pod(None, str(transport_order_id))  # db=None just returns from DB snapshot
-
-
-def estimate_freight_sync(carrier_code=None, service_type="standard", distance_km=0.0, weight_kg=0.0):
-    """Sync wrapper for estimate_freight — used by tests that call directly."""
-    base_rate = {"sf_express": 8.5, "yunda": 6.0, "zto": 7.0, "ems": 9.0}.get(carrier_code or "", 7.0)
-    service_multiplier = {"express": 1.3, "overnight": 2.0, "freight": 1.5}.get(service_type, 1.0)
-    cost = base_rate * (distance_km / 100) + weight_kg * 0.5 * service_multiplier
-    return {"carrier_code": carrier_code or "", "estimated_cost": round(cost, 2)}
+# Placeholder rates for a carrier with no configured tiers.
+# Units: base rate per 100 km, plus 0.50 per kg.
+_FALLBACK_BASE_RATE_PER_100KM: dict[str, Decimal] = {
+    "sf_express": Decimal("8.5"),
+    "zto": Decimal("7.0"),
+    "yunda": Decimal("6.0"),
+    "ems": Decimal("9.0"),
+}
+_FALLBACK_DEFAULT_BASE_RATE = Decimal("7.0")
+_FALLBACK_WEIGHT_RATE_PER_KG = Decimal("0.5")
+_SERVICE_MULTIPLIER: dict[str, Decimal] = {
+    CarrierServiceType.STANDARD.value: Decimal("1.0"),
+    CarrierServiceType.EXPRESS.value: Decimal("1.3"),
+    CarrierServiceType.OVERNIGHT.value: Decimal("2.0"),
+    CarrierServiceType.FREIGHT.value: Decimal("1.5"),
+}
 
 
-# Alias: allow tests to call create_pod(db, order_id, data) — overloads the main function
-async def _make_pod_alias(db, transport_order_id, data):
-    """Wrapper for test calls: create_pod(db, order_id, data)."""
-    return await create_pod(db, {"transport_order_id": str(transport_order_id), **data})
+def _service_type(value: object) -> CarrierServiceType:
+    """A service level is one of four things, and pricing each differently."""
+    try:
+        return CarrierServiceType(str(value))
+    except ValueError:
+        valid = ", ".join(sorted(t.value for t in CarrierServiceType))
+        raise ValidationException(
+            message=f"unknown service_type {value!r} (expected one of: {valid})"
+        ) from None
 
 
-# Alias: allow tests to call tms_service.estimate_freight(carrier_code=..., ...)
-async def estimate_freight(*args, carrier_code=None, service_type="standard", distance_km=0.0, weight_kg=0.0, **kwargs):
-    """Async alias for estimate_freight_sync — used by tests."""
-    result = estimate_freight_sync(
-        carrier_code=carrier_code or (args[0] if args else None),
-        service_type=service_type, distance_km=float(distance_km), weight_kg=weight_kg,
+async def estimate_freight(
+    db: AsyncSession,
+    carrier_code: str,
+    service_type: str = "standard",
+    distance_km: float | Decimal = 0,
+    weight_kg: float | Decimal = 0,
+    volume_m3: float | Decimal = 0,
+) -> dict:
+    """Quote freight for a lane that has not been booked yet.
+
+    Pricing goes to the carrier's configured FreightTier rows first, through the
+    same bracket-and-rule helpers calculate_freight() uses for a real shipment —
+    so a quote and the invoice it becomes cannot disagree.  The placeholder table
+    only stands in when the carrier has no tiers at all, and the response names
+    which of the two priced it (``pricing_source``): a placeholder presented as a
+    carrier's price is how a quote turns into a loss.
+
+    ``transit_days`` is None on purpose.  This endpoint is handed a distance, not
+    a route; transit belongs to a lane (CarrierRoute.transit_hours) and a network
+    path, and inferring days from kilometres is how a quote promises a delivery
+    the network cannot make.  ``quote_transport_cost`` answers the routed question.
+    """
+    carrier = _carrier_code(carrier_code)
+    service = _service_type(service_type)
+    weight = Decimal(str(weight_kg or 0))
+    distance = Decimal(str(distance_km or 0))
+    volume = Decimal(str(volume_m3 or 0))
+
+    tiers = await _freight_tiers(db, carrier)
+    tier = _match_freight_tier(
+        tiers, weight_kg=weight, volume_m3=volume, distance_km=distance,
     )
-    result["transit_days"] = 2
-    return result
+    if tier is not None:
+        cost = _price_freight_tier(
+            tier,
+            weight_kg=weight, volume_m3=volume, distance_km=distance,
+            express=service == CarrierServiceType.EXPRESS,
+        )
+        return {
+            "carrier_code": carrier.value,
+            "estimated_cost": str(cost),
+            "transit_days": None,
+            "pricing_source": "rate_card",
+            "rule_type": tier.rule_type.value,
+            "price_per_unit": str(tier.price_per_unit),
+        }
 
+    if tiers:
+        # A rate card exists and does not cover this shipment.  Guessing a number
+        # anyway would present the guess as the carrier's price.
+        raise ValidationException(
+            f"{carrier.value} has {len(tiers)} configured freight tier(s) and none covers "
+            f"this shipment (weight {weight} kg, distance {distance} km, volume {volume} m3)"
+        )
 
-# Expose as create_pod_with_transport_order so tests can alias it
-create_pod_via_alias = _make_pod_alias
+    base_rate = _FALLBACK_BASE_RATE_PER_100KM.get(carrier.value, _FALLBACK_DEFAULT_BASE_RATE)
+    multiplier = _SERVICE_MULTIPLIER[service.value]
+    cost = (
+        base_rate * distance / Decimal("100")
+        + weight * _FALLBACK_WEIGHT_RATE_PER_KG * multiplier
+    ).quantize(Decimal("0.01"))
+    logger.info(
+        "Freight estimate for %s priced from the placeholder table: this carrier has no "
+        "configured freight tiers, so the number is not a rate-card price",
+        carrier.value,
+    )
+    return {
+        "carrier_code": carrier.value,
+        "estimated_cost": str(cost),
+        "transit_days": None,
+        "pricing_source": "placeholder_table",
+    }

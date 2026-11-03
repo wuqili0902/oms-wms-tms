@@ -20,14 +20,63 @@ pytestmark = pytest.mark.asyncio
 P = "/api/v1"
 
 
+async def _seed_e2e_rbac(session):
+    """Seed admin RBAC for E2E tests. Idempotent."""
+    from sqlalchemy import select as sa_select
+
+    from src.auth.models import Permission, Role
+    from src.models import Base
+
+    existing = await session.execute(
+        sa_select(Role.id).join(Role.permissions).where(Permission.code == "admin.rbac.manage")
+    )
+    row = existing.first()
+    if row:
+        return row[0]
+
+    perm = Permission(name="RBAC Manage", code="admin.rbac.manage", resource="admin", action="rbac.manage")
+    session.add(perm)
+    perm2 = Permission(name="User Manage", code="admin.user.manage", resource="admin", action="user.manage")
+    session.add(perm2)
+    role = Role(name="E2E SuperAdmin", code="E2E-SUPER-ADMIN")
+    session.add(role)
+    await session.flush()
+    rp_table = Base.metadata.tables["role_permissions"]
+    await session.execute(rp_table.insert().values(role_id=role.id, permission_id=perm.id))
+    await session.execute(rp_table.insert().values(role_id=role.id, permission_id=perm2.id))
+    await session.flush()
+    return role.id
+
+
 @pytest.fixture
 async def tokens(async_client) -> dict:
     """Register + login once, return access/refresh tokens."""
     # Ignore duplicate-registration error from concurrent tests
     await async_client.post(
         f"{P}/auth/register",
-        json=dict(username="e2e_admin", email="admin@example.com", password="secret123"),
+        json=dict(username="e2e_admin", email="e2e_admin@example.com", password="secret123"),
     )
+    # Seed RBAC so the user has permissions for admin endpoints
+    session = async_client._shared_session
+    role_id = await _seed_e2e_rbac(session)
+    # Assign role to user
+    from sqlalchemy import select as sa_select
+
+    from src.auth.models import User
+    from src.models import Base
+    result = await session.execute(sa_select(User.id).where(User.username == "e2e_admin"))
+    user_row = result.first()
+    if user_row:
+        ur_table = Base.metadata.tables["user_roles"]
+        existing = await session.execute(
+            ur_table.select().where(
+                (ur_table.c.user_id == user_row[0]) & (ur_table.c.role_id == role_id)
+            )
+        )
+        if not existing.first():
+            await session.execute(ur_table.insert().values(user_id=user_row[0], role_id=role_id))
+            await session.flush()
+
     resp = await async_client.post(
         f"{P}/auth/login",
         json=dict(username="e2e_admin", password="secret123"),
@@ -132,29 +181,39 @@ class TestAuth:
 
     async def test_unauthenticated(self, async_client):
         """All protected endpoints reject requests without a token."""
-        endpoints = [
-            ("GET", f"{P}/auth/me"),
-            ("GET", f"{P}/auth/users"),
-            ("POST", f"{P}/auth/roles"),
-            ("GET", f"{P}/auth/roles"),
-            ("GET", f"{P}/auth/permissions"),
-            ("GET", f"{P}/warehouses"),
-            ("POST", f"{P}/warehouses"),
-            ("GET", f"{P}/warehouses/inventory"),
-            ("POST", f"{P}/warehouses/inventory/adjust"),
-            ("GET", f"{P}/warehouses/picking-waves"),
-            ("GET", f"{P}/devices"),
-            ("POST", f"{P}/devices"),
-            ("GET", f"{P}/barcode/templates"),
-            ("POST", f"{P}/barcode/generate"),
-            ("POST", f"{P}/barcode/validate"),
-            ("POST", f"{P}/barcode/scan"),
-            ("GET", f"{P}/orders"),
-            ("POST", f"{P}/orders"),
+        # GET endpoints — no body needed, expect 401
+        get_endpoints = [
+            f"{P}/auth/me",
+            f"{P}/auth/users",
+            f"{P}/auth/roles",
+            f"{P}/auth/permissions",
+            f"{P}/warehouses",
+            f"{P}/warehouses/inventory",
+            f"{P}/warehouses/picking-waves",
+            f"{P}/devices",
+            f"{P}/barcode/templates",
+            f"{P}/orders",
         ]
-        for method, path in endpoints:
-            r = await async_client.request(method, path)
-            assert r.status_code == 401, f"{method} {path} → {r.status_code}"
+        for path in get_endpoints:
+            r = await async_client.get(path)
+            assert r.status_code == 401, f"GET {path} → {r.status_code}"
+
+        # POST endpoints with body — send dummy body so auth runs first
+        post_with_body = [
+            (f"{P}/auth/roles", dict(name="x", code="x")),
+            (f"{P}/warehouses", dict(code="x", name="x")),
+            (f"{P}/warehouses/inventory/adjust", dict(sku="x", warehouse_id="x", change_qty=1)),
+            (f"{P}/devices", dict(code="x", name="x", device_type="pda")),
+            (f"{P}/barcode/generate", dict(
+                gtin_prefix="1234567890", entity_type="x",
+                entity_id="00000000-0000-0000-0000-000000000000", format="code128")),
+            (f"{P}/barcode/validate", dict(gtin="1234567890128")),
+            (f"{P}/barcode/scan", dict(raw_data="1234567890128", scanner_id=None, location_id=None)),
+            (f"{P}/orders", dict(customer_id="x", items=[])),
+        ]
+        for path, body in post_with_body:
+            r = await async_client.post(path, json=body)
+            assert r.status_code == 401, f"POST {path} → {r.status_code}"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -318,7 +377,7 @@ class TestTms:
         # ── List devices ─────────────────────────────────────────────────
         r = await async_client.get(f"{P}/devices", headers=auth_header)
         assert r.status_code == 200
-        assert any(d["code"] == "PDA-E2E-001" for d in r.json())
+        assert any(d["code"] == "PDA-E2E-001" for d in r.json()["items"])
 
         # ── List devices filtered ────────────────────────────────────────
         r = await async_client.get(
@@ -357,14 +416,13 @@ class TestTms:
             f"{P}/devices/{dev_id}/sessions", headers=auth_header,
         )
         assert r.status_code == 200
-        assert any(s["id"] == sess_id for s in r.json())
+        assert any(s["id"] == sess_id for s in r.json()["items"])
 
         # ── End session ──────────────────────────────────────────────────
         r = await async_client.delete(
             f"{P}/devices/{dev_id}/sessions/{sess_id}", headers=auth_header,
         )
-        assert r.status_code == 200
-        assert r.json()["logout_at"] is not None
+        assert r.status_code == 204
 
         # ── Record sync ──────────────────────────────────────────────────
         r = await async_client.post(
@@ -380,7 +438,7 @@ class TestTms:
             f"{P}/devices/{dev_id}/sync", headers=auth_header,
         )
         assert r.status_code == 200
-        assert any(it["records_count"] == 42 for it in r.json())
+        assert any(it["records_count"] == 42 for it in r.json()["items"])
 
 
 # ══════════════════════════════════════════════════════════════════════════

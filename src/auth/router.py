@@ -1,22 +1,23 @@
 """Auth API router — registration, login, token management, RBAC."""
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import service as auth_service
-from src.auth.models import User
 from src.auth.schemas import (
     PermissionCreate,
     PermissionResponse,
     RefreshRequest,
     RoleCreate,
+    RolePermissionAssign,
     RoleResponse,
     RoleUpdate,
     TokenResponse,
     UserCreate,
     UserLogin,
     UserResponse,
+    UserRoleAssign,
 )
 from src.core.database import get_db
 from src.core.dependencies import get_current_user, require_permission
@@ -26,6 +27,24 @@ from src.core.rate_limiter import rate_limit
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+class MessageResponse(BaseModel):
+    message: str
+
+
+class UserRoleResponse(BaseModel):
+    user_id: str
+    role_id: str
+
+
+class RolePermissionResponse(BaseModel):
+    role_id: str
+    permission_id: str
+
+
+class ToggleActiveResponse(BaseModel):
+    is_active: bool
+
+
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @rate_limit(requests=3, window=3600)
 async def register(request: Request, data: UserCreate, db: AsyncSession = Depends(get_db)):
@@ -33,6 +52,10 @@ async def register(request: Request, data: UserCreate, db: AsyncSession = Depend
         user = await auth_service.register_user(db, data.model_dump())
     except ValidationException as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Register failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Registration failed: {e}")
     return UserResponse(**user)
 
 
@@ -55,7 +78,7 @@ async def refresh(request: RefreshRequest):
     return TokenResponse(**tokens)
 
 
-@router.post("/logout")
+@router.post("/logout", response_model=MessageResponse)
 async def logout(request: RefreshRequest):
     await auth_service.revoke_refresh_token(request.refresh_token)
     return {"message": "Logged out successfully"}
@@ -73,7 +96,8 @@ async def get_me(
     return UserResponse(**user)
 
 
-@router.get("/users", response_model=list[UserResponse])
+@router.get("/users", response_model=list[UserResponse],
+             dependencies=[Depends(require_permission("admin.rbac.manage"))])
 async def list_users(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -82,7 +106,8 @@ async def list_users(
     return [UserResponse(**u) for u in users]
 
 
-@router.post("/roles", response_model=RoleResponse, status_code=201)
+@router.post("/roles", response_model=RoleResponse, status_code=201,
+             dependencies=[Depends(require_permission("admin.rbac.manage"))])
 async def create_role(
     role: RoleCreate,
     db: AsyncSession = Depends(get_db),
@@ -95,7 +120,8 @@ async def create_role(
     return RoleResponse(**r)
 
 
-@router.get("/roles", response_model=list[RoleResponse])
+@router.get("/roles", response_model=list[RoleResponse],
+             dependencies=[Depends(require_permission("admin.rbac.manage"))])
 async def list_roles(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -104,7 +130,8 @@ async def list_roles(
     return [RoleResponse(**r) for r in roles]
 
 
-@router.get("/permissions", response_model=list[PermissionResponse])
+@router.get("/permissions", response_model=list[PermissionResponse],
+             dependencies=[Depends(require_permission("admin.rbac.manage"))])
 async def list_permissions(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -113,7 +140,8 @@ async def list_permissions(
     return [PermissionResponse(**p) for p in perms]
 
 
-@router.put("/roles/{role_id}", response_model=RoleResponse)
+@router.put("/roles/{role_id}", response_model=RoleResponse,
+            dependencies=[Depends(require_permission("admin.rbac.manage"))])
 async def update_role(
     role_id: str,
     data: RoleUpdate,
@@ -127,7 +155,8 @@ async def update_role(
     return RoleResponse(**r)
 
 
-@router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT,
+               dependencies=[Depends(require_permission("admin.rbac.manage"))])
 async def delete_role(
     role_id: str,
     db: AsyncSession = Depends(get_db),
@@ -140,7 +169,8 @@ async def delete_role(
         raise HTTPException(status_code=code, detail=str(e))
 
 
-@router.post("/permissions", response_model=PermissionResponse, status_code=201)
+@router.post("/permissions", response_model=PermissionResponse, status_code=201,
+             dependencies=[Depends(require_permission("admin.rbac.manage"))])
 async def create_permission(
     data: PermissionCreate,
     db: AsyncSession = Depends(get_db),
@@ -153,21 +183,32 @@ async def create_permission(
     return PermissionResponse(**p)
 
 
-@router.post("/users/{user_id}/roles")
+@router.post(
+    "/users/{user_id}/roles",
+    response_model=UserRoleResponse,
+    dependencies=[Depends(require_permission("admin.rbac.manage"))],
+)
 async def assign_role_to_user(
     user_id: str,
-    data: dict,
+    data: UserRoleAssign,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    """Attach a role to a user.
+
+    ``UserRoleAssign``: the handler read ``data["role_id"]`` from a bare ``dict``,
+    so a request without that key was a ``KeyError`` inside the handler — a 500.
+    """
     try:
-        return await auth_service.assign_role_to_user(db, user_id, data["role_id"])
+        return await auth_service.assign_role_to_user(db, user_id, str(data.role_id))
     except (NotFoundException, ValidationException) as e:
         code = 404 if isinstance(e, NotFoundException) else 422
         raise HTTPException(status_code=code, detail=str(e))
 
 
-@router.delete("/users/{user_id}/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/users/{user_id}/roles/{role_id}",
+               status_code=status.HTTP_204_NO_CONTENT,
+               dependencies=[Depends(require_permission("admin.rbac.manage"))])
 async def remove_role_from_user(
     user_id: str,
     role_id: str,
@@ -180,21 +221,29 @@ async def remove_role_from_user(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/roles/{role_id}/permissions")
+@router.post(
+    "/roles/{role_id}/permissions",
+    response_model=RolePermissionResponse,
+    dependencies=[Depends(require_permission("admin.rbac.manage"))],
+)
 async def assign_permission_to_role(
     role_id: str,
-    data: dict,
+    data: RolePermissionAssign,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    """Grant a permission to a role (``RolePermissionAssign`` — see
+    :func:`assign_role_to_user` for why the key has to be a field, not a dict lookup)."""
     try:
-        return await auth_service.assign_permission_to_role(db, role_id, data["permission_id"])
+        return await auth_service.assign_permission_to_role(db, role_id, str(data.permission_id))
     except (NotFoundException, ValidationException) as e:
         code = 404 if isinstance(e, NotFoundException) else 422
         raise HTTPException(status_code=code, detail=str(e))
 
 
-@router.delete("/roles/{role_id}/permissions/{perm_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/roles/{role_id}/permissions/{perm_id}",
+               status_code=status.HTTP_204_NO_CONTENT,
+               dependencies=[Depends(require_permission("admin.rbac.manage"))])
 async def remove_permission_from_role(
     role_id: str,
     perm_id: str,
@@ -207,17 +256,24 @@ async def remove_permission_from_role(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/users/{user_id}/toggle", dependencies=[Depends(require_permission("admin.user.manage"))])
+@router.post(
+    "/users/{user_id}/toggle",
+    response_model=ToggleActiveResponse,
+    dependencies=[Depends(require_permission("admin.user.manage"))],
+)
 async def toggle_user_active_state(
     user_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    import uuid as _uuid
-    result = await db.execute(select(User).where(User.id == _uuid.UUID(user_id)))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    user.is_active = not user.is_active
-    await db.commit()
-    return {"is_active": user.is_active}
+    """Flip a user's active flag.
+
+    The id is checked in the service (:func:`auth_service.toggle_user_active`):
+    this route built ``uuid.UUID(user_id)`` itself, so an id that is not one was a
+    ``ValueError`` here — a 500 about the server in answer to a typed-wrong id.
+    """
+    try:
+        return await auth_service.toggle_user_active(db, user_id)
+    except (NotFoundException, ValidationException) as e:
+        code = 404 if isinstance(e, NotFoundException) else 422
+        raise HTTPException(status_code=code, detail=str(e))

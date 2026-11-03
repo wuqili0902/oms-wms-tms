@@ -94,8 +94,12 @@ def test_get_tracking_url_empty_template():
 
 
 @pytest.mark.asyncio
-async def test_estimate_shipping_mock():
+async def test_estimate_shipping_mock(monkeypatch):
+    """The built-in rate table is demo data, reachable only with the flag on."""
+    from src.config import settings
     from src.logistics.carriers import CarrierCode, estimate_shipping
+
+    monkeypatch.setattr(settings, "logistics_mock_enabled", True)
     d = await estimate_shipping(CarrierCode.ZTO, origin="上海", destination="北京", weight_kg=5.0)
     # base=8.0 + (5-1)*5 = 8+20 = 28
     assert d["estimated_cost_yuan"] == 28.0
@@ -103,19 +107,40 @@ async def test_estimate_shipping_mock():
     assert d["weight_kg"] == 5.0
     assert d["carrier"] == "zto"
     assert d["carrier_name"] == "中通快递"
+    assert d["source"] == "mock"
+    assert "演示费率" in d["source_note"]
 
 
 @pytest.mark.asyncio
-async def test_estimate_shipping_mock_1kg():
+async def test_estimate_shipping_without_endpoint_says_unconfigured(monkeypatch):
+    """A quote is a number someone charges money on: no endpoint, no quote."""
+    from src.config import settings
+    from src.core.exceptions import NotImplementedActionException
     from src.logistics.carriers import CarrierCode, estimate_shipping
+
+    monkeypatch.setattr(settings, "logistics_mock_enabled", False)
+    with pytest.raises(NotImplementedActionException, match="运费询价未配置") as exc:
+        await estimate_shipping(CarrierCode.ZTO, weight_kg=1.0)
+    assert exc.value.detail["configured"] is False
+
+
+@pytest.mark.asyncio
+async def test_estimate_shipping_mock_1kg(monkeypatch):
+    from src.config import settings
+    from src.logistics.carriers import CarrierCode, estimate_shipping
+
+    monkeypatch.setattr(settings, "logistics_mock_enabled", True)
     d = await estimate_shipping(CarrierCode.SF, weight_kg=1.0)
     assert d["estimated_cost_yuan"] == 18.0  # base rate, no weight surcharge
     assert d["estimated_days"] == 2
 
 
 @pytest.mark.asyncio
-async def test_estimate_shipping_default_carrier():
+async def test_estimate_shipping_default_carrier(monkeypatch):
+    from src.config import settings
     from src.logistics.carriers import estimate_shipping
+
+    monkeypatch.setattr(settings, "logistics_mock_enabled", True)
 
     class _FakeCarrier:
         value = "unknown"
@@ -123,6 +148,7 @@ async def test_estimate_shipping_default_carrier():
     # default base=10.0 + (3-1)*5 = 20
     assert d["estimated_cost_yuan"] == 20.0
     assert d["estimated_days"] == 4
+    assert d["source"] == "mock"
 
 
 @pytest.mark.asyncio
@@ -147,10 +173,12 @@ async def test_query_tracking_real_api():
             assert d["status"] == "delivered"
             assert d["status_detail"] == "已签收"
             assert d["carrier"] == "zto"
+            assert d["source"] == "carrier_api"
 
 
 @pytest.mark.asyncio
-async def test_query_tracking_real_api_fallback():
+async def test_query_tracking_endpoint_failure_raises_instead_of_answering_demo_data():
+    """A timeout used to fall through to 运输中 — 到达中转站, which dispatch relayed to the customer."""
     from unittest.mock import MagicMock, patch
 
     from src.logistics.carriers import CarrierCode, query_tracking
@@ -161,10 +189,8 @@ async def test_query_tracking_real_api_fallback():
             mock_resp = MagicMock()
             mock_resp.raise_for_status.side_effect = Exception("HTTP error")
             mock_client.return_value.__aenter__.return_value.get.return_value = mock_resp
-            d = await query_tracking(CarrierCode.ZTO, "ZT260729TEST")
-            # falls back to mock data
-            assert d["status"] in ("picked_up", "in_transit", "out_for_delivery", "delivered", "pending")
-            assert d["carrier"] == "zto"
+            with pytest.raises(RuntimeError, match="轨迹接口调用失败"):
+                await query_tracking(CarrierCode.ZTO, "ZT260729TEST")
 
 
 @pytest.mark.asyncio
@@ -186,10 +212,11 @@ async def test_estimate_shipping_real_api():
             assert d["estimated_cost_yuan"] == 15.0
             assert d["estimated_days"] == 2
             assert d["weight_kg"] == 2.0
+            assert d["source"] == "carrier_api"
 
 
 @pytest.mark.asyncio
-async def test_estimate_shipping_real_api_fallback():
+async def test_estimate_shipping_endpoint_failure_raises_instead_of_answering_a_demo_rate():
     from unittest.mock import MagicMock, patch
 
     from src.logistics.carriers import CarrierCode, estimate_shipping
@@ -200,10 +227,8 @@ async def test_estimate_shipping_real_api_fallback():
             mock_resp = MagicMock()
             mock_resp.raise_for_status.side_effect = Exception("HTTP error")
             mock_client.return_value.__aenter__.return_value.post.return_value = mock_resp
-            d = await estimate_shipping(CarrierCode.ZTO, weight_kg=1.0)
-            # falls back to mock data
-            assert d["estimated_cost_yuan"] == 8.0
-            assert d["estimated_days"] == 3
+            with pytest.raises(RuntimeError, match="运费询价失败"):
+                await estimate_shipping(CarrierCode.ZTO, weight_kg=1.0)
 
 
 def test_get_carrier_endpoints_with_settings():
@@ -214,7 +239,8 @@ def test_get_carrier_endpoints_with_settings():
     class FakeSettings:
         carrier_api_endpoints_dict = {"sf": "https://api.sf.com/track"}
 
-    with patch("src.config.settings", FakeSettings()):
+    # carriers.py binds ``settings`` at import, so the patch has to land on that binding.
+    with patch("src.logistics.carriers.settings", FakeSettings()):
         endpoints = _get_carrier_endpoints()
         assert endpoints == {"sf": "https://api.sf.com/track"}
 
@@ -226,6 +252,8 @@ def test_get_carrier_endpoints_error():
 
     fake = MagicMock()
     del fake.carrier_api_endpoints_dict
-    with patch("src.config.settings", fake):
+    # Malformed CARRIER_API_ENDPOINTS is a config error, not a licence to invent tracking:
+    # the read degrades to "unconfigured", and the query below answers 501.
+    with patch("src.logistics.carriers.settings", fake):
         endpoints = _get_carrier_endpoints()
         assert endpoints == {}

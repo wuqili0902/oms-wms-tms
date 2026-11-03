@@ -1,10 +1,13 @@
 """Health check endpoints with DB and Redis probes."""
+import logging
+
 from fastapi import APIRouter, Response, status
 
 from src.config import settings
 from src.core.database import check_db_health
 
 router = APIRouter(tags=["health"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
@@ -30,8 +33,8 @@ async def readiness_check(response: Response):
         from src.cache.redis_client import redis_health_check
 
         redis_ok = await redis_health_check()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Redis health check failed: %s", e)
 
     all_healthy = db_ok and redis_ok
     if not all_healthy:

@@ -47,7 +47,7 @@ async def test_export_orders(sqlite_engine, db_session):
     db_session.add(o)
     await db_session.commit()
 
-    rows = await export_orders(db_session)
+    rows = [r async for r in export_orders(db_session)]
     our = [r for r in rows if r["order_no"] == order_no]
     assert len(our) == 1
     assert our[0]["status"] == "confirmed"
@@ -64,7 +64,7 @@ async def test_export_inventory(sqlite_engine, db_session):
     db_session.add(inv)
     await db_session.commit()
 
-    rows = await export_inventory(db_session)
+    rows = [r async for r in export_inventory(db_session)]
     our = [r for r in rows if r["sku_id"] == str(sku.id)]
     assert len(our) == 1
     assert our[0]["quantity"] == 10
@@ -219,6 +219,17 @@ class TestHandleInventoryImport:
 
 class TestImportRoutes:
     """Covers core/_import/routes.py import endpoints."""
+
+    @pytest.fixture(autouse=True)
+    def _auth_override(self):
+        # Import endpoints require authentication (bulk-write protection);
+        # stub a user so these route tests reach the validation logic.
+        from src.core.dependencies import get_current_user
+        from src.main import app
+
+        app.dependency_overrides[get_current_user] = lambda: {"sub": "import-test-user"}
+        yield
+        app.dependency_overrides.pop(get_current_user, None)
 
     async def test_import_orders_no_file(self, async_client):
         resp = await async_client.post("/api/v1/import/orders", json={})

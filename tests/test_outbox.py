@@ -27,18 +27,21 @@ class TestDispatchPendingEvents:
 
         mock_session = AsyncMock()
         mock_event = MagicMock()
+        mock_event.id = "test-id"
         mock_event.event_type = "order.created"
+        mock_event.status = "dispatched"
+        mock_event.retry_count = 0
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [mock_event]
         mock_session.execute.return_value = mock_result
 
-        mod = __import__("src.core.outbox", fromlist=["dispatch_pending_events"])
-        with patch.object(mod, "get_session") as mock_get_session:
+        mod = __import__("src.core.outbox", fromlist=["_get_session"])
+        with patch.object(mod, "_get_session") as mock_get_session:
             mock_get_session.return_value.__aenter__.return_value = mock_session
 
             events = await dispatch_pending_events(batch_size=50)
             assert len(events) == 1
-            assert events[0].event_type == "order.created"
+            assert events[0]["event_type"] == "order.created"
 
 
 class TestMarkDispatched:
@@ -51,7 +54,7 @@ class TestMarkDispatched:
         mock_session.execute.return_value = mock_result
 
         mod = __import__("src.core.outbox", fromlist=["mark_dispatched"])
-        with patch.object(mod, "get_session") as mock_get_session:
+        with patch.object(mod, "_get_session") as mock_get_session:
             mock_get_session.return_value.__aenter__.return_value = mock_session
 
             count = await mark_dispatched(["id-1", "id-2"])
@@ -65,7 +68,7 @@ class TestMarkFailed:
         mock_session = AsyncMock()
 
         mod = __import__("src.core.outbox", fromlist=["mark_failed"])
-        with patch.object(mod, "get_session") as mock_get_session:
+        with patch.object(mod, "_get_session") as mock_get_session:
             mock_get_session.return_value.__aenter__.return_value = mock_session
 
             await mark_failed("id-1", "timeout error")

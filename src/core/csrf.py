@@ -12,20 +12,33 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+# CSRF token validity window (seconds)
+CSRF_TOKEN_MAX_AGE = 3600  # 1 hour
+
 
 def generate_csrf_token() -> str:
+    """Generate a CSRF token with an embedded timestamp for expiration."""
     seed = secrets.token_hex(16)
-    msg = f"csrf:{seed}"
+    ts = str(int(time.time()))
+    msg = f"csrf:{seed}:{ts}"
     sig = hmac.new(
         settings.secret_key.encode(), msg.encode(), hashlib.sha256
     ).hexdigest()
-    return f"{seed}:{sig}"
+    return f"{seed}:{ts}:{sig}"
 
 
 def _verify_token(token: str, cookie_token: str) -> bool:
+    """Verify that *token* matches *cookie_token* and is not expired."""
     try:
-        seed, sig = token.split(":", 1)
-        msg = f"csrf:{seed}"
+        parts = token.split(":", 2)
+        if len(parts) != 3:
+            return False
+        seed, ts_str, sig = parts
+        ts = int(ts_str)
+        # Reject expired tokens
+        if abs(time.time() - ts) > CSRF_TOKEN_MAX_AGE:
+            return False
+        msg = f"csrf:{seed}:{ts_str}"
         expected = hmac.new(
             settings.secret_key.encode(), msg.encode(), hashlib.sha256
         ).hexdigest()
@@ -102,6 +115,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             response.set_cookie(
                 "csrf_token", token, path="/admin/", httponly=True, samesite="lax",
+                secure=not settings.debug,
             )
             return response
 
@@ -118,7 +132,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
                 ct = request.headers.get("content-type", "")
                 if "application/x-www-form-urlencoded" in ct or "multipart/form-data" in ct:
                     form = await request.form()
-                    form_token = form.get("csrf_token", "")
+                    form_token = str(form.get("csrf_token", ""))
                     if not form_token or not _verify_token(form_token, cookie_token):
                         return JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
                 else:

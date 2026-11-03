@@ -462,3 +462,163 @@ class TestGenerateRoutePlan:
         fetched = await tms_service.get_route_plan(db_session, plan["id"])
         assert fetched["id"] == plan["id"]
         assert "segments" in fetched
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Corrected segment-cost semantics + route cache invalidation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestRouteCostSemantics:
+    """Lane prices are whole-lane per-kg — a priced multi-hop must not be
+    penalised by charging the lane price once per segment."""
+
+    async def _make_order(self, db_session, weight=10):
+        return await tms_service.create_transport_order(db_session, {
+            "carrier_code": "sf_express",
+            "pickup_warehouse_id": str(uuid.uuid4()),
+            "delivery_name": "张三",
+            "delivery_address": {"province": "广西", "city": "柳州"},
+            "pickup_address": {"province": "湖北", "city": "武汉"},
+            "total_weight_kg": weight,
+        })
+
+    @pytest.mark.asyncio
+    async def test_priced_multi_hop_beats_unpriced_direct(self, db_session):
+        a = _uniq("WUHAN")
+        b = _uniq("CHANGSHA")
+        c = _uniq("LIUZHOU")
+        for code, name in ((a, "武汉"), (b, "长沙"), (c, "柳州")):
+            await tms_service.create_hub(db_session, {"code": code, "name": name, "city": name})
+        # Direct express lane (no carrier prices this city pair → 0.5/km fallback)
+        await tms_service.add_hub_connection(db_session, {
+            "from_hub_code": a, "to_hub_code": c, "distance_km": 800, "transit_hours": 10,
+        })
+        # Two priced hops: 8/kg + 10/kg on 10kg = 180 total < 800×0.5 = 400
+        await tms_service.add_hub_connection(db_session, {
+            "from_hub_code": a, "to_hub_code": b, "distance_km": 300, "transit_hours": 4,
+        })
+        await tms_service.add_hub_connection(db_session, {
+            "from_hub_code": b, "to_hub_code": c, "distance_km": 500, "transit_hours": 6,
+        })
+        await tms_service.add_carrier_route(db_session, {
+            "carrier_code": "zto", "origin_city": "武汉", "dest_city": "长沙",
+            "distance_km": 300, "transit_hours": 4, "base_price_per_kg": Decimal("8"),
+        })
+        await tms_service.add_carrier_route(db_session, {
+            "carrier_code": "zto", "origin_city": "长沙", "dest_city": "柳州",
+            "distance_km": 500, "transit_hours": 6, "base_price_per_kg": Decimal("10"),
+        })
+        order = await self._make_order(db_session)
+
+        route = await tms_service.find_best_route_plan(order["id"], db_session)
+        assert len(route["segments"]) == 2
+        assert Decimal(route["total_cost_amount"]) == Decimal("180")
+        # Segment metrics must be exactly one per hop, in path order.
+        assert [Decimal(s["distance_km"]) for s in route["segments"]] == [Decimal("300"), Decimal("500")]
+        assert [Decimal(s["transit_hours"]) for s in route["segments"]] == [Decimal("4"), Decimal("6")]
+
+    @pytest.mark.asyncio
+    async def test_direct_priced_lane_cost(self, db_session):
+        a = _uniq("WUHAN")
+        c = _uniq("LIUZHOU")
+        for code, name in ((a, "武汉"), (c, "柳州")):
+            await tms_service.create_hub(db_session, {"code": code, "name": name, "city": name})
+        await tms_service.add_hub_connection(db_session, {
+            "from_hub_code": a, "to_hub_code": c, "distance_km": 800, "transit_hours": 10,
+        })
+        await tms_service.add_carrier_route(db_session, {
+            "carrier_code": "sf_express", "origin_city": "武汉", "dest_city": "柳州",
+            "distance_km": 800, "transit_hours": 10, "base_price_per_kg": Decimal("12"),
+        })
+        order = await self._make_order(db_session)
+
+        route = await tms_service.find_best_route_plan(order["id"], db_session)
+        assert len(route["segments"]) == 1
+        # 10 kg × 12/kg — charged once for the lane, not once per segment.
+        assert Decimal(route["total_cost_amount"]) == Decimal("120")
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.store: dict = {}
+        self.calls: list = []
+
+    async def get(self, key):
+        self.calls.append(("get", key))
+        return self.store.get(key)
+
+    async def set(self, key, value=None, ex=None, **kwargs):
+        # redis-py 5 deprecates ``setex``, so the service writes the TTL as ``ex=``
+        # on ``set``; the fake follows the client it stands in for.
+        self.calls.append(("set", key))
+        self.store[key] = value
+
+    async def incr(self, key):
+        self.calls.append(("incr", key))
+        self.store[key] = int(self.store.get(key, 0)) + 1
+
+
+class TestRouteCacheInvalidation:
+    """Cached route plans must become unreachable when lane prices change."""
+
+    @pytest.mark.asyncio
+    async def test_lane_price_change_invalidates_cached_plan(self, db_session, monkeypatch):
+        import json
+        from contextlib import asynccontextmanager
+
+        from src.cache import redis_client as rc
+
+        fake = _FakeRedis()
+
+        @asynccontextmanager
+        async def _fake_get_redis():
+            yield fake
+
+        monkeypatch.setattr(rc, "get_redis", _fake_get_redis)
+
+        a = _uniq("WUHAN")
+        c = _uniq("LIUZHOU")
+        for code, name in ((a, "武汉"), (c, "柳州")):
+            await tms_service.create_hub(db_session, {"code": code, "name": name, "city": name})
+        await tms_service.add_hub_connection(db_session, {
+            "from_hub_code": a, "to_hub_code": c, "distance_km": 800, "transit_hours": 10,
+        })
+        await tms_service.add_carrier_route(db_session, {
+            "carrier_code": "sf_express", "origin_city": "武汉", "dest_city": "柳州",
+            "distance_km": 800, "transit_hours": 10, "base_price_per_kg": Decimal("12"),
+        })
+        order = await tms_service.create_transport_order(db_session, {
+            "carrier_code": "sf_express",
+            "pickup_warehouse_id": str(uuid.uuid4()),
+            "delivery_name": "张三",
+            "delivery_address": {"province": "广西", "city": "柳州"},
+            "pickup_address": {"province": "湖北", "city": "武汉"},
+            "total_weight_kg": 10,
+        })
+
+        r1 = await tms_service.find_best_route_plan(order["id"], db_session)
+        assert Decimal(r1["total_cost_amount"]) == Decimal("120")
+
+        # Poison the cached entry; a cache hit must now return the sentinel.
+        # (Seeding bumps the version itself, so read the key back dynamically.)
+        cached_keys = [k for op, k in fake.calls if op == "set"]
+        assert cached_keys, f"expected a versioned cache write, calls={fake.calls}"
+        original_key = cached_keys[-1]
+        fake.store[original_key] = json.dumps({"marker": "sentinel"})
+        r2 = await tms_service.find_best_route_plan(order["id"], db_session)
+        assert r2.get("marker") == "sentinel"
+
+        # A cheaper lane price must bump the cache version so the stale entry
+        # is unreachable, and the recomputation must pick up the new price.
+        await tms_service.add_carrier_route(db_session, {
+            "carrier_code": "zto", "origin_city": "武汉", "dest_city": "柳州",
+            "distance_km": 800, "transit_hours": 10, "base_price_per_kg": Decimal("5"),
+        })
+        assert any(op == "incr" for op, _ in fake.calls), "expected a version bump"
+
+        r3 = await tms_service.find_best_route_plan(order["id"], db_session)
+        assert r3.get("marker") is None
+        assert Decimal(r3["total_cost_amount"]) == Decimal("50")
+        new_keys = [k for op, k in fake.calls if op == "set" and k != original_key]
+        assert new_keys, "expected a cache re-write under a bumped version"

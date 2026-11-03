@@ -64,7 +64,7 @@ class TestSplitOrder:
         mock_result.scalar_one_or_none.return_value = order
         mock_db.execute.return_value = mock_result
 
-        with patch("src.oms.merge._order_to_dict", new_callable=AsyncMock) as mock_otd:
+        with patch("src.oms.merge._order_to_dict_async", new_callable=AsyncMock) as mock_otd:
             mock_otd.return_value = {"id": "child-id", "order_no": "ORD-001-SP1"}
             result = await split_order(mock_db, UUID_1, [
                 {"items": [{"sku": UUID_100, "quantity": 1}], "note": "Test split"},
@@ -94,7 +94,7 @@ class TestSplitOrder:
         mock_result.scalar_one_or_none.return_value = order
         mock_db.execute.return_value = mock_result
 
-        with patch("src.oms.merge._order_to_dict", new_callable=AsyncMock):
+        with patch("src.oms.merge._order_to_dict_async", new_callable=AsyncMock):
             result = await split_order(mock_db, UUID_1, [])
 
         assert result == []
@@ -108,7 +108,7 @@ class TestSplitOrder:
         mock_result.scalar_one_or_none.return_value = order
         mock_db.execute.return_value = mock_result
 
-        with patch("src.oms.merge._order_to_dict", new_callable=AsyncMock) as mock_otd:
+        with patch("src.oms.merge._order_to_dict_async", new_callable=AsyncMock) as mock_otd:
             mock_otd.return_value = {"id": "child-id"}
             result = await split_order(mock_db, UUID_1, [
                 {"items": [{"sku": UUID_999, "quantity": 1}]},

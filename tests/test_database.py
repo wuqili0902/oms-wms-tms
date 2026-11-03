@@ -68,22 +68,42 @@ class TestGetSession:
 
 
 class TestCheckDbHealth:
-    async def test_returns_true_on_success(self):
+    """``check_db_health`` reads the module-level engine.
+
+    Assigning it directly would leave every later test — the /health endpoint
+    included — pointed at a MagicMock, which is why these take monkeypatch so
+    the real engine comes back afterwards.
+    """
+
+    async def test_returns_true_on_success(self, monkeypatch):
         mod = __import__("src.core.database", fromlist=["check_db_health"])
         mock_engine = MagicMock()
         mock_conn = AsyncMock()
         mock_engine.connect.return_value.__aenter__.return_value = mock_conn
-        mod.engine = mock_engine
+        monkeypatch.setattr(mod, "engine", mock_engine)
 
         result = await mod.check_db_health()
         assert result is True
         mock_conn.execute.assert_awaited_once()
 
-    async def test_returns_false_on_exception(self):
+    async def test_returns_false_on_exception(self, monkeypatch):
         mod = __import__("src.core.database", fromlist=["check_db_health"])
         mock_engine = MagicMock()
         mock_engine.connect.side_effect = Exception("down")
-        mod.engine = mock_engine
+        monkeypatch.setattr(mod, "engine", mock_engine)
 
         result = await mod.check_db_health()
         assert result is False
+
+    async def test_rebuilds_pool_after_first_failure(self, monkeypatch):
+        """A connection from a dead event loop is retried, not reported as down."""
+        mod = __import__("src.core.database", fromlist=["check_db_health"])
+        mock_engine = MagicMock()
+        good_cm = AsyncMock()  # AsyncMock is a working async context manager
+        mock_engine.connect.side_effect = [Exception("Event loop is closed"), good_cm]
+        mock_engine.dispose = AsyncMock()
+        monkeypatch.setattr(mod, "engine", mock_engine)
+
+        result = await mod.check_db_health()
+        assert result is True
+        mock_engine.dispose.assert_awaited_once()

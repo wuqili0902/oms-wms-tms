@@ -64,6 +64,8 @@ async def pick_from_stock(
             Inventory.sku.has(SKU.sku == sku),  # type: ignore[arg-type]
             Inventory.is_deleted.is_(False),
         )
+        .options(selectinload(Inventory.sku))
+        .with_for_update()
         .order_by(
             Inventory.expiry_date.asc().nulls_last(),  # FEFO: oldest expiry first
             Inventory.batch_no,                        # stable tie-breaker
@@ -123,6 +125,142 @@ async def pick_from_stock(
         "picked_batches": picked_batches,
         "remaining_quantity": remaining,  # >0 means we couldn't fulfill fully
     }
+
+
+async def consume_stock_for_shipment(
+    db: AsyncSession,
+    *,
+    warehouse_id: str,
+    lines: list[dict],
+    stock_out_id: str,
+    operator_id: uuid.UUID | None = None,
+) -> list[dict]:
+    """Deduct a stock-out shipment from the shelf, batch by batch, and log each batch.
+
+    A ``StockOut`` document used to be pure paper: ``POST /stock-out`` created
+    the document and its lines, ``PUT …/status {status: SHIPPED}`` flipped the
+    status, and between them not one ``Inventory.quantity`` moved and not one
+    ``InventoryLog`` row was written.  The shelf and the shipment ledger
+    therefore describe two different warehouses, and the audit trail of a
+    shipment was the document, which is not a record of stock.
+
+    FEFO ordering is the same one :func:`pick_from_stock` uses — soonest-expiry
+    batch first — so a shipment leaves the stock that has to leave first, and
+    each batch it touches gets its own ``InventoryLog`` row naming this shipment
+    (``reference_type="stock_out"``, ``reference_id=<stock out id>``) with the
+    before/after quantities.  One ``StockInventoryLog`` row per shipment line
+    records the movement in the ledger ``GET /api/v1/inventory-log`` serves.
+
+    Quantities are Decimals: :func:`pick_from_stock` narrows the pick to
+    ``int(pick_qty)``, which is fine for whole-unit picking tasks and would
+    silently drop the fraction of a 2.5 kg line.
+
+    This function never commits.  The route that ships a document owns the
+    transaction, so the inventory movement, its audit rows, and the document's
+    SHIPPED status are one fact: a shipment that cannot be honoured on the shelf
+    leaves no half-deducted stock and no status change behind.
+    """
+    from src.models.wms import StockInventoryLog
+
+    warehouse_uuid = _to_uuid(warehouse_id)
+    stock_out_uuid = _to_uuid(stock_out_id)
+    movements: list[dict] = []
+
+    for index, line in enumerate(lines):
+        sku_code = str(line.get("sku") or "").strip()
+        if not sku_code:
+            raise ValidationException(
+                message=f"line {index} has no sku — a shipment line with no product "
+                        "cannot be deducted from any batch",
+            )
+        requested = Decimal(str(line.get("qty") or 0))
+        if requested <= 0:
+            raise ValidationException(
+                message=f"line {index} ({sku_code}) requests {requested}; a shipment line "
+                        "must request a positive quantity",
+            )
+
+        sku_result = await db.execute(select(SKU).where(SKU.sku == sku_code))
+        sku_obj = sku_result.scalar_one_or_none()
+        if sku_obj is None:
+            raise ValidationException(
+                message=f"SKU {sku_code} is not in the SKU catalog, so shipment "
+                        f"{stock_out_id} has no stock to deduct from — register the SKU "
+                        "and receive the goods before shipping them",
+            )
+
+        batch_result = await db.execute(
+            select(Inventory)
+            .where(
+                Inventory.warehouse_id == warehouse_uuid,
+                Inventory.sku_id == sku_obj.id,
+                Inventory.is_deleted.is_(False),
+                Inventory.quantity > 0,
+            )
+            .with_for_update(skip_locked=True)
+            .order_by(
+                Inventory.expiry_date.asc().nulls_last(),
+                Inventory.received_at.asc().nulls_last(),
+                Inventory.batch_no,
+            )
+        )
+        batches = list(batch_result.scalars().all())
+        on_hand = sum(
+            (Decimal(str(b.quantity)) - Decimal(str(b.locked_qty or 0)) for b in batches),
+            Decimal("0"),
+        )
+        if on_hand < requested:
+            raise ValidationException(
+                message=f"cannot ship {requested} of {sku_code}: warehouse has {on_hand} "
+                        f"available (stock_out {stock_out_id})",
+            )
+
+        remaining = requested
+        for inv in batches:
+            if remaining <= 0:
+                break
+            available = Decimal(str(inv.quantity)) - Decimal(str(inv.locked_qty or 0))
+            take = min(remaining, available)
+            if take <= 0:
+                continue
+            before = Decimal(str(inv.quantity))
+            inv.quantity = before - take
+            inv.version = (inv.version or 0) + 1
+            db.add(InventoryLog(
+                id=uuid.uuid4(),
+                inventory_id=inv.id,
+                change_type=InventoryChangeType.OUTBOUND,
+                quantity_change=-take,
+                quantity_before=before,
+                quantity_after=inv.quantity,
+                reference_type="stock_out",
+                reference_id=stock_out_uuid,
+                remark=f"stock_out {stock_out_id}: {take} of {sku_code} left batch {inv.batch_no}",
+            ))
+            movements.append({
+                "sku": sku_code,
+                "batch_no": inv.batch_no,
+                "qty": str(take),
+                "inventory_id": str(inv.id),
+            })
+            remaining -= take
+
+        db.add(StockInventoryLog(
+            id=uuid.uuid4(),
+            warehouse_id=warehouse_uuid,
+            sku=sku_code,
+            type="OUTBOUND",
+            reference_type="stock_out",
+            reference_id=stock_out_uuid,
+            # Signed the way the column is documented ("+ve = in, -ve = out"), so
+            # the ledger the API serves sums to the stock that is on the shelf.
+            quantity_change=-requested,
+            operator_id=operator_id,
+            remark=f"shipped {requested} of {sku_code}",
+        ))
+
+    await db.flush()
+    return movements
 
 
 # ── Pick Task Management ───────────────────────────────────────────────────────

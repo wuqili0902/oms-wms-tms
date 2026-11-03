@@ -3,7 +3,8 @@
 Integrates with Firebase Cloud Messaging (FCM) and Apple Push Notification Service (APNs).
 Uses the push_token stored on TerminalDevice to route notifications.
 
-When Firebase is not configured, falls back to logging (safe no-op).
+When Firebase is not configured, pushes are skipped and reported as failures
+(return False, counted in `stats["failed"]`) rather than silently succeeding.
 """
 import logging
 from dataclasses import dataclass, field
@@ -109,13 +110,13 @@ class PushService:
                 self._failed_count += 1
                 return False
 
-            logger.info(
-                "Push notification (no-op): token=%s title=%s body=%s priority=%s",
+            logger.warning(
+                "Push notification skipped (Firebase not configured): token=%s title=%s body=%s priority=%s",
                 push_token[:16] + "..." if len(push_token) > 16 else push_token,
                 message.title, message.body, message.priority.value,
             )
-            self._sent_count += 1
-            return True
+            self._failed_count += 1
+            return False
         except Exception as e:
             logger.error("Push notification failed: %s", str(e))
             self._failed_count += 1
@@ -143,9 +144,12 @@ class PushService:
                 self._failed_count += 1
                 return False
 
-            logger.info("Topic push (no-op) to '%s': title=%s body=%s", topic, message.title, message.body)
-            self._sent_count += 1
-            return True
+            logger.warning(
+                "Topic push skipped (Firebase not configured) to '%s': title=%s body=%s",
+                topic, message.title, message.body,
+            )
+            self._failed_count += 1
+            return False
         except Exception as e:
             logger.error("Topic push failed: %s", str(e))
             self._failed_count += 1

@@ -84,17 +84,20 @@ class TestTransportOrderExceptions:
 
     async def test_update_status_success(self, async_client, auth_headers, transport_order):
         order_id = transport_order["id"]
-        resp = await async_client.put(f"/api/v1/transport-orders/{order_id}/status?status=dispatched", headers=auth_headers)
+        resp = await async_client.put(f"/api/v1/transport-orders/{order_id}/status?status=dispatched",
+            headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json()["status"] == "dispatched"
 
     async def test_update_status_not_found(self, async_client, auth_headers):
-        resp = await async_client.put(f"/api/v1/transport-orders/{BAD_UUID}/status?status=dispatched", headers=auth_headers)
+        resp = await async_client.put(f"/api/v1/transport-orders/{BAD_UUID}/status?status=dispatched",
+            headers=auth_headers)
         assert resp.status_code == 404
 
     async def test_update_status_invalid_transition(self, async_client, auth_headers, transport_order):
         order_id = transport_order["id"]
-        resp = await async_client.put(f"/api/v1/transport-orders/{order_id}/status?status=delivered", headers=auth_headers)
+        resp = await async_client.put(f"/api/v1/transport-orders/{order_id}/status?status=delivered",
+            headers=auth_headers)
         assert resp.status_code == 422
 
 
@@ -164,11 +167,13 @@ class TestReturnOrderExceptions:
             "reason": "damaged", "pickup_address": {"city": "Shenzhen"}, "refund_amount": "100",
         }, headers=auth_headers)
         ret_id = create.json()["id"]
-        resp = await async_client.patch(f"/api/v1/return-orders/{ret_id}/status", json={"target": "pickup_scheduled"}, headers=auth_headers)
+        resp = await async_client.patch(f"/api/v1/return-orders/{ret_id}/status", json={"target": "pickup_scheduled"},
+            headers=auth_headers)
         assert resp.status_code == 200
 
     async def test_update_return_status_not_found(self, async_client, auth_headers):
-        resp = await async_client.patch(f"/api/v1/return-orders/{BAD_UUID}/status", json={"target": "pickup_scheduled"}, headers=auth_headers)
+        resp = await async_client.patch(f"/api/v1/return-orders/{BAD_UUID}/status", json={"target": "pickup_scheduled"},
+            headers=auth_headers)
         assert resp.status_code == 404
 
     async def test_list_return_orders(self, async_client, auth_headers):
@@ -177,7 +182,8 @@ class TestReturnOrderExceptions:
         }, headers=auth_headers)
         resp = await async_client.get("/api/v1/return-orders", headers=auth_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert "items" in body and "total" in body
 
 
 # ── Exception Handlers ─────────────────────────────────────────────────────
@@ -221,7 +227,8 @@ class TestTransportExceptions:
     async def test_list_exceptions_success(self, async_client, auth_headers):
         resp = await async_client.get("/api/v1/exceptions", headers=auth_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert "items" in body and "total" in body
 
     async def test_resolve_exc_not_found(self, async_client, auth_headers):
         resp = await async_client.patch(
@@ -301,10 +308,12 @@ class TestTransferHubs:
         }, headers=auth_headers)
         resp = await async_client.get("/api/v1/transfer-hubs", headers=auth_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert "items" in body and "total" in body
 
     async def test_update_hub_not_found(self, async_client, auth_headers):
-        resp = await async_client.patch(f"/api/v1/transfer-hubs/{BAD_UUID}", json={"name": "Nope"}, headers=auth_headers)
+        resp = await async_client.patch(f"/api/v1/transfer-hubs/{BAD_UUID}", json={"name": "Nope"},
+            headers=auth_headers)
         assert resp.status_code == 404
 
     async def test_update_hub_success(self, async_client, auth_headers):
@@ -312,7 +321,8 @@ class TestTransferHubs:
             "code": "HUB_UPD2", "name": "Original", "type": "primary", "city": "Xi'an",
         }, headers=auth_headers)
         hub_id = create.json()["id"]
-        resp = await async_client.patch(f"/api/v1/transfer-hubs/{hub_id}", json={"name": "Updated"}, headers=auth_headers)
+        resp = await async_client.patch(f"/api/v1/transfer-hubs/{hub_id}", json={"name": "Updated"},
+            headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json()["name"] == "Updated"
 
@@ -329,7 +339,8 @@ class TestCarrierRoutes:
     async def test_list_carrier_routes(self, async_client, auth_headers):
         resp = await async_client.get("/api/v1/carrier-routes", headers=auth_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert "items" in body and "total" in body
 
 
 class TestHubConnections:
@@ -366,7 +377,8 @@ class TestHubConnections:
     async def test_list_hub_connections(self, async_client, auth_headers):
         resp = await async_client.get("/api/v1/hub-connections", headers=auth_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert "items" in body and "total" in body
 
 
 class TestRoutePlans:
@@ -382,11 +394,13 @@ class TestRoutePlans:
             "from_hub_code": "RT_A", "to_hub_code": "RT_B",
             "distance_km": 500, "transit_hours": 6,
         }, headers=auth_headers)
-        resp = await async_client.post(f"/api/v1/transport-orders/{order_id}/route-plans?type=auto_gen", headers=auth_headers)
+        resp = await async_client.post(f"/api/v1/transport-orders/{order_id}/route-plans?type=auto_gen",
+            headers=auth_headers)
         assert resp.status_code == 201
 
     async def test_generate_route_plan_not_found(self, async_client, auth_headers):
-        resp = await async_client.post(f"/api/v1/transport-orders/{BAD_UUID}/route-plans?type=auto_gen", headers=auth_headers)
+        resp = await async_client.post(f"/api/v1/transport-orders/{BAD_UUID}/route-plans?type=auto_gen",
+            headers=auth_headers)
         assert resp.status_code == 404
 
     async def test_get_route_plan_not_found(self, async_client, auth_headers):
@@ -455,7 +469,8 @@ class TestSegments:
         order_id = transport_order["id"]
         resp = await async_client.get(f"/api/v1/segments?transport_order_id={order_id}", headers=auth_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert "items" in body and "total" in body
 
     async def test_update_segment_status_not_found(self, async_client, auth_headers):
         resp = await async_client.patch(f"/api/v1/segments/{BAD_UUID}/status?status=dispatched", headers=auth_headers)

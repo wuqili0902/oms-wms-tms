@@ -26,12 +26,13 @@ def _make_app():
 
 
 class TestGenerateCsrfToken:
-    def test_returns_seed_sig_format(self):
+    def test_returns_seed_ts_sig_format(self):
         token = generate_csrf_token()
         parts = token.split(":")
-        assert len(parts) == 2
-        assert len(parts[0]) == 32
-        assert len(parts[1]) == 64
+        assert len(parts) == 3
+        assert len(parts[0]) == 32  # seed hex
+        assert parts[1].isdigit()   # timestamp
+        assert len(parts[2]) == 64  # HMAC sig
 
     def test_generates_unique_tokens(self):
         tokens = {generate_csrf_token() for _ in range(100)}
@@ -49,8 +50,8 @@ class TestVerifyToken:
 
     def test_wrong_seed_in_token(self):
         token = generate_csrf_token()
-        seed, sig = token.split(":", 1)
-        bad_token = f"differentseed{sig}"
+        seed, ts, sig = token.split(":", 2)
+        bad_token = f"differentseed:{ts}:{sig}"
         assert _verify_token(bad_token, bad_token) is False
 
     def test_malformed_token_no_colon(self):
@@ -60,10 +61,12 @@ class TestVerifyToken:
         assert _verify_token("", "") is False
 
     def test_different_message_in_token(self):
+        import time
+        ts = str(int(time.time()))
         wrong_sig = hmac.new(
-            settings.secret_key.encode(), b"csrf:different_msg", hashlib.sha256
+            settings.secret_key.encode(), f"csrf:different_msg:{ts}".encode(), hashlib.sha256
         ).hexdigest()
-        bad_token = f"seed:{wrong_sig}"
+        bad_token = f"seed:{ts}:{wrong_sig}"
         assert _verify_token(bad_token, bad_token) is False
 
 

@@ -7,6 +7,7 @@ deeply nested helpers can access it without explicit injection.
 For testing, ``app.dependency_overrides[get_db]`` replaces this dependency
 — tests provide their own session with savepoint isolation.
 """
+import logging
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -23,6 +24,7 @@ engine = create_async_engine(
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
     pool_pre_ping=settings.db_pool_pre_ping,
+    pool_recycle=3600,
 )
 
 async_session_factory = async_sessionmaker(
@@ -72,11 +74,32 @@ async def get_session() -> AsyncIterator[AsyncSession]:
             await session.close()
 
 
+logger = logging.getLogger(__name__)
+
+
 async def check_db_health() -> bool:
-    """Ping the database and return True if reachable."""
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        return True
-    except Exception:
-        return False
+    """Ping the database and return True if reachable.
+
+    A pooled connection created on an event loop that has since closed raises
+    "Event loop is closed" the moment it is checked out — pytest-asyncio hands
+    every test its own loop, and a Celery thread that exits takes its loop with
+    it.  Dropping the pool once and retrying lets the connection be built on the
+    loop that is actually running, instead of reporting a healthy database as
+    down (which is what made /health answer 503 between tests).
+    """
+    last_error: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return True
+        except Exception as exc:  # noqa: BLE001 — any failure is "unreachable" here
+            last_error = exc
+            if attempt == 1:
+                try:
+                    await engine.dispose()
+                except Exception:  # noqa: BLE001 — disposal is best-effort
+                    pass
+                continue
+    logger.warning("Database health probe failed: %s", last_error)
+    return False

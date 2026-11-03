@@ -1,7 +1,8 @@
 import uuid
 
 from sqlalchemy import Boolean, Float, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import Uuid as UUID  # noqa: N814 — column type, not a constant; dialect-neutral
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
@@ -17,7 +18,7 @@ class BarcodeRecord(Base, TimestampMixin):
     entity_type: Mapped[str] = mapped_column(
         String(50), nullable=False, comment="order/inventory/location/device"
     )
-    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True, nullable=True)
     format: Mapped[str] = mapped_column(
         String(20), nullable=False, comment="ean13/code128/qr/datamatrix"
     )

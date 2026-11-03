@@ -25,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SAEnum,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Uuid as UUID  # noqa: N814 — column type, not a constant; dialect-neutral
 from sqlalchemy.orm import relationship
 
 from src.models.base import Base, SoftDeleteMixin, TimestampMixin, UUIDMixin
@@ -234,6 +234,7 @@ class Inventory(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
     warehouse_id: UUID = Column(UUID(as_uuid=True), ForeignKey("warehouses.id"), index=True)
     location_id: UUID | None = Column(UUID(as_uuid=True), ForeignKey("locations.id"), nullable=True)
     sku_id: UUID = Column(UUID(as_uuid=True), ForeignKey("skus.id"), index=True)
+    order_id: UUID | None = Column(UUID(as_uuid=True), ForeignKey("orders.id"), nullable=True, index=True)
     gtin: str = Column(String(13), index=True)
     batch_no: str = Column(String(50), index=True)
     quantity: Decimal = Column(Numeric(20, 4), default=Decimal("0"))
@@ -426,6 +427,13 @@ class Shipment(Base, UUIDMixin, TimestampMixin):
 
     __tablename__ = "shipments"
 
+    # The number the 发货管理 screen, the carrier handover sheet and the 对账
+    # spreadsheet all call a shipment by.  It did not exist: the list's first
+    # column asked for ``shipment_no``, every row answered blank, and the only
+    # handle on a shipment was its uuid.  Generated at creation the way
+    # ``create_order`` generates ``order_no``, so the number is stored, unique,
+    # and the same string on both sides of a handover.
+    shipment_no: str = Column(String(50), unique=True, index=True, default="")
     order_id: UUID = Column(UUID(as_uuid=True), ForeignKey("orders.id"), nullable=False)
     warehouse_id: UUID = Column(UUID(as_uuid=True), ForeignKey("warehouses.id"), nullable=False)
     packing_record_id: UUID | None = Column(UUID(as_uuid=True), ForeignKey("packing_records.id"), nullable=True)
@@ -508,6 +516,12 @@ class PurchaseOrderLine(Base, UUIDMixin):
     description: str = Column(String(255))
     quantity: Decimal = Column(Numeric(18, 4), default=Decimal("1"))
     unit_price: Decimal = Column(Numeric(18, 4), default=Decimal("0"))
+    # What actually landed.  Without this column a receipt could only be
+    # all-or-nothing: the PO flipped to "received" while the delivered quantity,
+    # the shortfall, and the over-shipment existed only in the operator's head —
+    # and nothing was ever added to inventory.
+    received_qty: Decimal = Column(Numeric(18, 4), nullable=False, default=Decimal("0"))
+    received_at: datetime | None = Column(DateTime(timezone=True), nullable=True)
 
     purchase_order: PurchaseOrder = relationship("PurchaseOrder", back_populates="lines")
 

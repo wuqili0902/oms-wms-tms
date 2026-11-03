@@ -5,6 +5,8 @@ import sys
 import uuid
 from datetime import datetime
 
+import pytest
+
 # Import directly via file to avoid src.models.__init__ bcrypt chain
 _spec = importlib.util.spec_from_file_location(
     "erp_connector", "src/models/erp_connector.py"
@@ -172,15 +174,37 @@ class TestSAPPIConnector:
         msg_id = conn.send_edi({"order_id": "ORD-001"})
         assert uuid.UUID(msg_id)
 
-    def test_send_edi_failure_logs_warning(self, monkeypatch):
+    def test_send_edi_failure_raises(self, monkeypatch):
+        """A return value from send_edi is a receipt; a refused connection is not one.
+
+        The old version logged "SAP PI unavailable — EDI message … not confirmed"
+        and returned the uuid, so the caller stored an ERP acknowledgment for a
+        message that never left the building.
+        """
         config = {"SAP_PI_HOST": "https://sap-pi.example.com", "SAP_PI_TOKEN": "dG9rZW4="}
         conn = SAPPIConnector(config)
         import httpx
         def mock_post_fail(url, **kwargs):
             raise RuntimeError("Connection refused")
         monkeypatch.setattr(httpx, "post", mock_post_fail)
-        msg_id = conn.send_edi({"order_id": "ORD-001"})
-        assert uuid.UUID(msg_id)
+        with pytest.raises(RuntimeError, match="SAP PI 发送失败"):
+            conn.send_edi({"order_id": "ORD-001"})
+
+    def test_send_edi_returns_the_id_sap_echoed(self, monkeypatch):
+        """SAP's own id is the one to keep — ours means nothing to the ERP side."""
+        config = {"SAP_PI_HOST": "https://sap-pi.example.com", "SAP_PI_TOKEN": "dG9rZW4="}
+        conn = SAPPIConnector(config)
+        import httpx
+
+        class Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"messageId": "SAP-PI-000123"}
+
+        monkeypatch.setattr(httpx, "post", lambda url, **kwargs: Resp())
+        assert conn.send_edi({"order_id": "ORD-001"}) == "SAP-PI-000123"
 
 
 class TestOracleEDIConnector:
@@ -342,15 +366,19 @@ class TestOrderSyncService:
     async def test_sync_order_with_edi(self):
         edi = OracleEDIConnector(trading_partner_id="TP001")
         svc = _mod.OrderSyncService(edifact_conn=edi)
-        msg_id = await svc.sync_order("ORD-002")
-        assert isinstance(msg_id, str)
-        assert len(msg_id) == 32
+        # serialize() is a translation, not a transmission: the 32-char md5 is a
+        # checksum of the text sync_order just produced, not an ERP receipt.
+        with pytest.raises(_mod.NotImplementedActionException, match="报文已构造、未发送") as exc:
+            await svc.sync_order("ORD-002")
+        assert len(exc.value.detail["checksum"]) == 32
+        assert exc.value.detail["sent"] is False
 
-    async def test_sync_order_without_connector(self):
+    async def test_sync_order_without_connector_says_nothing_was_sent(self):
+        """``uuid4`` read back as "ERP accepted order ORD-003, id 9c1e…"."""
         svc = _mod.OrderSyncService()
-        msg_id = await svc.sync_order("ORD-003")
-        assert isinstance(msg_id, str)
-        assert len(msg_id) == 36
+        with pytest.raises(_mod.NotImplementedActionException, match="未同步到 ERP") as exc:
+            await svc.sync_order("ORD-003")
+        assert exc.value.detail["configured"] is False
 
     async def test_handle_ack_without_order_id(self):
         svc = _mod.OrderSyncService()

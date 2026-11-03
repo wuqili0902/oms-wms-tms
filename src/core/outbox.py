@@ -22,9 +22,10 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import DateTime, Index, String, Text, func
+from sqlalchemy import DateTime, Index, String, Text, and_, func, or_
+from sqlalchemy import Uuid as UUID  # noqa: N814 — column type, not a constant; dialect-neutral
 from sqlalchemy import select as _select
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -55,7 +56,16 @@ class OutboxEventStatus(StrEnum):
 
     PENDING = "pending"       # committed but not yet dispatched to MQ
     DISPATCHED = "dispatched"  # successfully dispatched
-    FAILED = "failed"         # dispatch failed; may retry
+    FAILED = "failed"         # dispatch failed; scheduled for retry
+    DEAD_LETTERED = "dead_lettered"  # max retries exceeded; no longer retried
+
+
+# Cap on delivery attempts per outbox event before it is dead-lettered.
+MAX_OUTBOX_RETRIES = 5
+
+# An event sitting in DISPATCHED for longer than this was picked up by a
+# dispatcher that crashed (or was killed) before POSTing it — reaper reclaim.
+DISPATCH_LEASE_MINUTES = 15
 
 
 class OutboxEvent(_get_base()):
@@ -110,7 +120,7 @@ class OutboxEvent(_get_base()):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), default=lambda: datetime.now(UTC).replace(tzinfo=None)
     )
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -165,22 +175,50 @@ async def append_event(
     return event
 
 
-async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
+async def dispatch_pending_events(batch_size: int = 100) -> list[dict[str, Any]]:
     """Fetch pending events up to ``batch_size`` for Celery worker processing.
 
     Uses ``FOR UPDATE SKIP LOCKED`` to prevent multiple workers from picking
     up the same events (double-dispatch).
 
-    Returns events that are due for dispatch.  The caller should dispatch
-    each event and then call ``mark_dispatched()`` on success or
-    ``mark_failed()`` on failure.
+    Returns serialised dicts (not ORM objects) so callers never hold
+    detached references.  After dispatching, call ``mark_dispatched()``
+    or ``mark_failed()``.
     """
     async with _get_session() as session:
+        lease_cutoff = datetime.now(UTC) - timedelta(minutes=DISPATCH_LEASE_MINUTES)
+        # Reaper step 1: DISPATCHED rows older than the lease whose retries
+        # are exhausted are dead-letters, not in-flight work.
+        await session.execute(
+            OutboxEvent.__table__.update()  # type: ignore[union-attr]
+            .where(
+                OutboxEvent.status == OutboxEventStatus.DISPATCHED.value,
+                OutboxEvent.dispatched_at.isnot(None),
+                OutboxEvent.dispatched_at <= lease_cutoff,
+                OutboxEvent.retry_count >= MAX_OUTBOX_RETRIES,
+            )
+            .values(status=OutboxEventStatus.DEAD_LETTERED.value)
+        )
         stmt = (
             _select(OutboxEvent)
             .where(
-                OutboxEvent.status == OutboxEventStatus.PENDING.value,
-                (OutboxEvent.scheduled_at.is_(None)) | (OutboxEvent.scheduled_at <= func.now()),
+                or_(
+                    OutboxEvent.status == OutboxEventStatus.PENDING.value,
+                    and_(
+                        OutboxEvent.status == OutboxEventStatus.FAILED.value,
+                        (OutboxEvent.scheduled_at.is_(None)) | (OutboxEvent.scheduled_at <= func.now()),
+                    ),
+                    # Reaper step 2: re-pick DISPATCHED rows stranded by a
+                    # dispatcher that crashed between fetch and POST (the
+                    # status was already flipped, so a plain poll would
+                    # strand them forever).
+                    and_(
+                        OutboxEvent.status == OutboxEventStatus.DISPATCHED.value,
+                        OutboxEvent.dispatched_at.isnot(None),
+                        OutboxEvent.dispatched_at <= lease_cutoff,
+                        OutboxEvent.retry_count < MAX_OUTBOX_RETRIES,
+                    ),
+                )
             )
             .order_by(OutboxEvent.created_at)
             .limit(batch_size)
@@ -188,7 +226,46 @@ async def dispatch_pending_events(batch_size: int = 100) -> list[OutboxEvent]:
         )
         result = await session.execute(stmt)
         events = list(result.scalars().all())
-    return events
+        # Mark as DISPATCHED within the same session so the lock is held
+        # until the status update is committed.
+        now = datetime.now(UTC)
+        for ev in events:
+            if ev.status == OutboxEventStatus.DISPATCHED.value:
+                # Reclaimed from a stale lease: consume one delivery attempt
+                # so a repeatedly crashing dispatcher dead-letters instead
+                # of cycling the same events every beat forever.
+                ev.retry_count = (ev.retry_count or 0) + 1
+            ev.status = OutboxEventStatus.DISPATCHED.value
+            ev.dispatched_at = now
+        await session.commit()
+    # Return serialised copies so callers never hold ORM references
+    return [
+        {
+            "id": str(ev.id),
+            "aggregate_type": ev.aggregate_type,
+            "aggregate_id": str(ev.aggregate_id),
+            "event_type": ev.event_type,
+            "payload": ev.payload,
+            "status": ev.status,
+            "retry_count": ev.retry_count,
+        }
+        for ev in events
+    ]
+
+
+def _coerce_uuid(value):
+    """Accept str/UUID ids; pass through anything that isn't a UUID.
+
+    The Celery dispatcher hands back string ids (JSON-serialised), while the
+    column is a UUID type — coerce when possible so PostgreSQL binds cleanly,
+    and leave odd test fixtures (``"id-1"``) untouched rather than raising.
+    """
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return value
 
 
 async def mark_dispatched(event_ids: list[uuid.UUID]) -> int:
@@ -196,7 +273,7 @@ async def mark_dispatched(event_ids: list[uuid.UUID]) -> int:
     async with _get_session() as session:
         result = await session.execute(
             OutboxEvent.__table__.update()  # type: ignore[union-attr]
-            .where(OutboxEvent.id.in_(event_ids))
+            .where(OutboxEvent.id.in_([_coerce_uuid(i) for i in event_ids]))
             .values(
                 status=OutboxEventStatus.DISPATCHED.value,
                 dispatched_at=datetime.now(UTC),
@@ -214,14 +291,15 @@ async def mark_failed(event_id: uuid.UUID, error_message: str) -> None:
     Only marks FAILED if the event is still in DISPATCHED state.
     Max retries capped at 5; events exceeding limit become dead letters.
     """
+    event_id = _coerce_uuid(event_id)
     async with _get_session() as session:
-        # Atomic: increment retry_count only if < 5, in a single UPDATE
+        # Atomic: increment retry_count only while below the cap, in a single UPDATE.
         result = await session.execute(
             OutboxEvent.__table__.update()  # type: ignore[union-attr]
             .where(
                 OutboxEvent.id == event_id,
                 OutboxEvent.status == OutboxEventStatus.DISPATCHED.value,
-                OutboxEvent.retry_count < 5,
+                OutboxEvent.retry_count < MAX_OUTBOX_RETRIES,
             )
             .values(
                 status=OutboxEventStatus.FAILED.value,
@@ -231,21 +309,22 @@ async def mark_failed(event_id: uuid.UUID, error_message: str) -> None:
             )
         )
         if result.rowcount == 0:
-            # Either not in DISPATCHED state, or already at max retries
-            # Check if we need to dead-letter (retry_count >= 5)
+            # Either not in DISPATCHED state, or already at max retries.
+            # Read the current retry count regardless of status (by now the event is
+            # FAILED, so filtering on DISPATCHED would miss it and never dead-letter).
             check = await session.execute(
                 _select(OutboxEvent.retry_count).where(
                     OutboxEvent.id == event_id,
-                    OutboxEvent.status == OutboxEventStatus.DISPATCHED.value,
                 )
             )
             current_retry = check.scalar_one_or_none()
-            if current_retry is not None and current_retry >= 5:
+            if current_retry is not None and current_retry >= MAX_OUTBOX_RETRIES:
+                # Cap reached → dead-letter so the dispatcher stops re-selecting it.
                 await session.execute(
                     OutboxEvent.__table__.update()  # type: ignore[union-attr]
                     .where(OutboxEvent.id == event_id)
                     .values(
-                        status=OutboxEventStatus.FAILED.value,
+                        status=OutboxEventStatus.DEAD_LETTERED.value,
                         error_message=f"Max retries exceeded ({current_retry} attempts): {error_message[:400]}",
                     )
                 )

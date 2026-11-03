@@ -48,10 +48,16 @@ async def cleanup_expired_tokens(self):
     Note: The current TokenStore is in-memory. In production with Redis,
     expired keys are auto-evicted via TTL. This task serves as a safety net.
     """
+    from datetime import UTC, datetime
+
     from src.auth.token_store import token_store
 
     before = len(token_store._memory)
-    token_store._memory.clear()
+    now = datetime.now(UTC).isoformat()
+    # Remove tokens that have expired (stored as ISO timestamp)
+    expired = [k for k, v in token_store._memory.items() if v < now]
+    for k in expired:
+        del token_store._memory[k]
     after = len(token_store._memory)
     removed = before - after
     if removed:
@@ -176,10 +182,12 @@ async def compute_abc_xyz_analysis(self):
 
                 async with get_redis() as r:
                     if r:
-                        await r.setex(
+                        # ``setex`` is deprecated in redis-py 5 in favour of the
+                        # ``ex`` keyword on ``set``; the behaviour is the same.
+                        await r.set(
                             "inventory:abc_xyz_matrix",
-                            86400,  # 24 h TTL
                             json.dumps(matrix, default=str),
+                            ex=86400,  # 24 h TTL
                         )
                         logger.info("ABC‑XYZ matrix cached in Redis")
             except (redis.RedisError, ConnectionError, TimeoutError):

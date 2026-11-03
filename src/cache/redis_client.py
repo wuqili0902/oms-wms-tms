@@ -1,5 +1,6 @@
 """Async Redis client with connection pooling, health checks, and an in-memory fallback cache."""
 
+import asyncio
 import logging
 from collections import OrderedDict
 from collections.abc import AsyncGenerator
@@ -7,6 +8,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import redis.asyncio as aioredis
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
 from redis.exceptions import ConnectionError, TimeoutError
 
 from src.config import settings
@@ -16,8 +19,6 @@ logger = logging.getLogger(__name__)
 # Redis connection pool configuration
 REDIS_POOL_SIZE = 10
 REDIS_SOCKET_TIMEOUT = 5.0
-REDIS_CONNECTION_RETRY_DELAY = 2.0
-REDIS_MAX_RETRIES = 3
 
 
 class RedisClient:
@@ -27,21 +28,40 @@ class RedisClient:
         self.url = url
         self._pool: aioredis.Redis = None
         self._initialized = False
+        # The event loop the current pool's connections belong to.  A redis
+        # connection created on one loop is unusable from another (pytest
+        # per-test loops, Celery bridge loops) — using one raises
+        # "Event loop is closed" deep inside the transport.
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     async def initialize(self):
-        """Initialize the Redis connection pool."""
-        if self._initialized:
+        """Initialize the Redis connection pool for the current event loop."""
+        current_loop = asyncio.get_running_loop()
+        if self._initialized and self._loop is current_loop:
             return
+        if self._initialized and self._loop is not current_loop:
+            # Pool belongs to a different (possibly closed) loop: drop it and
+            # rebuild here instead of serving poisoned connections.
+            old_pool = self._pool
+            self._pool = None
+            self._initialized = False
+            self._loop = None
+            if old_pool is not None:
+                try:
+                    await old_pool.aclose()
+                except Exception:
+                    pass  # best-effort; may raise on a closed loop
 
         try:
             self._pool = aioredis.from_url(
                 self.url,
                 max_connections=REDIS_POOL_SIZE,
                 socket_timeout=REDIS_SOCKET_TIMEOUT,
-                retry_attempts=REDIS_MAX_RETRIES,
-                retry_interval=REDIS_CONNECTION_RETRY_DELAY,
+                socket_connect_timeout=1.0,
+                retry=Retry(NoBackoff(), 0),
             )
             await self._pool.ping()
+            self._loop = current_loop
             self._initialized = True
             logger.info("Redis connection pool initialized successfully")
         except (ConnectionError, TimeoutError) as exc:
@@ -50,15 +70,17 @@ class RedisClient:
 
     async def close(self):
         """Close the Redis connection pool."""
-        if self._pool and not self._pool.is_closed():
+        if self._pool:
             await self._pool.aclose()
+            self._pool = None  # don't hand a dead pool back to close()/client again
             self._initialized = False
+            self._loop = None
             logger.info("Redis connection pool closed")
 
     @property
     def client(self) -> aioredis.Redis:
         """Get the Redis client instance."""
-        if not self._initialized or self._pool.is_closed():
+        if not self._initialized:
             raise RuntimeError("Redis client is not initialized. Call initialize() first.")
         return self._pool
 
@@ -76,7 +98,9 @@ async def get_redis() -> AsyncGenerator[aioredis.Redis, None]:
             await redis.set("key", "value")
     """
     try:
-        if not redis_client._initialized or redis_client._pool.is_closed():
+        # A pool built on another event loop is unusable here; initialize()
+        # returns immediately when the loop matches, so this is cheap.
+        if not redis_client._initialized or redis_client._loop is not asyncio.get_running_loop():
             await redis_client.initialize()
         yield redis_client.client
     except (ConnectionError, TimeoutError) as exc:

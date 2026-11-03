@@ -61,17 +61,21 @@ async def create_target(
     for ev in data.events:
         if ev not in [e.value for e in WebhookEvent]:
             raise HTTPException(status_code=422, detail=f"Invalid event: {ev}")
-    target = WebhookTarget(
-        name=data.name,
-        url=data.url,
-        secret=data.secret,
-        events=json.dumps(data.events),
-        status=WebhookStatus(data.status),
-    )
-    db.add(target)
-    await db.commit()
-    await db.refresh(target)
-    return success_response(data={"id": target.id}, message="Webhook target created")
+    try:
+        target = WebhookTarget(
+            name=data.name,
+            url=data.url,
+            secret=data.secret,
+            events=json.dumps(data.events),
+            status=WebhookStatus(data.status),
+        )
+        db.add(target)
+        await db.commit()
+        await db.refresh(target)
+        return success_response(data={"id": target.id}, message="Webhook target created")
+    except Exception as e:
+        logger.error("Webhook create failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.put("/{target_id}")

@@ -39,12 +39,31 @@ class TestDeviceRegister:
         assert "already exists" in resp.text
 
     async def test_register_with_warehouse(self, async_client, auth_headers):
+        """The device is filed to a warehouse that exists.
+
+        A random uuid as ``warehouse_id`` used to answer 201: ``_to_uuid`` read it,
+        the row was filed pointing at a warehouse that was never there, and the
+        handheld's own syncs were filed against a warehouse nobody could list.  The
+        lookup now answers the request — 201 for a warehouse it can find (by id *or*
+        code), 404 naming ``warehouse_id`` for one it cannot."""
+        wh = await async_client.post("/api/v1/warehouses", json={
+            "code": f"WH-TMS-{uuid_mod.uuid4().hex[:8]}", "name": "TMS WH", "type": "center",
+        }, headers=auth_headers)
+        assert wh.status_code == 201, wh.text
+
         resp = await async_client.post("/api/v1/devices", json={
             "code": "WH-PDA", "device_type": "pda", "platform": "android",
+            "warehouse_id": wh.json()["id"],
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["warehouse_id"] == wh.json()["id"], "the warehouse named is not the one filed"
+
+        missing = await async_client.post("/api/v1/devices", json={
+            "code": "WH-PDA-2", "device_type": "pda", "platform": "android",
             "warehouse_id": str(uuid_mod.uuid4()),
         }, headers=auth_headers)
-        assert resp.status_code == 201
-        assert resp.json()["warehouse_id"] is not None
+        assert missing.status_code == 404, missing.text
+        assert "warehouse_id" in missing.json()["error"]["message"], missing.text
 
 
 class TestDeviceList:
@@ -56,7 +75,9 @@ class TestDeviceList:
             "code": "DEV-02", "device_type": "phone", "platform": "ios",
         }, headers=auth_headers)
         resp = await async_client.get("/api/v1/devices", headers=auth_headers)
-        assert len(resp.json()) == 2
+        body = resp.json()
+        assert body["total"] == 2
+        assert len(body["items"]) == 2
 
     async def test_filter_by_type(self, async_client, auth_headers):
         await async_client.post("/api/v1/devices", json={
@@ -66,15 +87,16 @@ class TestDeviceList:
             "code": "FLT-02", "device_type": "printer", "platform": "android",
         }, headers=auth_headers)
         resp = await async_client.get("/api/v1/devices?device_type=pda", headers=auth_headers)
-        assert len(resp.json()) == 1
-        assert resp.json()[0]["code"] == "FLT-01"
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["items"][0]["code"] == "FLT-01"
 
     async def test_filter_by_status(self, async_client, auth_headers):
         await async_client.post("/api/v1/devices", json={
             "code": "STS-01", "device_type": "pda", "platform": "android",
         }, headers=auth_headers)
         resp = await async_client.get("/api/v1/devices?status=offline", headers=auth_headers)
-        assert len(resp.json()) >= 1
+        assert resp.json()["total"] >= 1
 
 
 class TestDeviceGetUpdate:
@@ -143,7 +165,7 @@ class TestSyncLog:
         }, headers=auth_headers)
         resp = await async_client.get(f"/api/v1/devices/{dev_id}/sync", headers=auth_headers)
         assert resp.status_code == 200
-        assert len(resp.json()) >= 1
+        assert resp.json()["total"] >= 1
 
 
 class TestSession:
@@ -163,8 +185,7 @@ class TestSession:
         sess_resp = await async_client.post(f"/api/v1/devices/{dev_id}/sessions", headers=auth_headers)
         sess_id = sess_resp.json()["id"]
         resp = await async_client.delete(f"/api/v1/devices/{dev_id}/sessions/{sess_id}", headers=auth_headers)
-        assert resp.status_code == 200
-        assert "ended" in resp.text.lower()
+        assert resp.status_code == 204
 
     async def test_list_sessions(self, async_client, auth_headers):
         create = await async_client.post("/api/v1/devices", json={
@@ -174,4 +195,4 @@ class TestSession:
         await async_client.post(f"/api/v1/devices/{dev_id}/sessions", headers=auth_headers)
         resp = await async_client.get(f"/api/v1/devices/{dev_id}/sessions", headers=auth_headers)
         assert resp.status_code == 200
-        assert len(resp.json()) >= 1
+        assert resp.json()["total"] >= 1

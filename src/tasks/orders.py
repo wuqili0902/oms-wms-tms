@@ -77,7 +77,7 @@ async def auto_complete_picked_orders(self):
             completed = 0
             for order in orders:
                 order.status = OrderStatus.COMPLETED
-                order.updated_at = datetime.now(UTC)
+                order.updated_at = datetime.now(UTC).replace(tzinfo=None)
                 log = OrderStatusLog(
                     order_id=order.id,
                     from_status="picking",
@@ -113,7 +113,7 @@ async def cancel_abandoned_drafts(self):
             cancelled = 0
             for order in orders:
                 order.status = OrderStatus.CANCELLED
-                order.updated_at = datetime.now(UTC)
+                order.updated_at = datetime.now(UTC).replace(tzinfo=None)
                 log = OrderStatusLog(
                     order_id=order.id,
                     from_status="pending",

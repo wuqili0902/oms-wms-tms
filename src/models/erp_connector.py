@@ -15,6 +15,18 @@ Key design principles:
 Message types supported:
     INBOUND:  ORDRSP, ORDRQS, DELJRN, DESADV, SHPADV
     OUTBOUND: ORDERS, INVOIC, DESREV, ASN
+
+What is and is not here: this module builds and parses the messages, and only
+that.  There is no transport wired to a SAP PI host or an EDI gateway in this
+deployment — no endpoint, no config, no caller.  So the send paths say what
+happened instead of pretending:
+
+    * with no connector configured → ``NotImplementedActionException`` (501).
+      The old code returned ``str(uuid.uuid4())``, which the caller read as
+      "ERP accepted this and gave me id 3f2c… to track".
+    * with a connector whose HTTP POST fails → the exception propagates.  It used
+      to log ``"SAP PI unavailable — EDI message … not confirmed"`` and return the
+      message id as the acknowledgment, so a dead link produced a receipt.
 """
 import hashlib
 import json
@@ -27,6 +39,8 @@ from enum import StrEnum
 from xml.etree import ElementTree
 
 from pydantic import BaseModel, Field
+
+from src.core.exceptions import NotImplementedActionException
 
 logger = logging.getLogger(__name__)
 
@@ -150,12 +164,15 @@ class SAPPIConnector:
     def send_edi(self, edi_payload: dict) -> str:
         """Send EDI message through SAP PI channel.
 
-        Returns message ID for tracking.
+        Returns the message ID SAP acknowledged with.  A failed POST raises: a
+        return value from this function is a receipt the caller will store and
+        reconcile against, and the previous version returned one on the same
+        branch that logged "not confirmed".
         """
         msg_id = str(uuid.uuid4())
-        try:
-            import httpx
+        import httpx
 
+        try:
             resp = httpx.post(
                 f"{self.base_url}/api/messages",
                 json=edi_payload,
@@ -163,9 +180,19 @@ class SAPPIConnector:
                 timeout=30.0,
             )
             resp.raise_for_status()
+        except Exception as e:
+            logger.error("SAP PI send failed for message %s: %s", msg_id, e)
+            raise RuntimeError(f"SAP PI 发送失败（{self.base_url}）：{e}") from e
+
+        # SAP's own id is the one worth keeping; ours is a fallback for a channel
+        # that accepted the body and echoed nothing parseable.  A 2xx is the
+        # acknowledgment — reading the echo is a convenience, not a second gate.
+        try:
+            body = resp.json()
         except Exception:
-            logger.warning("SAP PI unavailable — EDI message %s not confirmed", msg_id)
-        return msg_id
+            body = {}
+        acknowledged = body.get("messageId") or body.get("message_id") if isinstance(body, dict) else None
+        return str(acknowledged) if acknowledged else msg_id
 
 
 # ── Oracle EDI Connector ────────────────────────────────────────────────
@@ -236,18 +263,18 @@ class OracleEDIConnector(BaseModel):
 
 
 class OrderSyncService:
-    """Bidirectional order synchronization with ERP systems.
+    """Order messages for ERP systems: build them, hand them to a connector.
 
-    Flow:
-        1. WMS creates internal Order model from customer PO
-        2. SyncService converts to EDI/IDOC format
-        3. Sends via SAP PI or Oracle EDI connector
-        4. Waits for acknowledgment (ORDINR / 855)
+    What this class does today: ``sync_order`` builds an ``ERPMessage`` and hands
+    it to the SAP PI connector (which POSTs it), and ``handle_ack`` applies an
+    inbound acknowledgment.
 
-    Retry logic:
-        - Exponential backoff (initial 1s, max 60s)
-        - Max 5 retries before moving to Dead Letter Queue
-        - Message is persisted in outbox table before sending
+    What it does not do, whatever it once promised: there is no exponential
+    backoff, no retry counter, no dead-letter hand-off and no outbox write in
+    these methods, and no EDI transport behind ``serialize()``.  An EDI-configured
+    sync therefore raises ``NotImplementedActionException`` with the checksum of
+    the message it built — it no longer returns that checksum as if the ERP had
+    acknowledged the order with it.
     """
 
     def __init__(self, sap_connector: SAPPIConnector | None = None, edifact_conn: OracleEDIConnector | None = None):
@@ -255,7 +282,11 @@ class OrderSyncService:
         self.edifact_conn = edifact_conn
 
     async def sync_order(self, order_id: str) -> str:
-        """Sync a single order to ERP. Returns EDI message ID."""
+        """Sync a single order to ERP. Returns the ERP's message ID.
+
+        ``uuid4`` is not an ERP receipt: with no connector configured nothing was
+        sent, and the caller cannot tell a sent order from an unsent one.
+        """
         msg = ERPMessage(
             msg_type=MessageType.ORDERS,
             sender_id="WMS",
@@ -266,9 +297,25 @@ class OrderSyncService:
             edi_str = msg.model_dump_json()
             return self.sap_connector.send_edi({"raw": edi_str})
         if self.edifact_conn:
+            # serialize() is a translation, not a transmission: the md5 is over the
+            # text this function just produced, so it is a checksum of our own work
+            # and says nothing about what the ERP received.
             edi_str = self.edifact_conn.serialize(msg)
-            return hashlib.md5(edi_str.encode()).hexdigest()
-        return str(uuid.uuid4())
+            checksum = hashlib.md5(edi_str.encode()).hexdigest()
+            raise NotImplementedActionException(
+                message=(
+                    f"订单 {order_id} 报文已构造、未发送：EDI 侧只做了序列化，"
+                    f"校验和 {checksum} 是本系统对自己生成的报文的哈希，不是 ERP 回执。"
+                ),
+                detail={"order_id": order_id, "checksum": checksum, "sent": False},
+            )
+        raise NotImplementedActionException(
+            message=(
+                f"订单 {order_id} 未同步到 ERP：本系统未配置 SAP PI / Oracle EDI 连接器，"
+                "也没有对外传输端点（此处只有报文构造与序列化）。"
+            ),
+            detail={"order_id": order_id, "configured": False},
+        )
 
     async def handle_ack(self, ack: ERPMessage) -> None:
         """Handle inbound order acknowledgment from ERP."""

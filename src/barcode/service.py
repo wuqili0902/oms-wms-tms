@@ -54,7 +54,7 @@ def validate_gtin(gtin: str) -> dict:
 async def generate_barcode(db: AsyncSession, data: dict) -> dict:
     """Generate a GTIN and persist the barcode record."""
     gtin = generate_gtin(data["gtin_prefix"])
-    now = datetime.now(UTC)
+    now = datetime.now(UTC).replace(tzinfo=None)
     rec = BarcodeRecord(
         id=uuid.uuid4(),
         gtin=gtin,
@@ -74,7 +74,7 @@ async def generate_barcode(db: AsyncSession, data: dict) -> dict:
 async def record_scan(db: AsyncSession, data: dict) -> dict:
     """Record a barcode scan event. Deduplicates by GTIN + entity_id."""
     raw = data["raw_data"].strip()
-    now = datetime.now(UTC)
+    now = datetime.now(UTC).replace(tzinfo=None)
 
     # Check for existing scan of the same GTIN on the same entity
     stmt = select(BarcodeRecord).where(BarcodeRecord.gtin == raw)
@@ -121,7 +121,7 @@ async def create_template(db: AsyncSession, data: dict) -> dict:
     if existing.scalar_one_or_none():
         raise ValidationException(message=f"Template code '{data['code']}' already exists")
 
-    now = datetime.now(UTC)
+    now = datetime.now(UTC).replace(tzinfo=None)
     tpl = LabelTemplate(
         id=uuid.uuid4(),
         name=data["name"],

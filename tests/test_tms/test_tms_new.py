@@ -32,7 +32,9 @@ class TestTrackingEvents:
             headers=auth_headers,
         )
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert "items" in body
+        assert "total" in body
 
 
 class TestPOD:
@@ -412,3 +414,75 @@ class TestCalculateFreight:
         assert resp.status_code == 200
         data = resp.json()
         assert "total_freight_yuan" in data
+
+
+class TestCalculateFreightRules:
+    """rule_type semantics — each rule prices on its own measure."""
+
+    async def _calc(self, db_session, tier: dict, request: dict):
+
+        from src.tms import service as tms_service
+        await tms_service.create_freight_tier(db_session, {"carrier_code": "zto", **tier})
+        return await tms_service.calculate_freight(
+            db_session, {"carrier_code": "zto", **request}
+        )
+
+    async def test_weight_tiered_multiplies_weight(self, db_session):
+        data = await self._calc(
+            db_session,
+            {"rule_type": "weight_tiered", "min_value": 0, "max_value": 10,
+             "price_per_unit": Decimal("8.5")},
+            {"weight": 5},
+        )
+        assert data["rule_type"] == "weight_tiered"
+        assert data["total_freight_yuan"] == "42.50"
+
+    async def test_flat_rate_is_fixed_price(self, db_session):
+        data = await self._calc(
+            db_session,
+            {"rule_type": "flat_rate", "min_value": 0, "max_value": 10,
+             "price_per_unit": Decimal("12")},
+            {"weight": 5},
+        )
+        # Must NOT be 12 × 5 — flat rate is a fixed bracket price.
+        assert data["total_freight_yuan"] == "12.00"
+
+    async def test_distance_tiered_prices_on_distance(self, db_session):
+        data = await self._calc(
+            db_session,
+            {"rule_type": "distance_tiered", "min_value": 0, "max_value": 500,
+             "price_per_unit": Decimal("0.2")},
+            {"weight": 5, "distance_km": 250},
+        )
+        assert data["rule_type"] == "distance_tiered"
+        assert data["total_freight_yuan"] == "50.00"
+
+    async def test_distance_tiered_without_distance_skips_tier(self, db_session):
+        from src.core.exceptions import ValidationException
+
+        with pytest.raises(ValidationException):
+            await self._calc(
+                db_session,
+                {"rule_type": "distance_tiered", "min_value": 0, "max_value": 500,
+                 "price_per_unit": Decimal("0.2")},
+                {"weight": 5},  # no distance_km supplied
+            )
+
+    async def test_volume_based_prices_on_volume(self, db_session):
+        data = await self._calc(
+            db_session,
+            {"rule_type": "volume_based", "min_value": 0, "max_value": 5,
+             "price_per_unit": Decimal("120")},
+            {"weight": 5, "volume": 0.5},
+        )
+        assert data["rule_type"] == "volume_based"
+        assert data["total_freight_yuan"] == "60.00"
+
+    async def test_express_surcharge_added(self, db_session):
+        data = await self._calc(
+            db_session,
+            {"rule_type": "weight_tiered", "min_value": 0, "max_value": 10,
+             "price_per_unit": Decimal("8.5"), "surcharge_express": Decimal("3")},
+            {"weight": 5, "express": True},
+        )
+        assert data["total_freight_yuan"] == "45.50"

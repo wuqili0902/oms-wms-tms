@@ -1,6 +1,32 @@
 """Tests for auth endpoints — async HTTP integration tests with SQLite in-memory."""
 import uuid
 
+from src.auth.models import Permission, Role
+from src.models import Base
+
+
+async def _seed_admin_rbac(async_client):
+    """Seed admin role + permission via ORM, return role_id. Idempotent."""
+    session = async_client._shared_session
+    from sqlalchemy import select as sa_select
+
+    existing = await session.execute(
+        sa_select(Role.id).join(Role.permissions).where(Permission.code == "admin.rbac.manage")
+    )
+    row = existing.first()
+    if row:
+        return row[0]
+
+    perm = Permission(name="RBAC Manage", code="admin.rbac.manage", resource="admin", action="rbac.manage")
+    session.add(perm)
+    role = Role(name="SuperAdmin", code="SUPER-ADMIN")
+    session.add(role)
+    await session.flush()
+    rp_table = Base.metadata.tables["role_permissions"]
+    await session.execute(rp_table.insert().values(role_id=role.id, permission_id=perm.id))
+    await session.flush()
+    return role.id
+
 
 class TestRegister:
     async def test_register(self, async_client):
@@ -110,6 +136,7 @@ class TestLogout:
 
 class TestRoles:
     async def test_create_role(self, async_client):
+        role_id = await _seed_admin_rbac(async_client)
         await async_client.post("/api/v1/auth/register", json={
             "username": "roleadmin", "email": "role@test.com", "password": "test123456",
         })
@@ -117,6 +144,16 @@ class TestRoles:
             "username": "roleadmin", "password": "test123456",
         })
         headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
+        # Assign admin role to user
+        user_resp = await async_client.get("/api/v1/auth/me", headers=headers)
+        user_id = uuid.UUID(user_resp.json()["id"])
+        from src.models import Base
+        ur_table = Base.metadata.tables["user_roles"]
+        await async_client._shared_session.execute(
+            ur_table.insert().values(user_id=user_id, role_id=uuid.UUID(str(role_id)))
+        )
+        await async_client._shared_session.flush()
+
         resp = await async_client.post("/api/v1/auth/roles", json={
             "name": "Test Role", "code": "TEST-ROLE",
         }, headers=headers)
@@ -124,11 +161,12 @@ class TestRoles:
         assert resp.json()["name"] == "Test Role"
 
     async def test_list_roles(self, async_client):
+        # Must use admin user since roles endpoint requires admin.rbac.manage
         await async_client.post("/api/v1/auth/register", json={
             "username": "rolelist", "email": "rlist@test.com", "password": "test123456",
         })
         login_resp = await async_client.post("/api/v1/auth/login", json={
-            "username": "rolelist", "password": "test123456",
+            "username": "admin", "password": "admin123456",
         })
         headers = {"Authorization": f"Bearer {login_resp.json()['access_token']}"}
         resp = await async_client.get("/api/v1/auth/roles", headers=headers)
@@ -137,14 +175,25 @@ class TestRoles:
 
 class TestRoleErrorPaths:
     async def _login(self, async_client):
+        role_id = await _seed_admin_rbac(async_client)
         suf = uuid.uuid4().hex[:6]
         await async_client.post("/api/v1/auth/register", json={
-            "username": f"err-{suf}", "email": f"err-{suf}@t.com", "password": "p123456",
+            "username": f"err-{suf}", "email": f"err-{suf}@t.com", "password": "p12345678",
         })
         r = await async_client.post("/api/v1/auth/login", json={
-            "username": f"err-{suf}", "password": "p123456",
+            "username": f"err-{suf}", "password": "p12345678",
         })
-        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+        h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        # Assign admin role
+        user_resp = await async_client.get("/api/v1/auth/me", headers=h)
+        user_id = uuid.UUID(user_resp.json()["id"])
+        from src.models import Base
+        ur_table = Base.metadata.tables["user_roles"]
+        await async_client._shared_session.execute(
+            ur_table.insert().values(user_id=user_id, role_id=uuid.UUID(str(role_id)))
+        )
+        await async_client._shared_session.flush()
+        return h
 
     async def test_create_role_duplicate_code(self, async_client):
         h = await self._login(async_client)

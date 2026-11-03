@@ -115,6 +115,9 @@ def test_build_tracking_update():
 
 @pytest.mark.asyncio
 async def test_amazon_import_endpoint(async_client):
+    from src.core.dependencies import get_current_user
+    from src.main import app
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "admin"}
     data = {
         "AmazonOrderId": "AMZ-TEST",
         "OrderStatus": "Unshipped",
@@ -123,14 +126,23 @@ async def test_amazon_import_endpoint(async_client):
         "ShippingAddress": {"City": "TestCity"},
         "OrderItems": [{"SellerSKU": "T-SKU", "Title": "Test Item", "QuantityOrdered": 1}],
     }
-    resp = await async_client.post("/api/v1/connectors/amazon/orders", json=data)
+    try:
+        resp = await async_client.post("/api/v1/connectors/amazon/orders", json=data)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
     assert resp.status_code in (201, 422)
 
 
 @pytest.mark.asyncio
 async def test_amazon_tracking_endpoint(async_client):
+    from src.core.dependencies import get_current_user
+    from src.main import app
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "admin"}
     data = {"amazon_order_id": "AMZ-001", "carrier_code": "SF", "tracking_number": "SF123456"}
-    resp = await async_client.post("/api/v1/connectors/amazon/tracking", json=data)
+    try:
+        resp = await async_client.post("/api/v1/connectors/amazon/tracking", json=data)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
     assert resp.status_code == 200
     assert resp.json()["status"] == "received"
 

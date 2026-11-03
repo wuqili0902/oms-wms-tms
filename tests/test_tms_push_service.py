@@ -1,7 +1,24 @@
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.tms.push_service import NotificationPriority, PushMessage, PushService
+
+
+@pytest.fixture(autouse=True)
+def _reset_firebase_globals():
+    """Reset shared Firebase module state so tests are order-independent."""
+    import sys
+
+    mod = sys.modules["src.tms.push_service"]
+    mod._firebase_available = False
+    mod._firebase_app = None
+    mod.__dict__.pop("_fcm_ready", None)
+    yield
+    mod._firebase_available = False
+    mod._firebase_app = None
+    mod.__dict__.pop("_fcm_ready", None)
 
 
 class TestNotificationPriority:
@@ -30,17 +47,16 @@ class TestPushServiceSendToDevice:
         svc = PushService()
         msg = PushMessage(title="Hello", body="Test")
         result = await svc.send_to_device("token-123", msg)
-        assert result is True
-        assert svc.stats["sent"] == 1
-        assert svc.stats["failed"] == 0
+        # Firebase not configured in tests → push skipped, counted as a failure.
+        assert result is False
+        assert svc.stats == {"sent": 0, "failed": 1}
 
     async def test_failure(self):
         svc = PushService()
         msg = PushMessage(title="Hello", body="Test")
         result = await svc.send_to_device("", msg)
-        assert result is True
-        assert svc.stats["sent"] == 1
-        assert svc.stats["failed"] == 0
+        assert result is False
+        assert svc.stats == {"sent": 0, "failed": 1}
 
 
 class TestPushServiceSendToTopic:
@@ -48,76 +64,74 @@ class TestPushServiceSendToTopic:
         svc = PushService()
         msg = PushMessage(title="Broadcast", body="All users")
         result = await svc.send_to_topic("news", msg)
-        assert result is True
-        assert svc.stats["sent"] == 1
+        assert result is False
+        assert svc.stats["sent"] == 0
 
     async def test_failure(self):
         svc = PushService()
         msg = PushMessage(title="Broadcast", body="All users")
         result = await svc.send_to_topic("news", msg)
-        assert result is True
-        assert svc.stats["sent"] == 1
+        assert result is False
+        assert svc.stats["failed"] == 1
 
 
 class TestPushServiceNotifyStatusUpdate:
     async def test_dispatched(self):
         svc = PushService()
         result = await svc.notify_status_update("device-1", "ORD-001", "dispatched")
-        assert result is True
-        assert svc.stats["sent"] == 1
+        assert result is False
 
     async def test_exception_status(self):
         svc = PushService()
         result = await svc.notify_status_update("device-1", "ORD-002", "exception")
-        assert result is True
+        assert result is False
 
     async def test_unknown_status(self):
         svc = PushService()
         result = await svc.notify_status_update("device-1", "ORD-003", "unknown_status")
-        assert result is True
+        assert result is False
 
     async def test_in_transit(self):
         svc = PushService()
         result = await svc.notify_status_update("device-1", "ORD-004", "in_transit")
-        assert result is True
+        assert result is False
 
     async def test_out_for_delivery(self):
         svc = PushService()
         result = await svc.notify_status_update("device-1", "ORD-005", "out_for_delivery")
-        assert result is True
+        assert result is False
 
     async def test_delivered(self):
         svc = PushService()
         result = await svc.notify_status_update("device-1", "ORD-006", "delivered")
-        assert result is True
+        assert result is False
 
 
 class TestPushServiceNotifyDelivery:
     async def test_without_eta(self):
         svc = PushService()
         result = await svc.notify_delivery("device-1", "SF123456")
-        assert result is True
+        assert result is False
 
     async def test_with_eta(self):
         svc = PushService()
         eta = datetime(2026, 7, 27, 12, 0, 0, tzinfo=UTC)
         result = await svc.notify_delivery("device-1", "SF123456", eta=eta)
-        assert result is True
+        assert result is False
 
 
 class TestPushServiceNotifyException:
     async def test_exception_notification(self):
         svc = PushService()
         result = await svc.notify_exception("device-1", "TMS-001", "Package damaged")
-        assert result is True
+        assert result is False
 
 
 class TestPushServiceSendOrderStatusUpdate:
     async def test_legacy_alias(self):
         svc = PushService()
         result = await svc.send_order_status_update("device-1", "ORD-001", "delivered")
-        assert result is True
-        assert svc.stats["sent"] == 1
+        assert result is False
 
 
 class TestInitFirebase:
@@ -313,4 +327,5 @@ class TestPushServiceStats:
         await svc.send_to_device("t1", msg)
         await svc.send_to_topic("news", msg)
         await svc.send_to_device("t2", msg)
-        assert svc.stats == {"sent": 3, "failed": 0}
+        # All three are skipped (Firebase not configured) and counted as failures.
+        assert svc.stats == {"sent": 0, "failed": 3}

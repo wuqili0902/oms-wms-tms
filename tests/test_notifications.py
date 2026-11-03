@@ -105,8 +105,12 @@ async def test_notification_api_list(sqlite_engine):
             headers={"Authorization": f"Bearer {token}"},
         )
     assert resp.status_code == 200, resp.text
+    # The notification endpoints return the bare payload ({"items", "total",
+    # "page", "page_size"}) like the rest of the API — only analytics wraps in
+    # {"data": ...}.  The mobile client reads this shape too.
     data = resp.json()
-    assert data["data"]["total"] >= 1
+    assert data["total"] >= 1
+    assert data["items"][0]["title"] == "API Test"
 
     app.dependency_overrides.clear()
     await shared.teardown()
@@ -177,7 +181,7 @@ async def test_notification_api_unread_only(sqlite_engine):
             headers={"Authorization": f"Bearer {token}"},
         )
     assert resp.status_code == 200, resp.text
-    data = resp.json()["data"]
+    data = resp.json()  # bare payload — see test_notification_api_list
     assert data["total"] == 1
     assert data["items"][0]["title"] == "Unread"
 
@@ -245,7 +249,7 @@ async def test_notification_api_preferences(sqlite_engine):
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200, resp.text
-        data = resp.json()["data"]
+        data = resp.json()["preferences"]  # GET /preferences wraps the list
         assert len(data) == 1
         assert data[0]["enabled"] is False
 
@@ -280,18 +284,29 @@ async def test_ws_manager_connect_disconnect():
     await mgr.connect(10, ws)
     assert mgr.active_connections == 1
 
+    # Re-connecting the *same* socket is idempotent: the manager keeps one
+    # entry per socket, so a user is never sent the same notification twice.
     await mgr.connect(10, ws)
-    assert mgr.active_connections == 2  # same user/ws appended again
+    assert mgr.active_connections == 1
+
+    ws_other = AsyncMock()
+    await mgr.connect(10, ws_other)  # a second device for the same user
+    assert mgr.active_connections == 2
 
     ws2 = AsyncMock()
     await mgr.connect(20, ws2)
     assert mgr.active_connections == 3
 
     mgr.disconnect(10, ws)
-    assert mgr.active_connections == 2
+    assert mgr.active_connections == 2  # user 10 still holds ws_other
 
     mgr.disconnect(20, ws2)
-    assert mgr.active_connections == 1  # one copy of user1's ws remains
+    assert mgr.active_connections == 1
+
+    # One user is capped at 3 sockets; the oldest is evicted to make room.
+    for _ in range(3):
+        await mgr.connect(10, AsyncMock())
+    assert mgr.active_connections == 3
 
 
 @pytest.mark.asyncio
