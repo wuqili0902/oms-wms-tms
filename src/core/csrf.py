@@ -47,6 +47,33 @@ def _verify_token(token: str, cookie_token: str) -> bool:
         return False
 
 
+def _client_ip_for_signature(request: Request) -> str:
+    """The address an extend signature is bound to.
+
+    The address is in the HMAC precisely so a captured (path, timestamp, signature)
+    triple cannot be used from another machine.  Reading it out of X-Real-Ip or
+    X-Forwarded-For cancels that: whoever replayed the triple types the original
+    client's address into a header and the check passes.  The TCP peer decides.
+
+    A forwarding header is consulted only when the peer itself is a proxy the
+    deployment declared it trusts (``settings.trusted_proxy_ips``) — which is the
+    one case where the peer genuinely is not the client.
+    """
+    peer = request.client.host if request.client else "unknown"
+
+    raw = getattr(settings, "trusted_proxy_ips", "")
+    trusted = {entry.strip() for entry in raw.split(",")} if isinstance(raw, str) else set()
+    trusted.discard("")
+
+    if peer in trusted:
+        forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or ""
+        first_hop = forwarded.split(",")[0].strip()
+        if first_hop:
+            return first_hop
+
+    return peer
+
+
 def _verify_extend_signature(request: Request) -> bool:
     """Verify X-Extend-Signature header for extension API routes.
 
@@ -81,14 +108,7 @@ def _verify_extend_signature(request: Request) -> bool:
         logger.warning("X-Extend-Timestamp expired on %s (ts=%s)", path, timestamp_str)
         return False
 
-    # Prefer X-Real-Ip (set by reverse proxy) over XFF; fall back to direct client.
-    real_ip = request.headers.get("X-Real-Ip") or request.headers.get("x-real-ip")
-    if real_ip:
-        client_ip = real_ip.split(",")[0].strip()
-    elif request.client:
-        client_ip = request.client.host
-    else:
-        client_ip = "unknown"
+    client_ip = _client_ip_for_signature(request)
     msg = f"{path}:{timestamp_str}:{client_ip}"
     expected_sig = hmac.new(
         settings.secret_key.encode(),

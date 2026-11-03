@@ -333,9 +333,11 @@ class TestRateLimitDecorator:
         key_arg = mock_check.await_args[0][0]
         assert key_arg == "ip:unknown"
 
-    async def test_x_forwarded_for_wins_over_socket_peer(self):
-        """Behind a proxy request.client.host is the proxy — limit the real client."""
+    async def test_x_forwarded_for_wins_over_socket_peer(self, monkeypatch):
+        """Behind a trusted proxy request.client.host is the proxy — limit the real client."""
         from src.core.rate_limiter import rate_limit
+
+        monkeypatch.setattr("src.core.rate_limiter.settings.trusted_proxy_ips", "10.0.0.1")
 
         @rate_limit(requests=10, window=5)
         async def my_endpoint(request):
@@ -347,8 +349,10 @@ class TestRateLimitDecorator:
 
         assert mock_check.await_args[0][0] == "ip:203.0.113.7"
 
-    async def test_x_forwarded_for_is_trimmed(self):
+    async def test_x_forwarded_for_is_trimmed(self, monkeypatch):
         from src.core.rate_limiter import rate_limit
+
+        monkeypatch.setattr("src.core.rate_limiter.settings.trusted_proxy_ips", "10.0.0.1")
 
         @rate_limit(requests=10, window=5)
         async def my_endpoint(request):
@@ -359,6 +363,47 @@ class TestRateLimitDecorator:
             await my_endpoint(req)
 
         assert mock_check.await_args[0][0] == "ip:203.0.113.7"
+
+    async def test_x_real_ip_is_used_behind_a_trusted_proxy(self, monkeypatch):
+        """Some proxies set X-Real-Ip rather than a chain."""
+        from src.core.rate_limiter import rate_limit
+
+        monkeypatch.setattr("src.core.rate_limiter.settings.trusted_proxy_ips", "10.0.0.1")
+
+        @rate_limit(requests=10, window=5)
+        async def my_endpoint(request):
+            return {"ok": True}
+
+        req = self.make_request("10.0.0.1", {"x-real-ip": "203.0.113.7"})
+        with patch("src.core.rate_limiter.rate_limiter.check_rate_limit", AsyncMock(return_value=True)) as mock_check:
+            await my_endpoint(req)
+
+        assert mock_check.await_args[0][0] == "ip:203.0.113.7"
+
+    async def test_untrusted_x_forwarded_for_cannot_mint_a_fresh_bucket(self, monkeypatch):
+        """Unqualified trust in XFF would make every per-IP limit decorative.
+
+        With no TRUSTED_PROXY_IPS configured the socket peer decides.  Otherwise a
+        client sending a different X-Forwarded-For on each attempt gets a separate
+        window each time and is never limited at all.
+        """
+        from src.core.rate_limiter import rate_limit
+
+        monkeypatch.setattr("src.core.rate_limiter.settings.trusted_proxy_ips", "")
+
+        @rate_limit(requests=10, window=5)
+        async def my_endpoint(request):
+            return {"ok": True}
+
+        keys = []
+        for attempt in range(3):
+            req = self.make_request("198.51.100.7", {"x-forwarded-for": f"203.0.113.{attempt}"})
+            checker = AsyncMock(return_value=True)
+            with patch("src.core.rate_limiter.rate_limiter.check_rate_limit", checker):
+                await my_endpoint(req)
+            keys.append(checker.await_args[0][0])
+
+        assert keys == ["ip:198.51.100.7"] * 3, f"header rotation produced distinct buckets: {keys}"
 
     async def test_rate_limit_exceeded_raises_429(self):
         from fastapi import HTTPException

@@ -103,7 +103,12 @@ class TestRecordScan:
     async def test_records_scan(self):
         mock_db = AsyncMock(spec=AsyncSession)
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
+        # record_scan asks "is there already a row for this GTIN?" through
+        # scalars().first() — gtin is indexed but not unique, so "one or none" was
+        # the wrong question to ask of it.  A bare MagicMock answers every method
+        # with a truthy mock, so an unstubbed first() would make "no existing row"
+        # look like a found row and the insert below would never happen.
+        mock_result.scalars.return_value.first.return_value = None
         mock_db.execute.return_value = mock_result
         mock_now = MagicMock()
         mock_now.replace.return_value = mock_now

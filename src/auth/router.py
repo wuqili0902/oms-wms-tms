@@ -69,10 +69,15 @@ async def login(request: Request, data: UserLogin, db: AsyncSession = Depends(ge
     return TokenResponse(**tokens)
 
 
-@rate_limit(requests=10, window=60)
+# @rate_limit has to sit **under** @router.post.  router.post registers the function
+# it is applied to, so decorating from above attaches the limiter to a local name and
+# the route stays unlimited — which is how /auth/refresh shipped: a stolen refresh
+# token could be replayed without limit.  ``request: Request`` is what gives the
+# limiter an address to key on; a body model alone would not.
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(request: RefreshRequest):
-    tokens = await auth_service.refresh_tokens(request.refresh_token)
+@rate_limit(requests=10, window=60)
+async def refresh(request: Request, body: RefreshRequest):
+    tokens = await auth_service.refresh_tokens(body.refresh_token)
     if not tokens:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     return TokenResponse(**tokens)

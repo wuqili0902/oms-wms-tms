@@ -73,6 +73,14 @@ class Settings(BaseSettings):
     rate_limit_requests: int = 100
     rate_limit_window: int = 60
 
+    # Addresses whose X-Forwarded-For / X-Real-Ip this server is allowed to believe.
+    # Empty (the default) means those headers never decide who a request came from:
+    # anyone can type any address into them, so trusting them turns the per-IP rate
+    # limit into a self-service quota (rotate the header, get a fresh bucket) and
+    # cancels the client binding the extend-signature HMAC exists to enforce.
+    # Set this to the proxy's address when the app sits behind one.  Comma-separated.
+    trusted_proxy_ips: str = ""
+
     # Logging
     log_level: str = "info"
     log_format: str = "json"

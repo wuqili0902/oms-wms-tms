@@ -82,8 +82,14 @@ async def record_scan(db: AsyncSession, data: dict) -> dict:
     if eid is not None:
         eid_uuid = uuid.UUID(eid) if isinstance(eid, str) else eid
         stmt = stmt.where(BarcodeRecord.entity_id == eid_uuid)
+    # gtin is indexed but **not** unique, so rows written before this dedup existed
+    # can repeat it.  scalar_one_or_none() raises MultipleResultsFound on those and
+    # the scan endpoint has no handler for it — a barcode that scanned fine
+    # yesterday would answer 500.  Take the oldest row, deterministically (id breaks
+    # a tie between identical timestamps), and never ask for "one or none".
+    stmt = stmt.order_by(BarcodeRecord.created_at.asc(), BarcodeRecord.id.asc()).limit(1)
     result = await db.execute(stmt)
-    existing = result.scalar_one_or_none()
+    existing = result.scalars().first()
     if existing:
         existing.updated_at = now
         existing.raw_data = raw
