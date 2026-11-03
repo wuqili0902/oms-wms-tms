@@ -2,25 +2,40 @@
 
 ## 项目概述
 
-Oms-Wms-Tms 是一套完整的仓储物流管理系统，集成订单管理（OMS）、仓库作业（WMS）和运输配送（TMS）。系统采用微服务架构，支持 SAP PI/PO + Oracle EDI 对接、FEFO/FIFO 批次库存管理、PDA 离线作业模式等高级功能。
+Oms-Wms-Tms 是一套完整的仓储物流管理系统，集成订单管理（OMS）、仓库作业（WMS）和运输配送（TMS）。系统采用微服务架构，支持 Shopify Webhook 推单、Amazon SP-API 订单导入、FEFO/FIFO 批次库存管理、PDA 离线作业模式等高级功能。
+
+> 对接现状（见 [`docs/operations-manual.md` §12](docs/operations-manual.md)）：Shopify Webhook、Amazon 订单导入与发货交接**已实现**；Amazon 出站动作（状态轮询、运单号上传、库存同步）与 SAP PI/PO、Oracle EDI 的实际传输**尚未接入**——后者目前只有报文模型与序列化（`src/models/erp_connector.py`），没有对外端点。
+
+## 文档导航
+
+| 文档 | 用途 | 读者 |
+|------|------|------|
+| [`docs/operations-manual.md`](docs/operations-manual.md) | **API 接口参考**(请求/响应格式、参数、状态机) | 开发者 / 集成方 |
+| [`docs/operations-sop.md`](docs/operations-sop.md) | **岗位作业流程 SOP**(订单员/仓管员/调度员/管理员每日做什么) | 业务操作员 |
+| [`docs/architecture.md`](docs/architecture.md) | 系统架构总览(路由/中间件/核心层/业务域/任务/部署/测试) | 架构 / 开发 |
+| [`docs/deployment-guide.md`](docs/deployment-guide.md) | 部署指南（Docker Compose / Helm） | 运维 |
+| [`docs/admin-manual.md`](docs/admin-manual.md) | 后台管理功能说明 | 系统管理员 |
+
+> API 细节查 `operations-manual.md`;「每天按什么顺序做业务」查 `operations-sop.md`,两者互相交叉引用。
 
 ## 模块索引
 
 | # | 模块 | 路径 |
 |---|------|------|
-| P0 | OpenTelemetry 分布式追踪 + Sentry 错误上报 | `src/telemetry.py` |
-| P0 | Outbox Pattern 跨服务数据一致性 | `src/models/outbox.py` |
-| P0 | PDA 离线作业模式 (SQLite + SyncQueue) | `src/pda/offline_mode.py` |
-| P1 | Inventory FEFO/FIFO 批次管理 | `src/models/inventory.py` |
-| P1 | ERP/EDI Connector (SAP PI/PO + Oracle EDI) | `src/models/erp_connector.py` |
-| P2 | Route Plan Redis Cache + Carrier Multi-Rate Shopping | `src/models/route_plan.py` |
-| P3 | ABC-XYZ 库存分析 Dashboard | `src/models/analytics.py` |
+| P0 | OpenTelemetry 分布式追踪（Sentry 错误上报见 `src/main.py`） | `src/core/tracing.py` |
+| P0 | Outbox Pattern 跨服务数据一致性 | `src/core/outbox.py` |
+| P0 | PDA 离线作业模式 (SQLite + SyncQueue) | `src/core/offline.py` |
+| P1 | Inventory FEFO/FIFO 批次管理 | `src/wms/service.py`、`src/wms/services/picking_service.py` |
+| P1 | ERP/EDI 报文模型与序列化（SAP IDoc / X12 报文，**无对外传输端点**） | `src/models/erp_connector.py`、`src/tms/connectors/erp.py` |
+| P1 | Shopify Webhook 推单 + Amazon SP-API 订单导入（出站动作待接入） | `src/connectors/` |
+| P2 | Route Plan Redis Cache + Carrier Multi-Rate Shopping | `src/tms/service.py` |
+| P3 | ABC-XYZ 库存分析 Dashboard | `src/wms/analysis.py` |
 
 ## 详细模块说明
 
 ### Phase 1 — P0 (核心基础设施)
 
-#### 1. OpenTelemetry + Sentry (`src/telemetry.py`)
+#### 1. OpenTelemetry 分布式追踪（`src/core/tracing.py`,Sentry 错误上报见 `src/main.py`)
 实现分布式追踪和错误上报，支持跨服务链路追踪。
 
 **关键配置:**
@@ -29,7 +44,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT = "http://otel-collector:4317"
 SENTRY_DSN = os.getenv("SENTRY_DSN")
 ```
 
-#### 2. Outbox Pattern (`src/models/outbox.py`)
+#### 2. Outbox Pattern（`src/core/outbox.py`)
 通过事务型消息表实现跨服务数据一致性。
 
 **使用方式:**
@@ -49,7 +64,7 @@ with Session() as session:
 # Consumer: poll outbox → dispatch (e.g. HTTP POST) → mark dispatched
 ```
 
-#### 3. PDA 离线作业模式 (`src/pda/offline_mode.py`)
+#### 3. PDA 离线作业模式（`src/core/offline.py`)
 仓库作业员使用 PDA 设备在无网络环境下进行拣货、盘点、收货等操作，待网络恢复后自动同步。
 
 **核心组件:**
@@ -59,7 +74,7 @@ with Session() as session:
 
 ### Phase 2 — P1 (业务核心)
 
-#### 4. Inventory FEFO/FIFO 批次管理 (`src/models/inventory.py`)
+#### 4. Inventory FEFO/FIFO 批次管理（`src/wms/service.py`、`src/wms/services/picking_service.py`)
 实现基于批次级的库存追踪，支持 FIFO（先进先出）和 FEFO（先到期先出）策略。
 
 **关键模型:**
@@ -83,7 +98,7 @@ query.order_by(InventoryBatch.expiry_date.nulls_last())
 - SAP IDOC (ORDERS, DELJRN, DESADV, INVOIC)
 - EDIFACT / ANSI X12 (850, 855, 856, 810)
 
-#### 6. Route Plan + Rate Shopping (`src/models/route_plan.py`)
+#### 6. Route Plan + Rate Shopping（`src/tms/service.py`)
 智能配送路由和承运商比价系统。
 
 **核心逻辑:**
@@ -97,7 +112,7 @@ rates = [get_rate(c, order_id=order.id) for c in route.eligible_carriers]
 
 ### Phase 3 — P2 (高级分析)
 
-#### 7. ABC-XYZ Inventory Analysis (`src/models/analytics.py`)
+#### 7. ABC-XYZ Inventory Analysis（`src/wms/analysis.py`)
 库存分类与补货建议。
 
 **分类规则:**
@@ -147,7 +162,7 @@ REDIS_URL=redis://localhost:6379/0
 
 ## API 参考
 
-### Inventory APIs (`src/models/inventory.py`)
+### Inventory APIs (`src/wms/service.py`)
 | Method | Path                           | Description          |
 |--------|--------------------------------|----------------------|
 | GET    | /api/v1/inventory/batches      | List batches         |
@@ -162,7 +177,7 @@ REDIS_URL=redis://localhost:6379/0
 | GET    | /api/v1/erp/inbound/{msg_id}   | Poll inbound message |
 | DELETE | /api/v1/edi/dlq/{dlq_id}       | Retry DLQ entry      |
 
-### Analytics APIs (`src/models/analytics.py`)
+### Analytics APIs (`src/wms/analysis.py`)
 | Method | Path                             | Description          |
 |--------|----------------------------------|----------------------|
 | GET    | /api/v1/analytics/abc-xyz        | Get segmentation     |

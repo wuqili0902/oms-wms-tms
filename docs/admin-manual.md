@@ -52,28 +52,33 @@ Body: { "refresh_token": "eyJ..." }
 
 ```
 POST /api/v1/auth/register
-Body: { "username": "zhangsan", "password": "***", "email": "zhang@co.com", "role_ids": [1] }
+Body: { "username": "zhangsan", "password": "***", "email": "zhang@co.com" }
+# 注册体没有 role_ids：角色在注册后用下面的分配接口挂上去
 ```
 
 ### 分配角色
 
 ```
 POST /api/v1/auth/users/{user_id}/roles
-Body: { "role_id": 2 }
+Body: { "role_id": "b6c1…-uuid" }
+# role_id 必填且必须是 uuid：缺键 → 422 点出 role_id；
+# 不是 uuid（旧书签里的半截 id）→ 422；角色不存在 → 404
 ```
 
 ### 创建角色
 
 ```
 POST /api/v1/auth/roles
-Body: { "name": "wms_operator", "description": "仓储操作员" }
+Body: { "name": "wms_operator", "code": "wms_operator", "description": "仓储操作员" }
+# code 必填且唯一
 ```
 
 ### 为角色分配权限
 
 ```
 POST /api/v1/auth/roles/{role_id}/permissions
-Body: { "permission_id": 10 }
+Body: { "permission_id": "9a2f…-uuid" }
+# 同上：缺键 / 非 uuid → 422 点出 permission_id；权限不存在 → 404
 ```
 
 ### 权限清单

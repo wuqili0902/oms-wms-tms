@@ -58,7 +58,7 @@ OMS-WMS-TMS 是一套一体化物流管理平台，覆盖订单管理（OMS）�
 | 运价管理 | FreightTier 分层运价体系 |
 | 承运商配置 | CarrierConfig 管理承运商信息（唯一主键，carrier_code 唯一约束） |
 | ML 预测 | 训练需求预测模型、预测未来需求量（Pydantic schema 校验） |
-| ERP 对接 | TMS 侧 ERP connector 集成 |
+| ERP 对接 | TMS 侧 ERP connector（报文构造/序列化，无对外传输端点） |
 
 ---
 
@@ -78,9 +78,11 @@ OMS-WMS-TMS 是一套一体化物流管理平台，覆盖订单管理（OMS）�
 
 | 功能 | 说明 |
 |------|------|
-| 物流状态追踪 | 快递鸟等第三方物流轨迹查询 |
-| 承运商集成 | 多承运商 API 接入（configurable endpoints） |
-| 物流路由 | 物流服务商配置、路由规则 |
+| 物流状态追踪 | 快递鸟轨迹查询；响应带 `source` 说明轨迹出处：已配置 → `kdniao`；**未配置 → 501**（不再按运单号哈希编造 已揽收/运输中/已签收） |
+| 面单号出处 | `POST /waybill/create` 响应带 `tracking_source`：`kdniao`（快递鸟给的号）/ `local_placeholder`（本机拼的号，快递侧没有这张面单） |
+| 演示数据 | 需显式 `LOGISTICS_MOCK_ENABLED=true` 才启用；每条轨迹/每条报价都标 `source: mock` + 演示数据说明，用于开发界面而非答复客户 |
+| 承运商集成 | 多承运商 API 接入（`CARRIER_API_ENDPOINTS`），成功 → `source: carrier_api`；调用失败 → 抛错（路由渲染 502），不回落演示数据，也没有自动重试 |
+| 运费询价 | 同上：端点报价为准，内置费率表只在演示开关开启时可用并标注"演示费率" |
 
 ---
 
@@ -99,10 +101,11 @@ OMS-WMS-TMS 是一套一体化物流管理平台，覆盖订单管理（OMS）�
 
 | 功能 | 说明 |
 |------|------|
-| Shopify Webhook | 接收 Shopify 订单/库存变更事件 |
-| Amazon SP-API | Amazon Selling Partner API 集成 |
-| ERP 连接器 | 导入 ERP 订单到 OMS（`import_erp_order`） |
-| 配置管理 | Connector 配置 CRUD |
+| Shopify Webhook | 接收 Shopify 订单事件（HMAC 签名校验），`orders/create` → OMS 订单，`orders/fulfilled` → 运单号消息 |
+| Amazon SP-API | 订单导入（SP-API 原始 `Order` 对象）+ 发货交接记录；**出站动作（状态轮询/运单号上传/库存同步）未接入**，返回 `not_implemented` |
+| ERP 连接器 | 导入 ERP 订单到 OMS（`import_erp_order`）；SAP/X12 报文模型与序列化，无对外传输端点 |
+| 连接器注册表 | `GET /connectors/status`、`GET /connectors/{id}`：列出本构建的连接器（只有 amazon、shopify）、逐项能力（已实现/未实现/不适用）与凭据是否已配置；**只回报变量名，不回报密钥值**，凭据写在服务器 `.env`，无网页配置 CRUD（旧版的 AWS Access Key / Shopify Admin Token 表单指向不存在的端点，已移除） |
+| 「同步」 | 无：`POST /connectors/amazon/sync` → 501（出站未实现），`/shopify/sync` → 422（推送式对接无可拉取数据） |
 
 ---
 
@@ -219,16 +222,17 @@ OMS-WMS-TMS 是一套一体化物流管理平台，覆盖订单管理（OMS）�
 | WMS | ~15 |
 | TMS | ~25 |
 | Barcode | ~6 |
-| Logistics | ~5 |
+| Logistics | 6 |
 | Analytics | ~5 |
 | Admin | ~10 |
-| Connectors | ~5 |
+| Connectors | ~6 |
 | Notification | ~3 |
 | Mobile | ~8 |
 | Health | 2 |
-| **合计** | **~102** |
+| **合计** | **~104** |
 
 ## 测试覆盖
 
-- 单元测试：207 passed / 0 failed
-- 覆盖模块：认证、订单、仓储、运输、条码、通知、导入导出、离线同步、定时任务、Picking、ML 模型、连接器
+- 后端 pytest：2540 passed / 2 skipped / 0 failed（`python -m pytest tests`）
+- 前端 vitest：80 passed / 2 skipped（`npm test`），`npm run build` 含 `vue-tsc` 类型检查通过
+- 覆盖模块：认证、订单、仓储、运输、条码、通知、导入导出、离线同步、定时任务、Picking、ML 模型、连接器、物流面单出处（轨迹/面单号的 source 契约）

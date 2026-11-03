@@ -16,6 +16,7 @@ spec:
         {{- include "tms.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: app
     spec:
+      terminationGracePeriodSeconds: 45
       containers:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -23,6 +24,10 @@ spec:
           ports:
             - containerPort: 8000
               name: http
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
           envFrom:
             - configMapRef:
                 name: {{ include "tms.fullname" . }}-env
@@ -90,11 +95,12 @@ spec:
         {{- include "tms.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: worker
     spec:
+      terminationGracePeriodSeconds: 60
       containers:
         - name: worker
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["celery", "-A", "src.celery_app", "worker", "--loglevel=info", "--concurrency={{ .Values.celery.worker.concurrency }}"]
+          command: ["celery", "-A", "src.celeryconf", "worker", "--loglevel=info", "--concurrency={{ .Values.celery.worker.concurrency }}"]
           envFrom:
             - configMapRef:
                 name: {{ include "tms.fullname" . }}-env
@@ -151,11 +157,12 @@ spec:
         {{- include "tms.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: beat
     spec:
+      terminationGracePeriodSeconds: 30
       containers:
         - name: beat
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["celery", "-A", "src.celery_app", "beat", "--loglevel=info"]
+          command: ["celery", "-A", "src.celeryconf", "beat", "--loglevel=info"]
           envFrom:
             - configMapRef:
                 name: {{ include "tms.fullname" . }}-env

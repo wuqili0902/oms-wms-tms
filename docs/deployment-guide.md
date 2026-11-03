@@ -69,6 +69,40 @@ celery -A src.celeryconf worker --loglevel=info --concurrency=4
 celery -A src.celeryconf beat --loglevel=info
 ```
 
+> `-A` 必须指向 `src.celeryconf`（或 `src.celery_app`）：`src.tasks` 只是任务包，里面没有 Celery app 对象，
+> `celery -A src.tasks …` 会直接报 `Module 'src.tasks' has no attribute 'celery'`。
+
+#### 2.3.1 定时任务清单（beat 真的会跑什么）
+
+调度表定义在 `src/celery_app.py` 的 `beat_schedule`（`src/celeryconf.py` 是命令行入口，复用同一份表）。
+下表就是 beat 会安排的全部任务；名字要与装饰器注册的名字一致，`tests/test_celery_schedule_contract.py` 会在名字对不上时失败
+（旧版本把注册写在 `try: … except ImportError: pass` 里，任务模块导入失败就静默消失，beat 每晚报
+`Received unregistered task of type '…'`——一个没人看的日志，不是一次看得见故障）。
+
+| 任务 | 频率 | 作用 |
+|------|------|------|
+| `src.tasks.orders.process_stale_orders` | 每 30 分钟 | 处理卡在中间状态过久的订单 |
+| `src.tasks.orders.auto_complete_picked_orders` | 每 6 小时 | 拣货完成超 48 小时的订单自动完成 |
+| `src.tasks.orders.cancel_abandoned_drafts` | 每天 03:00 | 取消 7 天以上的草稿单 |
+| `tasks.inventory.check_low_stock` | 每 6 小时 | 低于最小库存的 SKU 触发库存预警通知 |
+| `tasks.inventory.release_locked` | 每天 02:00 | 释放已取消订单占用的锁定库存 |
+| `src.tasks.outbox.dispatch_outbox_events` | 每分钟 | 投递待发的 outbox 事件（HTTP POST） |
+| `src.tasks.maintenance.compute_abc_xyz_analysis` | 每天 02:00 | ABC-XYZ 库存分层分析 |
+| `src.tasks.maintenance.health_check` | 每 5 分钟 | 依赖与数据库健康检查 |
+| `src.tasks.maintenance.cleanup_old_sync_logs` | 每天 04:00 | 清理过期同步日志 |
+| `src.tasks.maintenance.cleanup_expired_tokens` | 每小时 | 清理过期令牌 |
+| `src.tasks.maintenance.daily_aggregation` | 每天 01:00 | 订单/库存日汇总 |
+
+未被调度的任务（注册了，但没有定时安排，需要时手动调用）：
+`tasks.inventory.sync`、`tasks.inventory.snapshot`、`tasks.order.cancel_expired`、`tasks.order.process_pending`、
+`src.tasks.sync.process_pda_sync_queue`。
+
+```bash
+# 验证 worker 注册了哪些任务 / beat 的表是否都被注册
+celery -A src.celeryconf inspect registered
+celery -A src.celeryconf inspect scheduled
+```
+
 ### 2.4 验证
 
 ```bash

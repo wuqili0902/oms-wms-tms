@@ -85,4 +85,8 @@ jobs:
         with:
           node-version: "22"
       - run: npm ci
+      # The unit tests and the typecheck run before the build: ``npm run build``
+      # starts with ``vue-tsc -b``, so a type error already fails this job, and a
+      # failing view test should fail it too rather than be found in review.
+      - run: npm test
       - run: npm run build

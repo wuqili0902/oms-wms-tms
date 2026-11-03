@@ -33,6 +33,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
     healthcheck:
@@ -63,7 +64,7 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: "false"
       CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000"]}
-      OUTBOX_DISPATCH_URL: ${OUTBOX_DISPATCH_URL:-http://app:8000/api/v1/outbox/dispatch}
+      OUTBOX_DISPATCH_URL: ${OUTBOX_DISPATCH_URL:-http://app:8000/api/v1/events/ingest}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
@@ -78,16 +79,15 @@ services:
       CARRIER_API_ENDPOINTS: ${CARRIER_API_ENDPOINTS:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
-    ports:
-      - "8000:8000"
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
+    stop_grace_period: 30s
     logging: *default-logging
     deploy:
       resources:
@@ -103,7 +103,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     image: oms-wms-tms:latest
-    command: celery -A src.celeryconf worker --loglevel=info --concurrency=4
+    command: celery -A src.celeryconf worker --loglevel=info --concurrency=4 --max-tasks-per-child=1000
     environment:
       DATABASE_URL: postgresql+asyncpg://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
       DATABASE_SYNC_URL: postgresql://${PG_USER:-postgres}:${PG_PASSWORD}@postgres:5432/oms_wms_tms
@@ -172,10 +172,9 @@ services:
           memory: 256M
 
   nginx:
-    image: nginx:1.25-alpine
+    image: nginx:1.27-alpine
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ../docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ../frontend/dist:/usr/share/nginx/html:ro

@@ -54,7 +54,7 @@ oms-wms-tms/
 │   ├── ml/                     # ML: 智能推荐 / 异常检测
 │   ├── admin/                  # 后台管理 & 审计日志
 │   ├── core/                   # 共享配置 & 常量
-│   └── tasks/                  # Celery Task 定义 (wms/tms/ml task)
+│   └── tasks/                  # Celery Task 定义 (orders / inventory / maintenance / outbox / sync)
 ├── alembic/                    # Alembic DB migration
 ├── tests/                      # pytest + coverage
 ├── Dockerfile
@@ -154,8 +154,8 @@ cp env.example .env
 # 迁移数据库
 alembic upgrade head
 
-# 启动 API 服务
-uv run uvicorn src.api:v1.app --reload
+# 启动 API 服务（app 对象在 src/main.py，不在 src/api 下）
+uv run uvicorn src.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 ### Docker Compose（开发环境）
@@ -224,4 +224,7 @@ alembic downgrade -1
 
 1. **模型变更**：修改 `src/models/*.py` → `alembic revision --autogenerate -m "..."` → `alembic upgrade head`
 2. **API 新增端点**：在对应模块的 service + router 中实现，保持 Pydantic schema 与 ORM model 分离
-3. **Celery Task**：写入 `src/tasks/`，通过 `celery -A worker.celery worker --loglevel=info` 启动
+3. **Celery Task**：写入 `src/tasks/`（导入 `src/tasks/__init__.py` 即完成注册），通过
+   `celery -A src.celeryconf worker --loglevel=info` 启动、`celery -A src.celeryconf beat --loglevel=info` 调度；
+   定时表在 `src/celery_app.py` 的 `beat_schedule`，任务名要与装饰器注册的名字一致
+   （`tests/test_celery_schedule_contract.py` 会检查这一点）

@@ -117,8 +117,11 @@ alembic downgrade -1
 
 ## 七、任务队列
 
-- **Celery**: `celery -A src.tasks worker --loglevel=info`（Redis broker，无 RabbitMQ）
-- **Outbox** — HTTP 派发，事件持久化 + 可靠投递
+- **Celery**: `celery -A src.celeryconf worker --loglevel=info`（Redis broker，无 RabbitMQ）
+  - `src.tasks` 只是任务包、里面没有 Celery app 对象，`celery -A src.tasks …` 会报 `has no attribute 'celery'`
+- **Beat 定时调度**: `celery -A src.celeryconf beat --loglevel=info`；调度表在 `src/celery_app.py` 的 `beat_schedule`，
+  11 个任务的频率与清单见 `docs/deployment-guide.md` §2.3.1
+- **Outbox** — HTTP 派发，事件持久化 + 可靠投递（`src.tasks.outbox.dispatch_outbox_events`，每分钟一次）
 
 ## 八、运维说明
 
@@ -143,7 +146,8 @@ alembic downgrade -1
 
 1. **模型变更**: 修改 `src/oms/wms/tms/models.py` → `alembic revision --autogenerate -m "..."` → `upgrade head`
 2. **新增 API 端点**: 在对应模块的 service + router 中实现，保持 Pydantic schema 与 ORM model 分离；返回类型加 response_model 约束（如 MergeGroupResponse/LocationListResponse）
-3. **Celery Task**: 写于 `src/tasks/`，避免每次创建新引擎（复用共享 engine）
+3. **Celery Task**: 写于 `src/tasks/`（导入 `src/tasks/__init__.py` 即完成注册），避免每次创建新引擎（复用共享 engine）；
+   要定时跑就在 `src/celery_app.py` 的 `beat_schedule` 里登记，名字与装饰器注册的名字保持一致
 
 ## 附录：本次核查结论（2026-08-12）
 
