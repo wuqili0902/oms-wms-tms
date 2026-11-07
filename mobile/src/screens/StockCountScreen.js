@@ -6,6 +6,8 @@
 import React, { useState, useEffect } from "react";
 import { View, Text, TextInput, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from "react-native";
 import { api } from "../api/client";
+import { fetchWithCache } from "../api/cache";
+import { alertMutationError } from "../api/errors";
 
 export default function StockCountScreen({ route }) {
   const warehouseId = (route?.params?.warehouse_id ?? "").trim();
@@ -23,10 +25,20 @@ export default function StockCountScreen({ route }) {
     loadLocations();
   }, []);
 
+  // Cache-first, so a shelf with no signal still opens with the last known
+  // layout.  The fresh answer lands in the cache for the next operator; this
+  // render keeps showing what it had.
   async function loadLocations() {
     try {
-      const res = await api.queryInventory({ warehouse_id: warehouseId });
-      setLocations(Array.isArray(res?.items) ? res.items : []);
+      const res = await fetchWithCache(
+        `inventory:locations:${warehouseId}`,
+        () => api.queryInventory({ warehouse_id: warehouseId }),
+        60 * 1000
+      );
+      // /warehouses/inventory answers a bare list; the {items: [...]} form is
+      // what a paginated endpoint would give.  Accept both instead of silently
+      // showing "暂无数据" when the server answered correctly.
+      setLocations(Array.isArray(res) ? res : (res?.items ?? []));
     } catch (err) { console.error(err); }
   }
 
@@ -34,13 +46,30 @@ export default function StockCountScreen({ route }) {
     setSelectedLocation(location);
     // Load system inventory for this location
     try {
-      const res = await api.queryInventory({ warehouse_id: warehouseId, location_id: location.id });
+      const res = await fetchWithCache(
+        // An inventory row keys its location as `location_id`; `id` is the
+        // inventory record's own id.
+        `inventory:location:${warehouseId}:${location.location_id}`,
+        () => api.queryInventory({ warehouse_id: warehouseId, location_id: location.location_id }),
+        30 * 1000
+      );
       setInvItems(Array.isArray(res?.items) ? res.items : []);
     } catch (err) { console.error(err); }
   }
 
   function scanBarcode() {
     Alert.alert("扫描库存", "请使用条码扫描器或输入 SKU");
+  }
+
+  /** Record what the operator actually counted; 0 is a real count (盘亏). */
+  function recordQty(sku, text) {
+    const qty = Number(text);
+    setScannedItems((prev) => {
+      const next = { ...prev };
+      if (text.trim() === "" || !Number.isFinite(qty) || qty < 0) delete next[sku];
+      else next[sku] = qty;
+      return next;
+    });
   }
 
   /** Submit count results for this location. */
@@ -50,16 +79,20 @@ export default function StockCountScreen({ route }) {
 
     try {
       await api.adjustStockCount({
-        source_warehouse_code: selectedLocation?.code || "",
-        target_location_id: selectedLocation.id,
-        count_results: results.map(r => ({
-          sku_code: r.skuCode || r.sku,
-          actual_qty_count: r.actualQty ?? 0,
-        })),
+        // The screen was given the warehouse id on navigation, and the inventory
+        // row carries `location_id`.  Sending the inventory row's own `id` (or a
+        // warehouse *code* that this warehouse never had) makes the backend
+        // answer 404/422 for a count the operator really performed.
+        warehouse_id: warehouseId,
+        location_id: selectedLocation?.location_id ?? selectedLocation?.id,
+        // Exactly the names adjust_stock_count reads.  Re-mapping them to
+        // aliases that resolve to undefined would silently submit a zero count.
+        count_results: results.map(r => ({ sku_code: r.sku, actual_qty: r.actual_qty })),
       });
       Alert.alert("✓", `盘点已提交，共 ${results.length} 个 SKU`);
+      setScannedItems({});
     } catch (err) {
-      Alert.alert("✗", err.message || "提交失败");
+      alertMutationError(err, "提交失败");
     }
   }
 
@@ -108,7 +141,15 @@ export default function StockCountScreen({ route }) {
                 <Text style={styles.name}>{item.product_name || item.name || '—'}</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                   <Text style={styles.systemQty}>系统: {item.quantity ?? 0}</Text>
-                  <TextInput value={actual?.toString() ?? ''} keyboardType="numeric" placeholder="-" style={styles.qtyInput} />
+                  {/* The submit step reads only `scannedItems`, so an unbound
+                      input here would submit a count of zero for every SKU. */}
+                  <TextInput
+                    value={actual?.toString() ?? ''}
+                    keyboardType="numeric"
+                    placeholder="-"
+                    onChangeText={(text) => recordQty(item.sku, text)}
+                    style={styles.qtyInput}
+                  />
                   {renderDiff(item)}
                 </View>
               </View>

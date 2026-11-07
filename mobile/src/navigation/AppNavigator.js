@@ -3,6 +3,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 import LoginScreen from "../screens/LoginScreen";
+import HomeScreen from "../screens/HomeScreen";
 import OrderListScreen from "../screens/OrderListScreen";
 import OrderDetailScreen from "../screens/OrderDetailScreen";
 import ScannerScreen from "../screens/ScannerScreen";
@@ -20,7 +21,7 @@ const Stack = createNativeStackNavigator();
 
 export default function AppNavigator({ isLoggedIn, onLogin }) {
   return (
-    <NavigationContainer>
+    <NavigationContainer style={{ flex: 1 }}>
       <Stack.Navigator
         screenOptions={{
           headerStyle: { backgroundColor: "#1e293b" },
@@ -34,6 +35,11 @@ export default function AppNavigator({ isLoggedIn, onLogin }) {
           </Stack.Screen>
         ) : (
           <>
+            {/* Workbench: the only way into the PDA screens below.  They take a
+                warehouse_id, and before this screen existed nothing supplied
+                one — so they were reachable in name only. */}
+            <Stack.Screen name="Home" component={HomeScreen} options={{ title: "作业台" }} />
+
             {/* Orders */}
             <Stack.Screen name="Orders" component={OrderListScreen} options={{ title: "Orders" }} />
             <Stack.Screen name="OrderDetail" component={OrderDetailScreen} options={{ title: "Order Detail" }} />
@@ -55,9 +61,6 @@ export default function AppNavigator({ isLoggedIn, onLogin }) {
 
             {/* Procurement (Receive Goods) */}
             <Stack.Screen name="ReceiveGoods" component={ReceiveGoodsScreen} options={{ title: "Receive Goods" }} />
-
-            {/* Warehouse List (for selection) */}
-            <Stack.Screen name="WarehouseList" component={InventoryScreen} options={{ title: "Select Warehouse" }} />
           </>
         )}
       </Stack.Navigator>

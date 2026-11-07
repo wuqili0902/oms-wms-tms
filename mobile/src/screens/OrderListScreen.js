@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api/client";
+import { fetchWithCache } from "../api/cache";
 
 const STATUS_BADGE = {
   draft: { label: "Draft", color: "#64748b", bg: "#f1f5f9" },
@@ -49,10 +50,16 @@ export default function OrderListScreen({ navigation }) {
   const fetchOrders = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const data = await api.listOrders(1, 50);
-      setOrders(data.items || []);
+      const data = await fetchWithCache(
+        "orders:page1",
+        () => api.listOrders(1, 50),
+        60 * 1000,
+        { forceRefresh: isRefresh }
+      );
+      setOrders(Array.isArray(data) ? data : (data?.items ?? []));
     } catch {
-      // silent
+      // Offline with nothing cached yet: the list stays empty rather than
+      // throwing at an operator who has no way to act on the message.
     } finally {
       setLoading(false);
       setRefreshing(false);

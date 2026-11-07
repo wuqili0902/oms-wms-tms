@@ -9,6 +9,7 @@ import {
   Alert,
 } from "react-native";
 import { api } from "../api/client";
+import { alertMutationError } from "../api/errors";
 
 const TRANSITION_ACTIONS = ["confirmed", "processing", "picking", "completed", "cancelled"];
 
@@ -39,7 +40,9 @@ export default function OrderDetailScreen({ route, navigation }) {
       setOrder(updated);
       Alert.alert("Success", `Order status updated to ${targetStatus}`);
     } catch (err) {
-      Alert.alert("Error", err.message || "Transition failed");
+      // A queued transition is not a failed one — it replays when the device
+      // has signal again, and re-tapping it here would queue a second one.
+      alertMutationError(err, "Transition failed");
     } finally {
       setUpdating(false);
     }

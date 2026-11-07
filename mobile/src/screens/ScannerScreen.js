@@ -33,8 +33,15 @@ export default function ScannerScreen({ navigation }) {
       const scanResult = await api.recordScan({ gtin: data, scanned_by: "mobile" });
       setResult({ gtin: data, scan: scanResult });
     } catch (err) {
-      // GTIN not found — still show the scanned code
-      setResult({ gtin: data, scan: null, error: err.message });
+      // GTIN not found — still show the scanned code.  When the scan could not
+      // be sent at all, say so: the queue has it, and the operator should not
+      // re-scan the same item.
+      setResult({
+        gtin: data,
+        scan: null,
+        queued: !!err?.queued,
+        error: err?.queued ? "离线已保存，将在网络恢复后自动同步" : err.message,
+      });
     } finally {
       setLoading(false);
     }

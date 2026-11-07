@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api/client";
+import { fetchWithCache } from "../api/cache";
 
 export default function PickingScreen() {
   const [waves, setWaves] = useState([]);
@@ -19,8 +20,13 @@ export default function PickingScreen() {
   const fetchWaves = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const data = await api.listPickingWaves();
-      setWaves(data || []);
+      const data = await fetchWithCache(
+        "picking:waves",
+        () => api.listPickingWaves(),
+        30 * 1000,
+        { forceRefresh: isRefresh }
+      );
+      setWaves(Array.isArray(data) ? data : (data?.items ?? []));
     } catch (err) {
       Alert.alert("Error", err.message || "Failed to load picking waves");
     } finally {

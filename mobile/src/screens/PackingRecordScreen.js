@@ -6,6 +6,7 @@
 import React, { useState } from "react";
 import { View, Text, TextInput, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from "react-native";
 import { api } from "../api/client";
+import { alertMutationError } from "../api/errors";
 
 export default function PackingRecordScreen({ route }) {
   const [orderId, setOrderId] = useState("");
@@ -46,7 +47,7 @@ export default function PackingRecordScreen({ route }) {
       // Reset for next packing
       setOrderId(""); setOrderItems([]); setConfirmedItems({});
     } catch (err) {
-      Alert.alert("✗", err.message || "打包失败");
+      alertMutationError(err, "打包失败");
     } finally { setLoading(false); }
   }
 

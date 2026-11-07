@@ -57,24 +57,48 @@ export async function cacheClear() {
 }
 
 /**
- * Fetch with cache-first strategy:
- * 1. Return cached data immediately if available
- * 2. Fetch from network in background
- * 3. Update cache with fresh data
+ * Read a cache entry without the expiry side effects, so an expired entry can
+ * still be used as the fallback when the network is unreachable.
  */
-export async function fetchWithCache(key, apiCall, ttlMs) {
-  // Return cached data immediately
-  const cached = await cacheGet(key);
-  if (cached) {
-    // Refresh in background
+async function readEntry(key) {
+  const raw = await AsyncStorage.getItem(CACHE_PREFIX + key);
+  if (!raw) return null;
+  try {
+    const entry = JSON.parse(raw);
+    if (!entry || typeof entry !== "object" || !("data" in entry)) return null;
+    return { data: entry.data, expired: Date.now() > entry.expiresAt };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch with cache-first strategy:
+ * 1. Return cached data immediately if it is still fresh
+ * 2. Fetch from the network in the background and refresh the cache
+ * 3. When the network fails, fall back to the last known data — even if it has
+ *    aged out — rather than showing an error to an operator who has no signal
+ *
+ * `forceRefresh: true` is for pull-to-refresh: the whole point of that gesture
+ * is a fresh answer, so the fresh copy is served (and the aged one only backs it
+ * up if the fetch fails).
+ */
+export async function fetchWithCache(key, apiCall, ttlMs, { forceRefresh = false } = {}) {
+  const entry = await readEntry(key);
+
+  if (entry?.data != null && !entry.expired && !forceRefresh) {
     apiCall()
       .then((fresh) => cacheSet(key, fresh, ttlMs))
-      .catch(() => {}); // silent fail - keep stale cache
-    return cached;
+      .catch(() => {}); // silent fail - keep the cached copy
+    return entry.data;
   }
 
-  // No cache — fetch and store
-  const data = await apiCall();
-  await cacheSet(key, data, ttlMs);
-  return data;
+  try {
+    const data = await apiCall();
+    await cacheSet(key, data, ttlMs);
+    return data;
+  } catch (err) {
+    if (entry?.data != null) return entry.data; // offline: stale beats nothing
+    throw err;
+  }
 }

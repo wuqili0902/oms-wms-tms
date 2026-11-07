@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { api } from "../api/client";
+import { fetchWithCache } from "../api/cache";
 
 export default function InventoryScreen() {
   const [items, setItems] = useState([]);
@@ -19,8 +20,13 @@ export default function InventoryScreen() {
   const fetchInventory = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const data = await api.queryInventory({});
-      setItems(data || []);
+      const data = await fetchWithCache(
+        "inventory:all",
+        () => api.queryInventory({}),
+        60 * 1000,
+        { forceRefresh: isRefresh }
+      );
+      setItems(Array.isArray(data) ? data : (data?.items ?? []));
     } catch (err) {
       Alert.alert("Error", err.message || "Failed to load inventory");
     } finally {
@@ -53,6 +59,10 @@ export default function InventoryScreen() {
       </View>
       <Text style={styles.meta}>Total: {item.quantity || 0}</Text>
       <Text style={styles.meta}>Reserved: {item.reserved_qty || 0}</Text>
+      {/* Batch and expiry are what FEFO picks by; without them an operator
+          cannot tell two batches of the same SKU apart. */}
+      {item.batch_no ? <Text style={styles.meta}>批次: {item.batch_no}</Text> : null}
+      {item.expiry_date ? <Text style={styles.expiry}>有效期至: {item.expiry_date}</Text> : null}
     </View>
   );
 
@@ -97,4 +107,5 @@ const styles = StyleSheet.create({
   sku: { fontSize: 16, fontWeight: "600", color: "#1e293b" },
   qty: { fontSize: 14, fontWeight: "500", color: "#166534" },
   meta: { fontSize: 13, color: "#64748b", marginTop: 2 },
+  expiry: { fontSize: 13, color: "#b45309", marginTop: 2 },
 });

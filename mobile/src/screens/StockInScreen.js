@@ -8,6 +8,8 @@ import {
   View, Text, TextInput, StyleSheet, ScrollView, Alert, TouchableOpacity, ActivityIndicator,
 } from "react-native";
 import { api } from "../api/client";
+import { alertMutationError } from "../api/errors";
+import { resolveLocationRef } from "../api/locations";
 
 export default function StockInScreen({ route }) {
   const warehouseId = (route?.params?.warehouse_id ?? "").trim();
@@ -18,6 +20,7 @@ export default function StockInScreen({ route }) {
   const [sku, setSku] = useState("");          // resolved SKU
   const [productName, setProductName] = useState("");
   const [batchNo, setBatchNo] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
   const [locationId, setLocationId] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [loading, setLoading] = useState(false);
@@ -38,17 +41,45 @@ export default function StockInScreen({ route }) {
 
   async function submitStockIn() {
     if (!sku || !locationId) return Alert.alert("提示", "请填入 SKU 和库位");
+    // parseInt("") is NaN, and JSON.stringify(NaN) is null — the request would
+    // go out as a missing quantity and the operator would get a 422 they cannot
+    // act on.  Reject it here, where the field is.
+    const qty = Number(quantity);
+    if (!Number.isInteger(qty) || qty <= 0) return Alert.alert("提示", "数量必须是正整数");
+
+    // FEFO only works if intake records an expiry: with expiry NULL the picking
+    // strategy degenerates to FIFO and the nearest-expiry batch is picked last.
+    const expiry = expiryDate.trim();
+    if (expiry && !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) {
+      return Alert.alert("提示", "有效期格式应为 YYYY-MM-DD");
+    }
+
     setLoading(true);
     try {
+      // 库位 is typed as a shelf label (A-01-02) but the API keys locations by
+      // id; sending the label reaches the backend as an id it cannot parse and
+      // comes back as a warehouse 404 the operator cannot make sense of.
+      const resolved = await resolveLocationRef(warehouseId, locationId);
+      if (!resolved.ok) return Alert.alert("提示", resolved.error);
+
       await api.adjustInventory({
-        sku, location_id: locationId, quantity: parseInt(quantity), warehouse_id: warehouseId,
-        operation_type: "stock_in", batch_no: batchNo || undefined,
+        sku,
+        location_id: resolved.id,
+        quantity: qty,
+        warehouse_id: warehouseId,
+        // The batch the operator actually scanned: adjust_inventory keys
+        // inventory by batch, so dropping it lands the stock on "DEFAULT".
+        batch_no: batchNo.trim() || undefined,
+        expiry_date: expiry || undefined,
+        reason: "pda_stock_in",
       });
-      Alert.alert("✓", `入库成功，数量 ${quantity}`);
+      // The label is repeated back: the operator should be able to check that
+      // the stock landed on the shelf they were standing in front of.
+      Alert.alert("✓", `入库成功：${qty} 件 → ${resolved.label}${batchNo ? ` (批次 ${batchNo})` : ""}`);
       // Reset form for next item
-      setGtin(""); setSku(""); setProductName(""); setBatchNo(""); setLocationId(""); setQuantity("1");
+      setGtin(""); setSku(""); setProductName(""); setBatchNo(""); setExpiryDate(""); setLocationId(""); setQuantity("1");
     } catch (err) {
-      Alert.alert("✗", err.message || "入库失败");
+      alertMutationError(err, "入库失败");
     } finally { setLoading(false); }
   }
 
@@ -79,6 +110,11 @@ export default function StockInScreen({ route }) {
       <View style={styles.fieldRow}>
         <Text style={styles.label}>批次号</Text>
         <TextInput value={batchNo} onChangeText={setBatchNo} placeholder="可选" style={styles.input} />
+      </View>
+
+      <View style={styles.fieldRow}>
+        <Text style={styles.label}>有效期</Text>
+        <TextInput value={expiryDate} onChangeText={setExpiryDate} placeholder="YYYY-MM-DD" style={styles.input} />
       </View>
 
       <View style={styles.fieldRow}>

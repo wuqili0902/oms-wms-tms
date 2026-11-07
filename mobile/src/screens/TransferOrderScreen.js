@@ -6,6 +6,7 @@
 import React, { useState } from "react";
 import { View, Text, TextInput, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from "react-native";
 import { api } from "../api/client";
+import { alertMutationError } from "../api/errors";
 
 export default function TransferOrderScreen({ route }) {
   const [sourceLocation, setSourceLocation] = useState("");
@@ -26,9 +27,17 @@ export default function TransferOrderScreen({ route }) {
     setItems(prev => { const n = [...prev]; n[index] = { ...n[index], quantity: Number(qty) || 0 }; return n; });
   }
 
-  /** Submit transfer order. */
+  /** Submit transfer order.
+   *
+   * The source is a warehouse, not a bin: the endpoint writes it into
+   * TransferOrder.source_warehouse_id, and the field is named source_location
+   * for historical reasons.  Both ends accept a warehouse id or a warehouse
+   * code — a scanned code is resolved against warehouses.id/warehouses.code,
+   * and a value that matches neither is refused by the field name (it used to
+   * resolve to nothing and file an order with a NULL source).
+   */
   async function submitTransfer() {
-    if (!sourceLocation || !destWarehouse) return Alert.alert("提示", "请填写源库位和目标仓库");
+    if (!sourceLocation || !destWarehouse) return Alert.alert("提示", "请填写源仓库和目标仓库");
     setLoading(true);
     try {
       await api.createTransferOrder({
@@ -39,7 +48,7 @@ export default function TransferOrderScreen({ route }) {
       Alert.alert("✓", `调拨单已创建，共 ${items.length} 个 SKU`);
       setItems([]); setSourceLocation(""); setDestWarehouse(route?.params?.warehouse_id ?? "");
     } catch (err) {
-      Alert.alert("✗", err.message || "调拨失败");
+      alertMutationError(err, "调拨失败");
     } finally { setLoading(false); }
   }
 
@@ -49,13 +58,13 @@ export default function TransferOrderScreen({ route }) {
 
       {/* Source + Destination */}
       <View style={styles.fieldRow}>
-        <Text style={styles.label}>源库位 *</Text>
-        <TextInput value={sourceLocation} onChangeText={setSourceLocation} placeholder="如 A-01" style={styles.input} />
+        <Text style={styles.label}>源仓库 *</Text>
+        <TextInput value={sourceLocation} onChangeText={setSourceLocation} placeholder="仓库编码，如 WH-01" style={styles.input} />
       </View>
 
       <View style={styles.fieldRow}>
         <Text style={styles.label}>目标仓库 *</Text>
-        <TextInput value={destWarehouse} onChangeText={setDestWarehouse} placeholder="如 WH-02" style={styles.input} />
+        <TextInput value={destWarehouse} onChangeText={setDestWarehouse} placeholder="仓库编码，如 WH-02" style={styles.input} />
       </View>
 
       {/* Items */}
