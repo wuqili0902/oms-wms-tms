@@ -25,7 +25,7 @@ def upgrade() -> None:
         existing_type=sa.String(length=30),
         type_=sa.Date(),
         existing_nullable=True,
-        postgres_using="estimated_delivery_date::date",
+        postgresql_using="estimated_delivery_date::date",
     )
 
     # Add unique constraint on hub_connections(from_hub_code, to_hub_code).
@@ -54,4 +54,5 @@ def downgrade() -> None:
         existing_type=sa.Date(),
         type_=sa.String(length=30),
         existing_nullable=True,
+        postgresql_using="estimated_delivery_date::varchar(30)",
     )

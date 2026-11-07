@@ -91,7 +91,7 @@ def upgrade() -> None:
         existing_type=sa.String(length=30),
         type_=sa.DateTime(timezone=True),
         nullable=True,
-        postgres_using="shipped_at::timestamp with time zone",
+        postgresql_using="shipped_at::timestamp with time zone",
     )
     op.alter_column(
         'shipments',
@@ -99,7 +99,7 @@ def upgrade() -> None:
         existing_type=sa.String(length=30),
         type_=sa.DateTime(timezone=True),
         nullable=True,
-        postgres_using="delivered_at::timestamp with time zone",
+        postgresql_using="delivered_at::timestamp with time zone",
     )
 
 
@@ -109,11 +109,13 @@ def downgrade() -> None:
         'shipments', 'delivered_at',
         existing_type=sa.DateTime(timezone=True),
         type_=sa.String(length=30),
+        postgresql_using="delivered_at::varchar(30)",
     )
     op.alter_column(
         'shipments', 'shipped_at',
         existing_type=sa.DateTime(timezone=True),
         type_=sa.String(length=30),
+        postgresql_using="shipped_at::varchar(30)",
     )
 
     # Remove is_active columns
