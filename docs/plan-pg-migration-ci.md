@@ -118,6 +118,90 @@ psql -d oms_wms_tms_ci_repro -t -c \
 
 **不影响 CI 与部署**:两者都是对空库直接 `upgrade head`,不跑 `downgrade`。若要让"来回迁移"成为可用能力,需要给 `eb47b7e1074b` 的 `downgrade()` 补按依赖顺序的 `DROP TYPE`(35 个,且被多表共用的类型要在所有引用表删除后才能删)—— 这是独立工作量,不要和本修复混在一起做。
 
+# 第二轮 (2026-11-07 晚): CI 仍红,真正死因是 env.py 的 import 期校验
+
+`09eb577`(上一节的修复)推上 master 后,CI #29 与 Build/Test/Deploy #19 仍是 `failure`,仍停在 `Apply Alembic migrations on fresh PostgreSQL`,`Run tests` 被 skip。**上一节的 A/B 两项修复是必要且不回退的**(`lint` 与 `frontend-build` 全绿,迁移链本身已验绿),CI 里还剩第三个原因。
+
+## 根因 C: `alembic/env.py` import 期要求 `DATABASE_URL`,CI 那一步只给了 `DATABASE_SYNC_URL`
+
+`alembic/env.py` 在模块顶部 `from src.config import settings`;`src/config.py:161` 是模块级 `settings = Settings()`,pydantic-settings 的校验器要求 `DATABASE_URL` 有值。CI 的这一步只注入 `DATABASE_SYNC_URL` + `SECRET_KEY`,而 Actions 的 checkout 里**没有 `.env`**(被 gitignore)→ 迁移在 env.py 导入阶段就抛:
+
+```
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings
+  Value error, DATABASE_URL must be set via environment variable or .env file.
+```
+
+**连一条 SQL 都没发出**,所以这一步的红与迁移内容无关 —— 这也解释了为什么两个工作流在同一步同速失败、为什么 `lint`/`frontend-build` 绿、为什么本地全绿(本机根目录有 `.env`,它提供了 `DATABASE_URL`)。旧 tip `f1279a6` 在同一步红,这条同样是原因之一。
+
+### 实测证据(本机,`.env` 临时改名模拟 CI checkout,跑完即还原)
+
+| 条件 | 结果 |
+|---|---|
+| 无 `.env`,只给 `DATABASE_SYNC_URL` + `SECRET_KEY` | **退出码 1**,`ValidationError: DATABASE_URL must be set ...` |
+| 无 `.env`,给 `DATABASE_URL`(asyncpg) + `DATABASE_SYNC_URL` + `SECRET_KEY` | **退出码 0**,全链跑到 `c7f3a91b4d02`,63 张表 |
+
+## 施工清单(本轮,范围只有 2 个文件)
+
+1. `.github/workflows/ci.yml` 的 "Apply Alembic migrations on fresh PostgreSQL" 步骤 `env:` 里加一行:
+   `DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/oms_wms_tms_test`
+2. `.github/workflows/deploy.yml` 同名步骤 `env:` 里加一行:
+   `DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/oms_wms_tms`
+
+硬性约束:
+- **禁止**把 `.env` 提交进仓库(里面有密钥,且已被 gitignore)。
+- **禁止**为了让 CI 过而放宽 `src/config.py` 的 `DATABASE_URL` 校验(那条校验是应用侧的防线,`test_raises_on_empty_secret` 依赖它)。
+- **禁止**改动 `alembic/versions/*` 与迁移链指向(上一轮已验绿,不要顺手动)。
+- `DATABASE_SYNC_URL` 保持 `postgresql+psycopg2://`(上一轮已钉),不要动。
+
+### 建议一起做(同一 commit 内,可选但要标注)
+
+3. 让这一步失败时把输出暴露到 job summary,便于以后不登录 `gh` 也能定位(我已实测:公开 API `GET /repos/{owner}/{repo}/commits/{ref}/check-runs` 返回 200,`output.summary` 字段可读,当前为空)。写法示例:
+
+   ```yaml
+   run: |
+     set +e
+     alembic upgrade head 2>&1 | tee /tmp/alembic.log
+     rc=${PIPESTATUS[0]}
+     if [ "$rc" -ne 0 ]; then
+       { echo "### alembic upgrade head 失败 (exit $rc)"; echo '```'; tail -60 /tmp/alembic.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+     fi
+     exit "$rc"
+   ```
+   要点:保留"失败就让步骤失败"的语义(`exit "$rc"`),不要变成 `|| true`。
+
+4. `.env.example` 里加注释:`DATABASE_SYNC_URL` 供 alembic 同步用,但 `alembic/env.py` 会 import `src.config`,因此运行 alembic 时 `DATABASE_URL` 也必须在环境里 —— 省得下次再踩。
+
+## 验收(逐条给证据,不许只说"CI 绿了")
+
+```bash
+# A. 复现"无 .env"这一 CI 条件,并证明修法有效(.env 必须立刻还原)
+mv .env .env.probe_bak
+psql -U postgres -h 127.0.0.1 -q -c "DROP DATABASE IF EXISTS oms_wms_tms_fix_probe;" -c "CREATE DATABASE oms_wms_tms_fix_probe;"
+env -u REDIS_URL -u SENTRY_DSN \
+  DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/oms_wms_tms_fix_probe" \
+  DATABASE_SYNC_URL="postgresql+psycopg2://postgres:postgres@localhost:5432/oms_wms_tms_fix_probe" \
+  SECRET_KEY="ci-test-secret-key-do-not-use" .venv/Scripts/alembic.exe upgrade head   # 要求 exit 0
+psql -d oms_wms_tms_fix_probe -t -c "select count(*) from information_schema.tables where table_schema='public';"   # 要求 63
+mv .env.probe_bak .env
+psql -U postgres -h 127.0.0.1 -q -c "DROP DATABASE IF EXISTS oms_wms_tms_fix_probe;"
+git status --short   # 要求: 无 .env.probe_bak 等残留
+
+# B. 不退化
+.venv/Scripts/python.exe -m pytest tests/ -q          # 要求 2571 passed / 0 failed
+.venv/Scripts/python.exe -m ruff check src tests      # 要求 All checks passed
+```
+
+推送后看 CI:本轮改动会让 `Apply Alembic migrations` 绿,于是 **`Run tests with PostgreSQL` 第一次真正执行**(历史上新增的失败会在这里出现,属于新暴露,不是本次改动弄坏);`Build, Test, and Deploy` 的 `build-and-push` 与 `deploy` 也会从 skip 变执行 —— **`deploy` 是真实部署,推 master 前须知情**。
+
+## 已排除清单(不要重复调查)
+
+- `postgresql_using` 拼错 → 已修已验(3 处 + downgrade 3 处)
+- `postgresql://` 在 SQLAlchemy 2.1 默认解析成 psycopg3 → 已修已验(7 处 scheme)
+- 依赖版本面:照 CI 的 `pip install -e ".[dev,otel]"` 建净 venv(SQLAlchemy 2.1.8 / alembic 1.20.1 / psycopg2-binary 2.9.13 / asyncpg 0.32.0),全链 `upgrade head` 退出码 0 → **不是版本问题**
+- `SECRET_KEY` 长度校验:`ci-test-secret-key`(18)与 `ci-test-secret-key-do-not-use`(30)都退出码 0 → **不是密钥长度**
+- `downgrade base` 后残留 35 个 enum 类型 → 真实缺陷,但与本步无关(不在 CI 路径),见上一节
+- 本机到 GitHub 的 HTTPS 出口会整段不通(`github.com` 000 而 `api.github.com` 200);推送改走 `ssh://git@ssh.github.com:443/...` + `~/.ssh/id_ed25519_github`,详见记忆 `github-443-flaky-push`
+
 ## 附带事实(供后续参考,非本次施工项)
 
 - 本机到 GitHub :443 间歇丢包:`git push` 会以 `Failed to connect to github.com:443 after ~21000 ms` 失败,重试到第 2 次即成功;不是代理(Windows `ProxyEnable=0`)、不是 IPv6(`GIT_CURL_VERBOSE` 显示 `IPv6: (none)`,IPv4 `20.205.243.166`)。判链路用 `curl -s -o /dev/null -w "%{http_code} %{time_total}" https://github.com`(实测 12s 才握手),远端是否真更新用 `git ls-remote origin refs/heads/master` 核实。

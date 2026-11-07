@@ -58,9 +58,16 @@ jobs:
       - name: Apply Alembic migrations on fresh PostgreSQL
         env:
           DATABASE_SYNC_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/oms_wms_tms_test
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/oms_wms_tms_test
           SECRET_KEY: ci-test-secret-key-do-not-use
         run: |
-          alembic upgrade head
+          set +e
+          alembic upgrade head 2>&1 | tee /tmp/alembic.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            { echo "### alembic upgrade head failed (exit $rc)"; echo '```'; tail -60 /tmp/alembic.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
 
       - name: Run tests with PostgreSQL
         env:
